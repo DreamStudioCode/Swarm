@@ -1,0 +1,71 @@
+<!DOCTYPE>
+<html>
+<head>
+<meta charset="utf-8">
+
+<title>DreamStudio Swarm</title>
+<meta charset="utf-8">
+<meta http-equiv="Content-Type" content="text/html;">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/x-icon" href="https://dreamstudio.com/img/logo/favicon.png" />
+<meta name="keywords" content="Ai Art, Ai Cinema, Prompts, open source">
+
+<link type="text/css" href="https://dreamstudio.com/localsite/css/base.css" rel="stylesheet" id="/localsite/css/base.css">
+<script type="text/javascript" src="/localsite/js/localsite.js?showheader=true&showsearch=false"></script>
+
+
+<style>
+body {
+	background-color: rgb(250, 250, 250);
+}
+#fixedHeader {
+	border-bottom: 1px solid #eee;
+}
+img {
+	max-width: 800px;
+}
+.navlink-swarm {
+    font: 600 16px/1.8 "Lato", sans-serif !important;
+    color: #222 !important;
+}
+.dark .navlink-swarm {
+    color: #fff !important;
+}
+</style>
+
+<script type="text/javascript" src="/localsite/js/d3.v5.min.js" id="/localsite/js/d3.v5.min.js"></script>
+<script type="text/javascript" src="/localsite/js/jquery.min.js" id="/localsite/js/jquery.min.js"></script>
+<script type="text/javascript" src="/localsite/js/showdown.min.js" id="/localsite/js/showdown.min.js"></script>
+
+<script>
+  //loadMarkdown("https://dreamstudiocode.github.io/StableStudio/README.md", "readmeDiv", "_parent");
+  loadMarkdown("https://dreamstudiocode.github.io/Swarm/README.md", "readmeDiv", "_parent");
+</script>
+
+</head>
+<body>
+
+<!--
+Tauri uses SvelteKit, Svelte and Rust. Byebye Electron.
+-->
+<div style="position:absolute; z-index:2; right:28px; top:110px">
+	<a href="https://github.com/mcmonkeyprojects/SwarmUI"><img src="../localsite/img/icon/github/github.png" style="width:42px"></a>
+</div>
+
+<div class="content contentpadding">
+<br>
+
+<div id="readmeDiv"></div>
+
+<br><hr>
+Launch Image Generator: <a href="https://dreamstudio.ai/generate">DreamStudio.AI</a>. 
+
+<div class="floatRight">
+<a href="https://github.com/Stability-AI/StableSwarmUI/">StableSwarmUI On GitHub</a>
+- <a href="https://github.com/Stability-AI/StableStudio/tree/tauri">Tauri Branch</a>
+</div>
+
+</div>
+
+</body>
+</html>
