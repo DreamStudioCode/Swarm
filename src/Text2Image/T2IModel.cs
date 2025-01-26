@@ -23,6 +23,12 @@ public class T2IModel(T2IModelHandler handler, string folderPath, string filePat
     /// <summary>Full raw system filepath to this model.</summary>
     public string RawFilePath = filePath;
 
+    /// <summary>True if this model is a supported type (eg safetensors), false if it's an unsupportable type (eg legacy ckpt).</summary>
+    public bool IsSupportedModelType = NativelySupportedModelExtensions.Contains((filePath ?? "").AfterLast('.'));
+
+    /// <summary>If multiple copies of this model exist, these are other paths to that model.</summary>
+    public List<string> OtherPaths = [];
+
     /// <summary>Proper title of the model, if identified.</summary>
     public string Title;
 
@@ -50,6 +56,16 @@ public class T2IModel(T2IModelHandler handler, string folderPath, string filePat
     /// <summary>Set of all model file extensions that are considered supported for legacy reasons only.</summary>
     public static HashSet<string> LegacyModelExtensions = ["ckpt", "pt", "pth", "bin"];
 
+    /// <summary>Returns true if this is a 'diffusion_models' model instead of a regular checkpoint model.</summary>
+    public bool IsDiffusionModelsFormat
+    {
+        get
+        {
+            string cleaned = OriginatingFolderPath.Replace('\\', '/').TrimEnd('/').ToLowerFast();
+            return cleaned.EndsWithFast("/unet") || cleaned.EndsWithFast("/diffusion_models"); // Hacky but it works for now
+        }
+    }
+
     /// <summary>Returns the model's SHA-256 Tensor Hash - either from metadata, or by generating it from the file.
     /// Returns null if hashing is impossible (no handler, no metadata construct, no source file).
     /// Can optionally update cache and/or file when generating.</summary>
@@ -68,6 +84,10 @@ public class T2IModel(T2IModelHandler handler, string folderPath, string filePat
         }
         lock (Handler.ModificationLock)
         {
+            if (Metadata.Hash is not null)
+            {
+                return Metadata.Hash;
+            }
             using FileStream reader = File.OpenRead(RawFilePath);
             byte[] headerLen = new byte[8];
             reader.ReadExactly(headerLen, 0, 8);
@@ -100,17 +120,46 @@ public class T2IModel(T2IModelHandler handler, string folderPath, string filePat
             {
                 return;
             }
-            string swarmjspath = $"{RawFilePath.BeforeLast('.')}.swarm.json";
-            if (File.Exists(swarmjspath))
+            string rawFilePrefix = RawFilePath.BeforeLast('.');
+            string rawSwarmJsPath = $"{rawFilePrefix}.swarm.json";
+            bool earlyEnd = (!RawFilePath.EndsWith(".safetensors") && !RawFilePath.EndsWith(".sft")) || Program.ServerSettings.Metadata.EditMetadataWriteJSON;
+            void DoClear(string path)
             {
-                File.Delete(swarmjspath);
+                string filePrefix = path.BeforeLast('.');
+                string swarmjspath = $"{filePrefix}.swarm.json";
+                if (File.Exists(swarmjspath))
+                {
+                    File.Delete(swarmjspath);
+                }
+                if (Program.ServerSettings.Paths.ClearStrayModelData)
+                {
+                    foreach (string altPath in T2IModelHandler.AllModelAttachedExtensions)
+                    {
+                        if (File.Exists($"{filePrefix}{altPath}"))
+                        {
+                            File.Delete($"{filePrefix}{altPath}");
+                        }
+                    }
+                }
+                if (earlyEnd)
+                {
+                    File.WriteAllText(swarmjspath, ToNetObject("modelspec.").ToString());
+                }
             }
-            if ((!RawFilePath.EndsWith(".safetensors") && !RawFilePath.EndsWith(".sft")) || Program.ServerSettings.Metadata.EditMetadataWriteJSON)
+            DoClear(RawFilePath);
+            if (Program.ServerSettings.Paths.EditMetadataAcrossAllDups)
             {
-                File.WriteAllText(swarmjspath, ToNetObject("modelspec.").ToString());
+                foreach (string altPath in OtherPaths)
+                {
+                    DoClear(altPath);
+                }
+            }
+            if (earlyEnd)
+            {
+                Logs.Debug($"Intentionally not reapplying metadata for model '{RawFilePath}', stored as json instead");
                 return;
             }
-            Logs.Debug($"Will reapply metadata for model {RawFilePath}");
+            Logs.Debug($"Will reapply metadata for model '{RawFilePath}'");
             bool wasNull = reader is null;
             reader ??= File.OpenRead(RawFilePath);
             try
@@ -121,8 +170,8 @@ public class T2IModel(T2IModelHandler handler, string folderPath, string filePat
                 long len = BitConverter.ToInt64(headerLen, 0);
                 if (len < 0 || len > 100 * 1024 * 1024)
                 {
-                    Logs.Warning($"Model {Name} has invalid metadata length {len}.");
-                    File.WriteAllText(swarmjspath, ToNetObject("modelspec.").ToString());
+                    Logs.Warning($"Model {Name} has invalid metadata length {len}, failing to store metadata, will place json copy in main folder.");
+                    File.WriteAllText(rawSwarmJsPath, ToNetObject("modelspec.").ToString());
                     return;
                 }
                 byte[] header = new byte[len];
@@ -168,28 +217,48 @@ public class T2IModel(T2IModelHandler handler, string folderPath, string filePat
                     specSet("is_negative_embedding", "true");
                 }
                 json["__metadata__"] = metaHeader;
+                void HandleResave(string path)
                 {
-                    using FileStream writer = File.OpenWrite(RawFilePath + ".tmp");
-                    byte[] headerBytes = Encoding.UTF8.GetBytes(json.ToString(Newtonsoft.Json.Formatting.None));
-                    writer.Write(BitConverter.GetBytes(headerBytes.LongLength));
-                    writer.Write(headerBytes);
-                    reader.Seek(8 + len, SeekOrigin.Begin);
-                    reader.CopyTo(writer);
-                    reader.Dispose();
+                    if (reader is null)
+                    {
+                        reader = File.OpenRead(path);
+                        reader.Seek(0, SeekOrigin.Begin);
+                        byte[] headerLen = new byte[8];
+                        reader.ReadExactly(headerLen, 0, 8);
+                        len = BitConverter.ToInt64(headerLen, 0);
+                    }
+                    {
+                        using FileStream writer = File.OpenWrite(path + ".tmp");
+                        byte[] headerBytes = Encoding.UTF8.GetBytes(json.ToString(Newtonsoft.Json.Formatting.None));
+                        writer.Write(BitConverter.GetBytes(headerBytes.LongLength));
+                        writer.Write(headerBytes);
+                        reader.Seek(8 + len, SeekOrigin.Begin);
+                        reader.CopyTo(writer);
+                        reader.Dispose();
+                        reader = null;
+                    }
+                    // Journalling replace to prevent data loss in event of a crash.
+                    DateTime createTime = File.GetCreationTimeUtc(path);
+                    File.Move(path, path + ".tmp2");
+                    File.Move(path + ".tmp", path);
+                    File.Delete(path + ".tmp2");
+                    File.SetCreationTimeUtc(path, createTime);
+                    Logs.Debug($"Completed metadata update for {path}");
                 }
-                // Journalling replace to prevent data loss in event of a crash.
-                DateTime createTime = File.GetCreationTimeUtc(RawFilePath);
-                File.Move(RawFilePath, RawFilePath + ".tmp2");
-                File.Move(RawFilePath + ".tmp", RawFilePath);
-                File.Delete(RawFilePath + ".tmp2");
-                File.SetCreationTimeUtc(RawFilePath, createTime);
-                Logs.Debug($"Completed metadata update for {RawFilePath}");
+                HandleResave(RawFilePath);
+                if (Program.ServerSettings.Paths.EditMetadataAcrossAllDups)
+                {
+                    foreach (string altPath in OtherPaths)
+                    {
+                        HandleResave(altPath);
+                    }
+                }
             }
             finally
             {
                 if (wasNull)
                 {
-                    reader.Dispose();
+                    reader?.Dispose();
                 }
             }
         }
@@ -219,7 +288,7 @@ public class T2IModel(T2IModelHandler handler, string folderPath, string filePat
             [$"{prefix}trigger_phrase"] = Metadata?.TriggerPhrase,
             [$"{prefix}merged_from"] = Metadata?.MergedFrom,
             [$"{prefix}tags"] = Metadata?.Tags is null ? null : new JArray(Metadata.Tags),
-            [$"{prefix}is_supported_model_format"] = NativelySupportedModelExtensions.Contains(RawFilePath.AfterLast('.')),
+            [$"{prefix}is_supported_model_format"] = IsSupportedModelType,
             [$"{prefix}is_negative_embedding"] = Metadata?.IsNegativeEmbedding ?? false,
             [$"{prefix}local"] = true,
             [$"{prefix}time_created"] = Metadata?.TimeCreated ?? 0,
@@ -240,7 +309,8 @@ public class T2IModel(T2IModelHandler handler, string folderPath, string filePat
             AnyBackendsHaveLoaded = (bool)data["loaded"],
             ModelClass = T2IModelClassSorter.ModelClasses.GetValueOrDefault($"{data["architecture"]}") ?? null,
             StandardWidth = (int)data["standard_width"],
-            StandardHeight = (int)data["standard_height"]
+            StandardHeight = (int)data["standard_height"],
+            IsSupportedModelType = (bool)(data?["is_supported_model_format"] ?? false)
         };
     }
 

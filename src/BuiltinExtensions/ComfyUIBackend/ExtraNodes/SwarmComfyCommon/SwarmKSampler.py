@@ -72,6 +72,10 @@ def make_swarm_sampler_callback(steps, device, model, previews):
     def callback(step, x0, x, total_steps):
         pbar.update_absolute(step + 1, total_steps, None)
         if previewer:
+            if x0.ndim == 5:
+                # mochi shape is [batch, channels, backwards time, width, height], for previews needs to be swapped to [forwards time, channels, width, height]
+                x0 = x0[0].permute(1, 0, 2, 3)
+                x0 = torch.flip(x0, [0])
             def do_preview(id, index):
                 preview_img = previewer.decode_latent_to_preview_image("JPEG", x0[index:index+1])
                 swarm_send_extra_preview(id, preview_img[1])
@@ -204,7 +208,7 @@ class SwarmKSampler:
                 "steps": ("INT", {"default": 20, "min": 1, "max": 10000}),
                 "cfg": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 100.0, "step": 0.5, "round": 0.001}),
                 "sampler_name": (comfy.samplers.KSampler.SAMPLERS, ),
-                "scheduler": (["turbo", "align_your_steps"] + comfy.samplers.KSampler.SCHEDULERS, ),
+                "scheduler": (["turbo", "align_your_steps", "ltxv", "ltxv-image"] + comfy.samplers.KSampler.SCHEDULERS, ),
                 "positive": ("CONDITIONING", ),
                 "negative": ("CONDITIONING", ),
                 "latent_image": ("LATENT", ),
@@ -248,6 +252,9 @@ class SwarmKSampler:
             timesteps = torch.flip(torch.arange(1, 11) * 100 - 1, (0,))[:steps]
             sigmas = model.model.model_sampling.sigma(timesteps)
             sigmas = torch.cat([sigmas, sigmas.new_zeros([1])])
+        elif scheduler == "ltx" or scheduler == "ltxv-image":
+            from comfy_extras.nodes_lt import LTXVScheduler
+            sigmas = LTXVScheduler().get_sigmas(steps, 2.05, 0.95, True, 0.1, latent_image if scheduler == "ltxv-image" else None)[0]
         elif scheduler == "align_your_steps":
             if isinstance(model.model, SDXL):
                 model_type = "SDXL"
@@ -261,12 +268,11 @@ class SwarmKSampler:
             sigmas[-1] = 0
             sigmas = torch.FloatTensor(sigmas)
         elif sigma_min >= 0 and sigma_max >= 0 and scheduler in ["karras", "exponential"]:
-            real_model, _, _, _, _ = comfy.sample.prepare_sampling(model, noise.shape, positive, negative, noise_mask)
             if sampler_name in ['dpm_2', 'dpm_2_ancestral']:
-                sigmas = calculate_sigmas_scheduler(real_model, scheduler, steps + 1, sigma_min, sigma_max, rho)
+                sigmas = calculate_sigmas_scheduler(model, scheduler, steps + 1, sigma_min, sigma_max, rho)
                 sigmas = torch.cat([sigmas[:-2], sigmas[-1:]])
             else:
-                sigmas = calculate_sigmas_scheduler(real_model, scheduler, steps, sigma_min, sigma_max, rho)
+                sigmas = calculate_sigmas_scheduler(model, scheduler, steps, sigma_min, sigma_max, rho)
             sigmas = sigmas.to(device)
         
         out = latent_image.copy()

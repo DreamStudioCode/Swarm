@@ -67,7 +67,7 @@ public static class T2IAPI
             // An image generation result
             "image":
             {
-                "image": "View/local/raw/2024-01-02/0304-a photo of a cat-etc-1.png", // the image file path, GET this path to read the image content
+                "image": "View/local/raw/2024-01-02/0304-a photo of a cat-etc-1.png", // the image file path, GET this path to read the image content. In some cases can be a 'data:...' encoded image.
                 "batch_index": "0", // which image index within the batch this is
                 "metadata": "{ ... }" // image metadata string, usually a JSON blob stringified. Not guaranteed to be.
             }
@@ -149,11 +149,7 @@ public static class T2IAPI
         """
             "images":
             [
-                {
-                    "image": "View/local/raw/2024-01-02/0304-a photo of a cat-etc-1.png", // the image file path, GET this path to read the image content
-                    "batch_index": "0", // which image index within the batch this is
-                    "metadata": "{ ... }" // image metadata string, usually a JSON blob stringified. Not guaranteed to be.
-                }
+                "View/local/raw/2024-01-02/0304-a photo of a cat-etc-1.png", // the image file path, GET this path to read the image content. In some cases can be a 'data:...' encoded image.
             ]
         """)]
     public static async Task<JObject> GenerateText2Image(Session session,
@@ -277,7 +273,7 @@ public static class T2IAPI
                 }
             }
         }
-        int max_degrees = session.User.Restrictions.CalcMaxT2ISimultaneous;
+        int max_degrees = session.User.CalcMaxT2ISimultaneous;
         List<int> discard = [];
         int batchSizeExpected = user_input.Get(T2IParamTypes.BatchSize, 1);
         void saveImage(T2IEngine.ImageOutput image, int actualIndex, T2IParamInput thisParams, string metadata)
@@ -304,7 +300,7 @@ public static class T2IAPI
             {
                 imageSet.Add(image);
             }
-            WebhookManager.SendEveryGenWebhook(thisParams, url);
+            WebhookManager.SendEveryGenWebhook(thisParams, url, image.Img);
             output(new JObject() { ["image"] = url, ["batch_index"] = $"{actualIndex}", ["metadata"] = string.IsNullOrWhiteSpace(metadata) ? null : metadata });
         }
         for (int i = 0; i < images && !claim.ShouldCancel; i++)
@@ -319,17 +315,18 @@ public static class T2IAPI
             {
                 break;
             }
-            int imageIndex = i * batchSizeExpected + batchOffset;
+            int localIndex = i * batchSizeExpected;
+            int imageIndex = localIndex + batchOffset;
             T2IParamInput thisParams = user_input.Clone();
             if (!thisParams.Get(T2IParamTypes.NoSeedIncrement, false))
             {
                 if (thisParams.TryGet(T2IParamTypes.VariationSeed, out long varSeed) && thisParams.Get(T2IParamTypes.VariationSeedStrength) > 0)
                 {
-                    thisParams.Set(T2IParamTypes.VariationSeed, varSeed + imageIndex);
+                    thisParams.Set(T2IParamTypes.VariationSeed, varSeed + localIndex);
                 }
                 else
                 {
-                    thisParams.Set(T2IParamTypes.Seed, thisParams.Get(T2IParamTypes.Seed) + imageIndex);
+                    thisParams.Set(T2IParamTypes.Seed, thisParams.Get(T2IParamTypes.Seed) + localIndex);
                 }
             }
             int numCalls = 0;
@@ -541,7 +538,7 @@ public static class T2IAPI
                 }
                 string prefix = folder == "" ? "" : folder + "/";
                 List<string> subFiles = Directory.EnumerateFiles($"{path}/{prefix}").Take(localLimit).ToList();
-                IEnumerable<string> newFileNames = subFiles.Where(isAllowed).Where(f => extensions.Contains(f.AfterLast('.'))).Select(f => f.Replace('\\', '/'));
+                IEnumerable<string> newFileNames = subFiles.Where(isAllowed).Where(f => extensions.Contains(f.AfterLast('.')) && !f.EndsWith(".swarmpreview.jpg") && !f.EndsWith(".swarmpreview.webp")).Select(f => f.Replace('\\', '/'));
                 List<ImageHistoryHelper> localFiles = [.. newFileNames.Select(f => new ImageHistoryHelper(prefix + f.AfterLast('/'), ImageMetadataTracker.GetMetadataFor(f, root, starNoFolders))).Where(f => f.Metadata is not null)];
                 int leftOver = Interlocked.Add(ref remaining, -localFiles.Count);
                 sortList(localFiles);
@@ -614,6 +611,8 @@ public static class T2IAPI
         return new JObject() { ["success"] = true };
     }
 
+    public static string[] DeletableFileExtensions = [".txt", ".metadata.js", ".swarm.json", ".swarmpreview.jpg", ".swarmpreview.webp"];
+
     [API.APIDescription("Delete an image from history.", "\"success\": true")]
     public static async Task<JObject> DeleteImage(Session session,
         [API.APIParameter("The path to the image to delete.")] string path)
@@ -631,17 +630,18 @@ public static class T2IAPI
             Logs.Warning($"User {session.User.UserID} tried to delete image path '{origPath}' which maps to '{path}', but cannot as the image does not exist.");
             return new JObject() { ["error"] = "That file does not exist, cannot delete." };
         }
+        string standardizedPath = Path.GetFullPath(path);
+        Session.RecentlyDeletedFilenames[standardizedPath] = standardizedPath;
         Action<string> deleteFile = Program.ServerSettings.Paths.RecycleDeletedImages ? Utilities.SendFileToRecycle : File.Delete;
         deleteFile(path);
-        string txtFile = path.BeforeLast('.') + ".txt";
-        if (File.Exists(txtFile))
+        string fileBase = path.BeforeLast('.');
+        foreach (string str in DeletableFileExtensions)
         {
-            deleteFile(txtFile);
-        }
-        string metaFile = path.BeforeLast('.') + ".metadata.js";
-        if (File.Exists(metaFile))
-        {
-            deleteFile(metaFile);
+            string altFile = $"{fileBase}{str}";
+            if (File.Exists(altFile))
+            {
+                deleteFile(altFile);
+            }
         }
         ImageMetadataTracker.RemoveMetadataFor(path);
         return new JObject() { ["success"] = true };

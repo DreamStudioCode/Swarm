@@ -1,8 +1,14 @@
 # Contributing to SwarmUI
 
-Please open an Issue or Discussion, or ask on Discord before opening a pull request, to make sure your work doesn't overlap with others.
+Please open an Issue or Discussion, or ask on [Discord](https://discord.gg/q2y38cqjNw) before opening a pull request, to make sure your work doesn't overlap with others.
 
 (TODO: More general contributing info)
+
+## Extensions
+
+Want to make something out of scope for Swarm's core systems? Make an extension! See the [Making Extensions Doc](/docs/Making%20Extensions.md)
+
+If your extension is ready to go, post it in the `#extensions` channel on Discord, and open a pull request adding it to the file `launchtools/extension_list.fds`
 
 ## Languages
 
@@ -18,6 +24,20 @@ Want to help translate Swarm into another language?
     - You can use https://github.com/mcmonkeyprojects/translate-tool to fill out any keys you can't be bothered filling in yourself with automatic AI-powered translation
 - Are you adding new translatable keys?
     - I use the hidden webconsole call `debugSubmitTranslatables()` to generate `languages/en.debug` which contains a raw key list, and then use `--add-json` to add it in with the translate tool.
+
+## Themes
+
+Want to add a new theme or change an existing one?
+
+- First: make sure it's reasonable and relevant to add to the core. If you're doing crazy experimental stuff, maybe it should be an extension.
+    - For extensions, see [Making Extensions Doc](/docs/Making%20Extensions.md)
+- Theme files are in `src/wwwroot/css/themes`
+- You can add any new theme to the registered theme list in `WebServer.cs`, `PreInit()` block.
+- Most core themes should only edit colors, other CSS edits should only be with good well considered reasons.
+    - If you must modify non-color CSS, make the minimum possible changes.
+    - Non-color CSS should be in a separate file from the color changes, similar to how `modern.css` is a separate file for major edits.
+- All new themes should use `modern.css` as the first stylesheet entry. Themes not built atop `modern.css` will not be accepted to the core.
+- Themes should ideally be added to Install page, but not strictly required.
 
 # Legal
 

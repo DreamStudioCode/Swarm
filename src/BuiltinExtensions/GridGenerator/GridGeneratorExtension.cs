@@ -191,7 +191,7 @@ public class GridGeneratorExtension : Extension
                         {
                             data.AddOutput(new JObject() { ["image"] = output, ["metadata"] = metadata });
                         }
-                        WebhookManager.SendEveryGenWebhook(thisParams, output);
+                        WebhookManager.SendEveryGenWebhook(thisParams, output, image.Img);
                     }
                     else
                     {
@@ -205,7 +205,7 @@ public class GridGeneratorExtension : Extension
                         {
                             data.AddOutput(new JObject() { ["image"] = url, ["batch_index"] = $"{iteration}", ["metadata"] = string.IsNullOrWhiteSpace(metadata) ? null : metadata });
                         }
-                        WebhookManager.SendEveryGenWebhook(thisParams, url);
+                        WebhookManager.SendEveryGenWebhook(thisParams, url, image.Img);
                         if (set.Grid.OutputType == Grid.OutputyTypeEnum.GRID_IMAGE)
                         {
                             data.GeneratedOutputs.TryAdd(set.BaseFilepath, image.Img);
@@ -285,13 +285,17 @@ public class GridGeneratorExtension : Extension
         string[] history = LoadableHistoryList.GetOrCreate(session.User.UserID, () =>
         {
             List<string> results = [];
-            foreach (string dir in Directory.EnumerateDirectories($"{session.User.OutputDirectory}/Grids/"))
+            try
             {
-                if (File.Exists($"{dir}/swarm_save_config.json"))
+                foreach (string dir in Directory.EnumerateDirectories($"{session.User.OutputDirectory}/Grids/").OrderByDescending(Directory.GetCreationTimeUtc))
                 {
-                    results.Add(dir.Replace('\\', '/').Trim('/').AfterLast('/'));
+                    if (File.Exists($"{dir}/swarm_save_config.json"))
+                    {
+                        results.Add(dir.Replace('\\', '/').Trim('/').AfterLast('/'));
+                    }
                 }
             }
+            catch (Exception) { }
             return [.. results];
         });
         return new JObject() { ["data"] = JArray.FromObject(data.ToArray()), ["history"] = JArray.FromObject(history) };
@@ -420,7 +424,7 @@ public class GridGeneratorExtension : Extension
         {
             Session = session,
             Claim = claim,
-            MaxSimul = session.User.Restrictions.CalcMaxT2ISimultaneous,
+            MaxSimul = session.User.CalcMaxT2ISimultaneous,
             ContinueOnError = continueOnError,
             ShowOutputs = showOutputs,
             SaveConfig = raw.TryGetValue("saveConfig", out JToken saveConfig) ? saveConfig as JObject : null

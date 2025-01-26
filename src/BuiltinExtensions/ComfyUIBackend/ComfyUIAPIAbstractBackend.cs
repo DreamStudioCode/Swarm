@@ -134,7 +134,6 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
             TimesErrorIgnored++;
             if (!HasEverShownInternalError && TimesErrorIgnored == 15)
             {
-                HasEverShownInternalError = true;
                 Logs.Debug($"Comfy backend {BackendData.ID} has failed to load value set repeatedly. Ignoring errors of {e.GetType().Name}: {e.Message}");
             }
             if (!HasEverShownInternalError && TimesErrorIgnored > 40)
@@ -197,12 +196,12 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
         Logs.Verbose("Will await a job, do parse...");
         JObject workflowJson = Utilities.ParseToJson(workflow);
         Logs.Verbose("JSON parsed.");
-        JObject metadataObj = user_input.GenMetadataObject();
+        JObject metadataObj = user_input.GenParameterMetadata();
         metadataObj.Remove("donotsave");
         metadataObj.Remove("exactbackendid");
         metadataObj["is_preview"] = true;
         metadataObj["preview_notice"] = "Image is not done generating";
-        string previewMetadata = T2IParamInput.MetadataToString(metadataObj);
+        string previewMetadata = T2IParamInput.MetadataToString(new JObject() { ["sui_image_params"] = metadataObj });
         int expectedNodes = workflowJson.Count;
         string id = null;
         ClientWebSocket socket = null;
@@ -489,7 +488,17 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
             {
                 if (msg[0].ToString() == "execution_error" && (msg[1] as JObject).TryGetValue("exception_message", out JToken actualMessage))
                 {
-                    throw new SwarmReadableErrorException($"ComfyUI execution error: {actualMessage}");
+                    string note = "";
+                    string cleanCheckMessage = $"{actualMessage}".ToLowerFast().Replace('\\', '/').Trim();
+                    while (cleanCheckMessage.Contains("//"))
+                    {
+                        cleanCheckMessage = cleanCheckMessage.Replace("//", "/");
+                    }
+                    if (cleanCheckMessage.StartsWith("[errno 2] no such file or directory") && cleanCheckMessage.After(':').Trim().Length > 250)
+                    {
+                        note = $"\n\n-- This looks like a Windows path length error (with a path of length {cleanCheckMessage.After(':').Trim().Length}). If it is, see https://superuser.com/questions/1807770/how-to-enable-long-paths-on-windows-11-home for info on how to enable Long Paths in Windows to fix this bug.";
+                    }
+                    throw new SwarmReadableErrorException($"ComfyUI execution error: {actualMessage}{note}");
                 }
             }
         }
@@ -628,7 +637,8 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
                     }
                     if (type.Type == T2IParamDataType.INTEGER && type.ViewType == ParamViewType.SEED && long.Parse(val.ToString()) == -1)
                     {
-                        return $"{Random.Shared.Next()}";
+                        int max = (int)type.Max;
+                        return $"{Random.Shared.Next(0, max <= 0 ? int.MaxValue : max)}";
                     }
                     if (val is T2IModel model)
                     {
@@ -716,7 +726,12 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
         {
             void TryApply(string key, Image img, bool resize)
             {
-                Image fixedImage = resize ? img.Resize(user_input.GetImageWidth(), user_input.GetImageHeight()) : img;
+                int width = user_input.GetImageWidth(-1), height = user_input.GetImageHeight(-1);
+                if (width <= 0 || height <= 0)
+                {
+                    resize = false;
+                }
+                Image fixedImage = resize ? img.Resize(width, height) : img;
                 if (key.Contains("swarmloadimageb") || key.Contains("swarminputimage"))
                 {
                     user_input.ValuesInput[key] = fixedImage;
@@ -804,7 +819,7 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
     }
 
     /// <inheritdoc/>
-    public override async Task<bool> LoadModel(T2IModel model)
+    public override async Task<bool> LoadModel(T2IModel model, T2IParamInput upstreamInput)
     {
         T2IParamInput input = new(null);
         input.Set(T2IParamTypes.Model, model);
@@ -824,6 +839,20 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
         input.Set(T2IParamTypes.Images, 1);
         input.Set(T2IParamTypes.CFGScale, 7);
         input.Set(T2IParamTypes.Seed, 1);
+        if (upstreamInput is not null)
+        {
+            void copyParam<T>(T2IRegisteredParam<T> param)
+            {
+                if (upstreamInput.TryGet(param, out T val))
+                {
+                    input.Set(param, val);
+                }
+            }
+            copyParam(T2IParamTypes.VAE);
+            copyParam(T2IParamTypes.ClipGModel);
+            copyParam(T2IParamTypes.ClipLModel);
+            copyParam(T2IParamTypes.T5XXLModel);
+        }
         WorkflowGenerator wg = new() { UserInput = input, ModelFolderFormat = ModelFolderFormat, Features = [.. SupportedFeatures] };
         JObject workflow = wg.Generate();
         await AwaitJobLive(workflow.ToString(), "0", _ => { }, new(null), Program.GlobalProgramCancel);

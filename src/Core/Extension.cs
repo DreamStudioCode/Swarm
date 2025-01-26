@@ -22,6 +22,9 @@ public abstract class Extension
     /// <summary>Human-readable short description of this extension.</summary>
     public string Description = "(No description provided)";
 
+    /// <summary>What license this extension is under (eg 'MIT', 'LGPL', ...).</summary>
+    public string License = "(Unknown)";
+
     /// <summary>URL to the readme or GitHub repo for this extension.</summary>
     public string ReadmeURL = "";
 
@@ -41,7 +44,7 @@ public abstract class Extension
     public List<string> StyleSheetFiles = [];
 
     /// <summary>Optional, filenames (relative to extension directory) of additional asset files to use, eg "Assets/my_image.png". You should populate this during <see cref="OnInit"/> or earlier.
-    /// You can link these as in HTML/JS/CSS as "/ExtensionFile/(YourExtName)/(file)", eg "/ExtensionFile/MyExtension/Assets/my_image.png"</summary>
+    /// You can link these as in HTML/JS/CSS as "ExtensionFile/(YourExtName)/(file)", eg "ExtensionFile/MyExtension/Assets/my_image.png"</summary>
     public List<string> OtherAssets = [];
 
     /// <summary>Called when the extension is initialized for the first time, before settings or anything else is loaded, very early in the extension cycle.</summary>
@@ -103,6 +106,7 @@ public abstract class Extension
             if (relevantInfo is not null)
             {
                 ExtensionAuthor = relevantInfo.Author;
+                License = relevantInfo.License;
                 Description = relevantInfo.Description;
                 Tags = relevantInfo.Tags;
             }

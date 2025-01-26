@@ -1,10 +1,15 @@
-﻿namespace SwarmUI.Accounts;
+﻿using FreneticUtilities.FreneticExtensions;
+
+namespace SwarmUI.Accounts;
 
 /// <summary>General handler for the available permissions list.</summary>
 public static class Permissions
 {
     /// <summary>Map of all known registered permissions from their IDs.</summary>
     public static ConcurrentDictionary<string, PermInfo> Registered = [];
+
+    /// <summary>Ordered list of the registered keys.</summary>
+    public static List<string> OrderedKeys = [];
 
     /// <summary>Registers the permission info to the global list, and returns a copy of it.</summary>
     public static PermInfo Register(PermInfo perm)
@@ -13,7 +18,17 @@ public static class Permissions
         {
             throw new InvalidOperationException($"Permission key '{perm.ID}' is already registered.");
         }
+        lock (OrderedKeys)
+        {
+            OrderedKeys.Add(perm.ID);
+        }
         return perm;
+    }
+
+    /// <summary>Fix the ordering of <see cref="OrderedKeys"/> to put groups together.</summary>
+    public static void FixOrdered()
+    {
+        OrderedKeys = [.. OrderedKeys.GroupBy(k => Registered[k].Group.DisplayName).Flatten()];
     }
 
     public static PermInfoGroup GroupSpecial = new("Admin", "Special permissions that don't make sense to give out.");
@@ -26,6 +41,7 @@ public static class Permissions
     public static PermInfoGroup GroupAdmin = new("Admin", "Permissions for server administration access.");
 
     public static PermInfo ConfigureRoles = Register(new("configure_roles", "Configure Roles", "Allows access to role configuration.\nThis is basically total control, as you can give yourself more permissions with this.", PermissionDefault.NOBODY, GroupAdmin, PermSafetyLevel.POWERFUL));
+    public static PermInfo ManageUsers = Register(new("manage_users", "Manage Users", "Allows access to administrative user management.\nThis is basically total control, as you can give yourself more permissions with this.", PermissionDefault.NOBODY, GroupAdmin, PermSafetyLevel.POWERFUL));
     public static PermInfo Shutdown = Register(new("shutdown", "Shutdown Server", "Allows the user to fully shut down the server.", PermissionDefault.NOBODY, GroupAdmin, PermSafetyLevel.SAFE));
     public static PermInfo Restart = Register(new("restart", "Restart Server", "Allows the user to fully restart the server.", PermissionDefault.ADMINS, GroupAdmin, PermSafetyLevel.SAFE));
     public static PermInfo ReadServerSettings = Register(new("read_server_settings", "Read Server Settings", "Allows the user to read (but not necessarily edit) server settings.", PermissionDefault.ADMINS, GroupAdmin, PermSafetyLevel.SAFE));
@@ -58,6 +74,7 @@ public static class Permissions
     public static PermInfo DownloadModels = Register(new("download_models", "Download Models", "Allows this user to download models.", PermissionDefault.POWERUSERS, GroupControl, PermSafetyLevel.UNTESTED));
     public static PermInfo ResetMetadata = Register(new("reset_metadata", "Reset Metadata", "Allows this user to use the special utility to reset all metadata.", PermissionDefault.POWERUSERS, GroupControl, PermSafetyLevel.SAFE));
     public static PermInfo Pickle2Safetensors = Register(new("pickle2safetensors", "Pickle2SafeTensors", "Allows this user to use the special utility to convert pickle models to safetensors.", PermissionDefault.POWERUSERS, GroupControl, PermSafetyLevel.RISKY));
+    public static PermInfo DeleteModels = Register(new("delete_models", "Delete Models", "Allows this user to delete or rename models.", PermissionDefault.POWERUSERS, GroupControl, PermSafetyLevel.UNTESTED));
 
     public static PermInfoGroup GroupParams = new("Parameters", "Permissions for basic parameter access.");
 
@@ -82,6 +99,12 @@ public static class Permissions
     public static PermInfo ManagePresets = Register(new("manage_presets", "Manage Presets", "Allows this user to manage (add, edit, delete) their own presets.", PermissionDefault.USER, GroupUser, PermSafetyLevel.SAFE));
 
     public static PermInfoGroup GroupExtensionTabs = new("Extension Tabs", "Permissions related to extension tabs.");
+
+    /// <summary>If true, this permission default access level is equal or higher ranked to the other perm (ie, if you have this default level, then the other level is included in your rights).</summary>
+    public static bool IsAtLeast(this PermissionDefault perm, PermissionDefault other)
+    {
+        return (int)perm <= (int)other;
+    }
 }
 
 /// <summary>Enumeration of default modes for permissions.</summary>

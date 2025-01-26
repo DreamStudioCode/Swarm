@@ -12,6 +12,8 @@
     --toggle-thumb-active: color-mix(in srgb, var(--emphasis) 50%, white);
     --toggle-thumb-hover: var(--button-background-hover);
     --toggle-thumb-active-hover: color-mix(in srgb, var(--emphasis) 25%, white);
+    --font-monospace: 'Courier New', Courier, monospace;
+    --star: #ffff00;
 }
 .modal-content {
     background-color: var(--background) !important;
@@ -39,6 +41,10 @@ body {
     0% {background-color: #bb2020;}
     50% {background-color: #880000;}
     100% {background-color: #bb2020;}
+}
+.password {
+    text-security: disc;
+    -webkit-text-security: disc;
 }
 .top-status-bar-wrapper {
     position: absolute;
@@ -458,12 +464,30 @@ textarea, input, select {
     cursor: pointer;
 }
 .header-label-wrap {
-    width: calc(100% - 20px);
-    display: inline-block;
+    width: 100%;
+    display: flex;
+    align-items: center;
     position: absolute;
     top: -1.2em;
     left: -1em;
     margin: 4px;
+}
+.header-label-spacer {
+    flex-grow: 10;
+}
+.header-label-counter {
+    font-size: 90%;
+    color: var(--text-soft);
+    font-family: var(--font-monospace);
+}
+.header-label-counter-advancedshine {
+    color: var(--text);
+    box-shadow: 0 0 4px 1px var(--emphasis);
+    background-color: color-mix(in srgb, var(--emphasis) 50%, transparent);
+}
+.header-label-notoggle {
+    width: 35px;
+    margin-left: 1rem;
 }
 .form-check-input:checked {
     background-color: var(--emphasis);
@@ -667,7 +691,7 @@ textarea, input, select {
     margin: 16px;
     border: 16px solid var(--emphasis);
     border-radius: 50%;
-    animation: loading-spinner 1.2s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+    /* animation: loading-spinner 1.2s cubic-bezier(0.5, 0, 0.5, 1) infinite; */
     border-color: var(--emphasis) transparent transparent transparent;
 }
 .loading-spinner .loadspin1 {
@@ -708,6 +732,36 @@ textarea, input, select {
 .parens {
     color: var(--text-soft);
 }
+.sui-popover-notice {
+    visibility: visible;
+    opacity: 1;
+    font-size: 80%;
+    min-width: 0;
+    border-radius: 1rem;
+    padding: 0.3rem;
+    border: none;
+}
+.sui-popover-notice-fade-1s {
+    visibility: hidden;
+    opacity: 0;
+    transition: visibility 0s 1s, opacity 1s linear;
+    width: fit-content;
+}
+.notice-pop-green {
+    background-color: #005500;
+    color: #ffffff;
+}
+.drag_image_target_highlight {
+    box-shadow: inset 0 0 8px 2px var(--emphasis);
+}
+.modal-dialog {
+    max-width: calc(max(500px, 50vw));
+    width: fit-content;
+}
+.modal-content {
+    width: fit-content;
+}
+
 
 
 
@@ -843,10 +897,6 @@ input[type="range"]::-moz-range-track {
     --toggle-thumb-size: 12px;
     width: var(--toggle-width) !important;
     height: var(--toggle-height) !important;
-}
-.group-toggler-switch {
-    position: absolute;
-    right: 0;
 }
 .auto-slider-toggle {
     opacity: 0;

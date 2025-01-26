@@ -16,6 +16,18 @@ Here's some general info:
 - See the [`Extension` class source here](https://github.com/mcmonkeyprojects/SwarmUI/blob/master/src/Core/Extension.cs) for more things you can do.
     - This has several different launch points (eg `OnInit`, `OnPreInit`, etc.) and some registration points (eg `ScriptFiles` and `StyleSheetFiles` to register custom web assets to the main page).
 - After making an extension, PR it to the [extension list file](https://github.com/mcmonkeyprojects/SwarmUI/blob/master/launchtools/extension_list.fds)
+- Please select an appropriate open source license for your extension. The MIT license is recommended.
+    - Aggressive licenses (eg GPL) will be marked with a red warning on the list.
+    - Closed source licenses may be rejected from the list.
+
+## Custom Themes
+
+Want to add custom UI themes (ie the Themes selectable in the User Settings tab) in a Swarm extension? Here's how:
+
+- You need a C# extension class as usual.
+- In `OnPreInit`, add the path to your stylesheet to `OtherAssets` (NOT StyleSheetFiles) in your Extension class.
+- In `OnInit`, call eg `WebServer.RegisterTheme(new("my_custom_dark", "My Custom Dark", ["/css/themes/modern.css", "/ExtensionFile/MyExtension/Assets/my_custom_dark.css"], true));`
+- Be careful to keep CSS edits minimal. Any format breakage from an extension CSS edit is on you to fix, only custom CSS in core themes are tested in core updates.
 
 # Extension Standards
 
@@ -47,6 +59,8 @@ These standards are newly written as of October 2024, and may change over time b
     - I say "minimal" because if you want to put a "Sponsor me on GitHub (here)" link in your readme or something, that's okay. Just don't be in people's faces about it (no popups, no centerscreen messages, etc.)
     - Non-financial promotions (such as advertising your other Swarm extensions) falls under the same rule - minimal mention in a readme or something is fine, shoving it in people's faces is not.
     - Advertisement of any form for any entity that is not yourself (the creator of the extension) is strictly forbidden.
+- **7: General Style Match**: The UI portions of your extension should aim to match the general styling of Swarm itself, in a way that is compatible with user theme selection.
+    - If you think Swarm could look better, maybe make a PR to Swarm's CSS or PR a new theme?
 
 # Example: A Custom Comfy-Node-Backed Parameter
 

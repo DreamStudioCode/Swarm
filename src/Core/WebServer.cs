@@ -82,21 +82,23 @@ public class WebServer
     /// <summary>Register a theme from an extension.</summary>
     public void RegisterTheme(string id, string name, string extFile, Extension extension, bool isDark)
     {
-        RegisterTheme(new(id, name, [$"/ExtensionFile/{extension.ExtensionName}/{extFile}"], isDark));
+        RegisterTheme(new(id, name, [$"ExtensionFile/{extension.ExtensionName}/{extFile}"], isDark));
     }
 
     /// <summary>Initial prep, called by <see cref="Program"/>, generally should not be touched externally.</summary>
     public void PreInit()
     {
         RegisteredThemes.Clear();
-        RegisterTheme(new("modern_dark", "Modern Dark", ["/css/themes/modern.css", "/css/themes/modern_dark.css"], true));
-        RegisterTheme(new("modern_light", "Modern Light", ["/css/themes/modern.css", "/css/themes/modern_light.css"], false));
-        RegisterTheme(new("solarized", "Solarized Light", ["/css/themes/modern.css", "/css/themes/solarized.css"], false));
-        RegisterTheme(new("dark_dreams", "Dark Dreams", ["/css/themes/dark_dreams.css"], true));
-        RegisterTheme(new("gravity_blue", "Gravity Blue", ["/css/themes/gravity_blue.css"], true));
-        RegisterTheme(new("cyber_swarm", "Cyber Swarm", ["/css/themes/cyber_swarm.css"], true));
-        RegisterTheme(new("punked", "Punked", ["/css/themes/punked.css"], true));
-        RegisterTheme(new("eyesear_white", "Eyesear White", ["/css/themes/eyesear_white.css"], false));
+        RegisterTheme(new("modern_dark", "Modern Dark", ["css/themes/modern.css", "css/themes/modern_dark.css"], true));
+        RegisterTheme(new("modern_light", "Modern Light", ["css/themes/modern.css", "css/themes/modern_light.css"], false));
+        RegisterTheme(new("solarized", "Solarized Light", ["css/themes/modern.css", "css/themes/solarized.css"], false));
+        RegisterTheme(new("dark_dreams", "Dark Dreams (Legacy)", ["css/themes/dark_dreams.css"], true));
+        RegisterTheme(new("gravity_blue", "Gravity Blue (Legacy)", ["css/themes/gravity_blue.css"], true));
+        RegisterTheme(new("cyber_swarm", "Cyber Swarm (Legacy)", ["css/themes/cyber_swarm.css"], true));
+        RegisterTheme(new("punked", "Punked (Legacy)", ["css/themes/punked.css"], true));
+        RegisterTheme(new("eyesear_white", "Eyesear White (Legacy)", ["css/themes/eyesear_white.css"], false));
+        RegisterTheme(new("swarmpunk", "Swarm Punk", ["css/themes/modern.css", "css/themes/swarmpunk.css"], true));
+        RegisterTheme(new("beweish", "Beweish", ["css/themes/modern.css", "css/themes/beweish.css"], true));
     }
 
     /// <summary>Main prep, called by <see cref="Program"/>, generally should not be touched externally.</summary>
@@ -266,19 +268,19 @@ public class WebServer
         {
             foreach (string script in e.ScriptFiles)
             {
-                string fname = $"/ExtensionFile/{e.ExtensionName}/{script}";
+                string fname = $"ExtensionFile/{e.ExtensionName}/{script}";
                 ExtensionSharedFiles.Add(fname, File.ReadAllText($"{e.FilePath}{script}"));
                 scripts.Append($"<script src=\"{fname}?vary={Utilities.VaryID}\"></script>\n");
             }
             foreach (string css in e.StyleSheetFiles)
             {
-                string fname = $"/ExtensionFile/{e.ExtensionName}/{css}";
+                string fname = $"ExtensionFile/{e.ExtensionName}/{css}";
                 ExtensionSharedFiles.Add(fname, File.ReadAllText($"{e.FilePath}{css}"));
                 stylesheets.Append($"<link rel=\"stylesheet\" href=\"{fname}?vary={Utilities.VaryID}\" />");
             }
             foreach (string file in e.OtherAssets)
             {
-                string fname = $"/ExtensionFile/{e.ExtensionName}/{file}";
+                string fname = $"ExtensionFile/{e.ExtensionName}/{file}";
                 string toRead = $"{e.FilePath}{file}";
                 ExtensionAssets.Add(fname, new(() => File.ReadAllBytes(toRead)));
             }
@@ -363,15 +365,16 @@ public class WebServer
     /// <summary>Web route for scripts from extensions.</summary>
     public async Task ViewExtensionScript(HttpContext context)
     {
-        if (ExtensionSharedFiles.TryGetValue(context.Request.Path.Value, out string script))
+        string requested = context.Request.Path.Value[1..];
+        if (ExtensionSharedFiles.TryGetValue(requested, out string script))
         {
-            context.Response.ContentType = Utilities.GuessContentType(context.Request.Path.Value);
+            context.Response.ContentType = Utilities.GuessContentType(requested);
             context.Response.StatusCode = 200;
             await context.Response.WriteAsync(script);
         }
-        else if (ExtensionAssets.TryGetValue(context.Request.Path.Value, out Lazy<byte[]> data))
+        else if (ExtensionAssets.TryGetValue(requested, out Lazy<byte[]> data))
         {
-            context.Response.ContentType = Utilities.GuessContentType(context.Request.Path.Value);
+            context.Response.ContentType = Utilities.GuessContentType(requested);
             context.Response.StatusCode = 200;
             await context.Response.Body.WriteAsync(data.Value);
         }
@@ -456,11 +459,16 @@ public class WebServer
             return;
         }
         byte[] data = null;
+        string contentType = Utilities.GuessContentType(path);
         try
         {
             if (context.Request.Query.TryGetValue("preview", out StringValues previewToken) && $"{previewToken}" == "true" && user.Settings.ImageHistoryUsePreviews)
             {
                 data = ImageMetadataTracker.GetOrCreatePreviewFor(path);
+                if (data is not null)
+                {
+                    contentType = "image/jpg";
+                }
             }
             data ??= await File.ReadAllBytesAsync(path);
         }
@@ -478,7 +486,7 @@ public class WebServer
             }
             return;
         }
-        context.Response.ContentType = Utilities.GuessContentType(path);
+        context.Response.ContentType = contentType;
         context.Response.StatusCode = 200;
         context.Response.ContentLength = data.Length;
         await context.Response.Body.WriteAsync(data, Program.GlobalProgramCancel);

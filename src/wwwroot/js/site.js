@@ -13,6 +13,10 @@ function enableSlidersIn(elem) {
     }
 }
 
+function enableSliderAbove(div) {
+    enableSliderForBox(findParentOfClass(div, 'auto-slider-box'));
+}
+
 function enableSliderForBox(div) {
     let range = div.querySelector('input[type="range"]');
     let number = div.querySelector('input[type="number"]');
@@ -392,16 +396,24 @@ function doToggleEnable(id) {
             elem2.classList.remove('disabled-input');
         }
     }
+    if (typeof scheduleParamUnsupportUpdate == 'function') {
+        scheduleParamUnsupportUpdate();
+    }
 }
 
 function getToggleHtml(toggles, id, name, extraClass = '', func = 'doToggleEnable') {
-    return toggles ? `<span class="form-check form-switch toggle-switch display-inline-block${extraClass}"><input class="auto-slider-toggle form-check-input" type="checkbox" id="${id}_toggle" title="Enable/disable ${name}" onclick="${func}('${id}')" onchange="${func}('${id}')" autocomplete="false"><div class="auto-slider-toggle-content"></div></span>` : '';
+    return toggles ? `<span class="form-check form-switch toggle-switch display-inline-block${extraClass}"><input class="auto-slider-toggle form-check-input" type="checkbox" id="${id}_toggle" title="Enable/disable ${name}" onclick="${func}('${id}')" onchange="${func}('${id}')" autocomplete="off"><div class="auto-slider-toggle-content"></div></span>` : '';
 }
 
-function load_image_file(e) {
-    updateFileDragging({ target: e }, true);
-    let file = e.files[0];
-    let parent = e.closest('.auto-input');
+let loadImageFileDedup = false;
+
+function load_image_file(elem) {
+    if (loadImageFileDedup) {
+        return;
+    }
+    updateFileDragging({ target: elem }, true);
+    let file = elem.files[0];
+    let parent = elem.closest('.auto-input');
     let preview = parent.querySelector('.auto-input-image-preview');
     let label = parent.querySelector('.auto-file-input-filename');
     if (file) {
@@ -412,24 +424,30 @@ function load_image_file(e) {
         label.textContent = name;
         let reader = new FileReader();
         reader.addEventListener("load", () => {
-            e.dataset.filedata = reader.result;
+            elem.dataset.filedata = reader.result;
             preview.innerHTML = `<button class="interrupt-button auto-input-image-remove-button" title="Remove image">&times;</button><img alt="Image preview" />`;
             let img = preview.querySelector('img');
             img.onload = () => {
                 label.textContent = `${name} (${img.naturalWidth}x${img.naturalHeight}, ${describeAspectRatio(img.naturalWidth, img.naturalHeight)})`;
+                elem.dataset.width = img.naturalWidth;
+                elem.dataset.height = img.naturalHeight;
+                loadImageFileDedup = true;
+                triggerChangeFor(elem);
+                loadImageFileDedup = false;
             };
             img.src = reader.result;
             preview.firstChild.addEventListener('click', () => {
-                delete e.dataset.filedata;
+                delete elem.dataset.filedata;
                 label.textContent = "";
                 preview.innerHTML = '';
-                e.value = '';
+                elem.value = '';
+                triggerChangeFor(elem);
             });
         }, false);
         reader.readAsDataURL(file);
     }
     else {
-        delete e.dataset.filedata;
+        delete elem.dataset.filedata;
         label.textContent = "";
         preview.innerHTML = '';
     }
@@ -544,10 +562,10 @@ function makeSliderInput(featureid, id, paramid, name, description, value, min, 
         <label>
             <span class="auto-input-name">${getToggleHtml(toggles, id, name)}${translateableHtml(name)}${popover}</span>
         </label>
-        <input class="auto-slider-number" type="number" id="${id}" data-param_id="${paramid}" value="${value}" min="${min}" max="${max}" step="${step}" data-ispot="${isPot}" autocomplete="false" onchange="autoNumberWidth(this)">
+        <input class="auto-slider-number" type="number" id="${id}" data-param_id="${paramid}" value="${value}" min="${min}" max="${max}" step="${step}" data-ispot="${isPot}" autocomplete="off" onchange="autoNumberWidth(this)">
         <br>
         <div class="auto-slider-range-wrapper" style="${getRangeStyle(rangeVal, view_min, view_max)}">
-            <input class="auto-slider-range" type="range" id="${id}_rangeslider" value="${rangeVal}" min="${view_min}" max="${view_max}" step="${step}" data-ispot="${isPot}" autocomplete="false" oninput="updateRangeStyle(arguments[0])" onchange="updateRangeStyle(arguments[0])">
+            <input class="auto-slider-range" type="range" id="${id}_rangeslider" value="${rangeVal}" min="${view_min}" max="${view_max}" step="${step}" data-ispot="${isPot}" autocomplete="off" oninput="updateRangeStyle(arguments[0])" onchange="updateRangeStyle(arguments[0])">
         </div>
     </div>`;
 }
@@ -563,7 +581,7 @@ function makeNumberInput(featureid, id, paramid, name, description, value, min, 
                 <label>
                     <span class="auto-input-name">${getToggleHtml(toggles, id, name)}${translateableHtml(name)}${popover}</span>
                 </label>
-                <input class="auto-number auto-number-seedbox" type="number" id="${id}" data-param_id="${paramid}" value="${value}" min="${min}" max="${max}" step="${step}" data-name="${name}" autocomplete="false">
+                <input class="auto-number auto-number-seedbox" type="number" id="${id}" data-param_id="${paramid}" value="${value}" min="${min}" max="${max}" step="${step}" data-name="${name}" autocomplete="off">
                 <button class="basic-button seed-button seed-random-button" title="Random (Set to -1)" onclick="setSeedToRandom('${id}')">&#x1F3B2;</button>
                 <button class="basic-button seed-button seed-reuse-button" title="Reuse (from currently selected image)" onclick="reuseLastParamVal('${id}');">&#128257;</button>
             </div>`;
@@ -573,7 +591,7 @@ function makeNumberInput(featureid, id, paramid, name, description, value, min, 
             <label>
                 <span class="auto-input-name">${getToggleHtml(toggles, id, name)}${translateableHtml(name)}${popover}</span>
             </label>
-            <input class="auto-number" type="number" id="${id}" data-param_id="${paramid}" value="${value}" min="${min}" max="${max}" step="${step}" data-name="${name}" autocomplete="false" onchange="autoNumberWidth(this)">
+            <input class="auto-number" type="number" id="${id}" data-param_id="${paramid}" value="${value}" min="${min}" max="${max}" step="${step}" data-name="${name}" autocomplete="off" onchange="autoNumberWidth(this)">
         </div>`;
 }
 
@@ -588,14 +606,23 @@ function makeSecretInput(featureid, id, paramid, name, description, value, place
         <label>
             <span class="auto-input-name">${getToggleHtml(toggles, id, name)}${translateableHtml(name)}${popover}</span>
         </label>
-        <input type="password" class="auto-text auto-text-block" translate translate-no-text" id="${id}" data-param_id="${paramid}" placeholder="${escapeHtmlNoBr(placeholder)}" data-name="${name}" autocomplete="false" value="${escapeHtmlNoBr(value)}" />
+        <input type="text" class="auto-text auto-text-block password" translate translate-no-text" id="${id}" data-param_id="${paramid}" placeholder="${escapeHtmlNoBr(placeholder)}" data-name="${name}" autocomplete="off" value="${escapeHtmlNoBr(value)}" />
     </div>`;
 }
 
+function dynamicSizeTextBox(elem, min=15) {
+    let maxHeight = parseInt(getUserSetting('maxpromptlines', '10'));
+    elem.style.height = 'auto';
+    elem.style.height = `calc(min(${maxHeight}rem, ${Math.max(elem.scrollHeight, min) + 5}px))`;
+}
+
 function makeTextInput(featureid, id, paramid, name, description, value, format, placeholder, toggles = false, genPopover = false, popover_button = true) {
+    if (format == 'secret') {
+        return makeSecretInput(featureid, id, paramid, name, description, value, placeholder, toggles, genPopover, popover_button);
+    }
     name = escapeHtml(name);
     featureid = featureid ? ` data-feature-require="${featureid}"` : '';
-    let onInp = format == "prompt" ? ' oninput="textPromptInputHandle(this)"' : '';
+    let onInp = format == "prompt" ? ' oninput="textPromptInputHandle(this)"' : (format == 'big' ? ' oninput="dynamicSizeTextBox(this, 32)"' : '');
     let tokenCounter = format == "prompt" ? '<span class="auto-input-prompt-tokencount" title="Text-Encoder token count / chunk-size">0/75</span>' : '';
     let [popover, featureid2] = getPopoverElemsFor(id, popover_button);
     featureid += featureid2;
@@ -607,7 +634,7 @@ function makeTextInput(featureid, id, paramid, name, description, value, format,
             <span class="auto-input-name">${getToggleHtml(toggles, id, name)}${translateableHtml(name)}${popover}</span>
         </label>
         ${tokenCounter}
-        <textarea class="auto-text${(isBig ? " auto-text-block" : "")} translate translate-no-text" id="${id}" data-param_id="${paramid}" rows="${isBig ? 2 : 1}"${onInp} placeholder="${escapeHtmlNoBr(placeholder)}" data-name="${name}" autocomplete="false">${escapeHtmlNoBr(value)}</textarea>
+        <textarea class="auto-text${(isBig ? " auto-text-block" : "")} translate translate-no-text" id="${id}" data-param_id="${paramid}" rows="${isBig ? 2 : 1}"${onInp} placeholder="${escapeHtmlNoBr(placeholder)}" data-name="${name}" autocomplete="off">${escapeHtmlNoBr(value)}</textarea>
         ${format == 'prompt' ? `<button class="interrupt-button image-clear-button" style="display: none;">${translateableHtml("Clear Images")}</button>
         <div class="added-image-area" style="display: none;"></div>` : ''}
     </div>`;
@@ -652,7 +679,7 @@ function makeDropdownInput(featureid, id, paramid, name, description, values, de
         <label>
             <span class="auto-input-name">${getToggleHtml(toggles, id, name)}${translateableHtml(name)}${popover}</span>
         </label>
-        <select class="auto-dropdown" id="${id}" data-name="${name}" data-param_id="${paramid}" autocomplete="false" onchange="autoSelectWidth(this)">`;
+        <select class="auto-dropdown" id="${id}" data-name="${name}" data-param_id="${paramid}" autocomplete="off" onchange="autoSelectWidth(this)">`;
     for (let i = 0; i < values.length; i++) {
         let value = values[i];
         let alt_name = alt_names && alt_names[i] ? alt_names[i] : value;
@@ -676,7 +703,7 @@ function makeMultiselectInput(featureid, id, paramid, name, description, values,
         <label>
             <span class="auto-input-name">${getToggleHtml(toggles, id, name)}${translateableHtml(name)}${popover}</span>
         </label>
-        <select class="form-select" id="${id}" data-param_id="${paramid}" autocomplete="false" data-placeholder="${escapeHtmlNoBr(placeholder)}" multiple>`;
+        <select class="form-select" id="${id}" data-param_id="${paramid}" autocomplete="off" data-placeholder="${escapeHtmlNoBr(placeholder)}" multiple>`;
     for (let value of values) {
         let selected = value == defaultVal ? ' selected="true"' : '';
         html += `<option value="${escapeHtmlNoBr(value)}"${selected}>${escapeHtml(value)}</option>`;
@@ -703,12 +730,12 @@ function makeImageInput(featureid, id, paramid, name, description, toggles = fal
     featureid += featureid2;
     let html = `
     <div class="auto-input auto-file-box"${featureid}>
-        <label>
+        <label class="auto-image-input-label">
             <span class="auto-input-name">${getToggleHtml(toggles, id, name)}${translateableHtml(name)}${popover}</span>
             <input type="text" id="${id}_pastebox" size="14" maxlength="0" placeholder="Ctrl+V: Paste Image" onpaste="onImageInputPaste(arguments[0])">
         </label>
-        <label for="${id}" class="auto-file-label">
-            <input class="auto-file" type="file" accept="image/png, image/jpeg" id="${id}" data-param_id="${paramid}" onchange="load_image_file(this)" ondragover="updateFileDragging(arguments[0], false)" ondragleave="updateFileDragging(arguments[0], true)" autocomplete="false">
+        <label for="${id}" class="auto-file-label drag_image_target">
+            <input class="auto-file" type="file" accept="image/png, image/jpeg" id="${id}" data-param_id="${paramid}" onchange="load_image_file(this)" ondragover="updateFileDragging(arguments[0], false)" ondragleave="updateFileDragging(arguments[0], true)" autocomplete="off">
             <div class="auto-file-input">
                 <a class="auto-file-input-button basic-button">${translateableHtml("Choose File")}</a>
                 <span class="auto-file-input-filename"></span>
@@ -786,19 +813,7 @@ window.addEventListener('drop', e => {
 }, { capture: true, passive: false });
 
 function updateFileDragging(e, out) {
-    let files = [];
-    if (e.dataTransfer && !out) {
-        files = e.dataTransfer.files;
-        if (!files || !files.length) {
-            files = [...e.dataTransfer.items || []].filter(item => item.kind == "file");
-        }
-        if (!files.length) {
-            let uris = e.dataTransfer.getData('text/uri-list');
-            if (uris) {
-                files = uris.split('\n');
-            }
-        }
-    }
+    let files = out ? [] : uiImprover.getFileList(e.dataTransfer);
     const el = e.target.nextElementSibling;
     const mode = files.length ? "add" : "remove";
     el.classList[mode]("auto-file-input-file-drag");
@@ -852,4 +867,12 @@ function modalHeader(id, title) {
 
 function modalFooter() {
     return `</div></div></div>`;
+}
+
+let specialDebugTime = Date.now();
+function specialDebug(message) {
+    let now = Date.now();
+    let diff = now - specialDebugTime;
+    specialDebugTime = now;
+    console.log(`${message} (${diff}ms since last debug)`);
 }

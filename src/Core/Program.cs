@@ -15,6 +15,7 @@ using SwarmUI.WebAPI;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
+using System.Runtime.InteropServices;
 using System.Runtime.Loader;
 
 namespace SwarmUI.Core;
@@ -72,6 +73,9 @@ public class Program
     /// <summary>Event-action fired once per second (approximately) all the time.</summary>
     public static Action TickEvent;
 
+    /// <summary>Event-action fired once per minute (approximately) all the time.</summary>
+    public static Action SlowTickEvent;
+
     /// <summary>Event-action fired when the model paths have changed (eg via settings change).</summary>
     public static Action ModelPathsChangedEvent;
 
@@ -119,6 +123,12 @@ public class Program
             {
                 ServerSettings.DefaultUser.FileFormat.ImageFormat = "JPG";
             }
+            // TODO: Legacy patch from Beta 0.9.4.
+            if (ServerSettings.IsInstalled && string.IsNullOrWhiteSpace(ServerSettings.InstallDate))
+            {
+                ServerSettings.InstallDate = "2024-12-01"; // (Technically earlier, but, well... who knows lol)
+                ServerSettings.InstallVersion = "Beta";
+            }
             if (!LockSettings)
             {
                 Logs.Init("Re-saving settings file...");
@@ -133,9 +143,20 @@ public class Program
             PrintCommandLineHelp();
             return;
         }
+        if (ServerSettings.IsInstalled && ServerSettings.InstallDate != "2024-12-01")
+        {
+            DateTimeOffset date = DateTimeOffset.Parse(ServerSettings.InstallDate);
+            TimeSpan offset = DateTimeOffset.Now - date;
+            string timeAgo = offset.TotalDays < 60 ? $"{(int)offset.TotalDays} days" : $"{(int)(offset.TotalDays / 30)} months";
+            Logs.Init($"SwarmUI was installed {ServerSettings.InstallDate} ({timeAgo} ago) with version {ServerSettings.InstallVersion}");
+        }
+        if (ServerSettings.ShowExperimentalFeatures)
+        {
+            Logs.Warning($"Experimental Features are enabled. Issue reports will not be accepted until you turn them off in Server Configuration.");
+        }
         Logs.StartLogSaving();
         timer.Check("Initial settings load");
-        if (ServerSettings.CheckForUpdates)
+        if (ServerSettings.Maintenance.CheckForUpdates)
         {
             waitFor.Add(Utilities.RunCheckedTask(async () =>
             {
@@ -177,13 +198,25 @@ public class Program
             NvidiaUtil.NvidiaInfo[] gpuInfo = NvidiaUtil.QueryNvidia();
             SystemStatusMonitor.HardwareInfo.RefreshMemoryStatus();
             MemoryStatus memStatus = SystemStatusMonitor.HardwareInfo.MemoryStatus;
-            Logs.Init($"CPU Cores: {Environment.ProcessorCount} | RAM: {new MemoryNum((long)memStatus.TotalPhysical)} total, {new MemoryNum((long)memStatus.AvailablePhysical)} available, {new MemoryNum((long)memStatus.FixedTotalVirtual())} virtual, {new MemoryNum((long)memStatus.FixedTotalVirtual() - (long)memStatus.TotalPhysical)} swap");
-            if (gpuInfo is not null)
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                Logs.Init($"CPU Cores: {Environment.ProcessorCount} | RAM: {new MemoryNum((long)memStatus.TotalPhysical)} total, {new MemoryNum((long)memStatus.AvailablePhysical)} available, {new MemoryNum((long)memStatus.TotalPageFile)} total page file, {new MemoryNum((long)memStatus.AvailablePageFile)} available page file");
+            }
+            else
+            {
+                Logs.Init($"CPU Cores: {Environment.ProcessorCount} | RAM: {new MemoryNum((long)memStatus.TotalPhysical)} total, {new MemoryNum((long)memStatus.AvailablePhysical)} available, {new MemoryNum((long)memStatus.TotalVirtual)} virtual, {new MemoryNum((long)memStatus.TotalVirtual - (long)memStatus.TotalPhysical)} swap");
+            }
+            if (gpuInfo is not null && gpuInfo.Length > 0)
             {
                 JObject gpus = [];
                 foreach (NvidiaUtil.NvidiaInfo gpu in gpuInfo)
                 {
                     Logs.Init($"GPU {gpu.ID}: {gpu.GPUName} | Temp {gpu.Temperature}C | Util {gpu.UtilizationGPU}% GPU, {gpu.UtilizationMemory}% Memory | VRAM {gpu.TotalMemory} total, {gpu.FreeMemory} free, {gpu.UsedMemory} used");
+                }
+                if (gpuInfo.All(gpu => gpu.GPUName.Contains("NVIDIA GeForce RTX 40")))
+                {
+                    Utilities.PresumeNVidia40xx = true;
+                    Logs.Init($"Will use GPU accelerations specific to NVIDIA GeForce RTX 40xx series.");
                 }
             }
         }));
@@ -204,6 +237,7 @@ public class Program
         Web.PreInit();
         timer.Check("Web PreInit");
         Extensions.RunOnAllExtensions(e => e.OnInit());
+        Sessions.ApplyDefaultPermissions();
         timer.Check("Extensions Init");
         Utilities.PrepUtils();
         timer.Check("Prep Utils");
@@ -231,6 +265,7 @@ public class Program
         Extensions.RunOnAllExtensions(e => e.OnPreLaunch());
         timer.Check("Extensions pre-launch");
         Logs.Init("Launching server...");
+        Permissions.FixOrdered();
         Web.Launch();
         timer.Check("Web launch");
         try
@@ -265,7 +300,7 @@ public class Program
             }
             catch (Exception ex)
             {
-                Logs.Error($"Failed to launch mode '{LaunchMode}' (If this is a headless/server install, change 'LaunchMode' to 'none' in settings): {ex.ReadableString()}");
+                Logs.Error($"Failed to launch mode '{LaunchMode}' (If this is a headless/server install, run with '--launch_mode none' as explained in the readme): {ex.ReadableString()}");
             }
         });
         Task.Run(async () =>
@@ -284,7 +319,12 @@ public class Program
                 }
             }
         });
+        if (Environment.CurrentDirectory.Contains(' '))
+        {
+            Logs.Warning($"Your folder path for SwarmUI contains a space. While Swarm itself can handle this fine, sometimes upstream dependencies misbehave around spaces. It is recommended you keep file paths very simple.");
+        }
         Logs.Init("Program is running.");
+        WebhookManager.SendWebhook("Startup", ServerSettings.WebHooks.ServerStartWebhook, ServerSettings.WebHooks.ServerShutdownWebhook);
         WebServer.WebApp.WaitForShutdown();
         Shutdown();
     }
@@ -300,7 +340,10 @@ public class Program
         try
         {
             string modelRoot = ServerSettings.Paths.ActualModelRoot;
-            Directory.CreateDirectory(Utilities.CombinePathWithAbsolute(modelRoot, ServerSettings.Paths.SDModelFolder));
+            foreach (string path in ServerSettings.Paths.SDModelFolder.Split(';'))
+            {
+                Directory.CreateDirectory(Utilities.CombinePathWithAbsolute(modelRoot, path));
+            }
             Directory.CreateDirectory($"{modelRoot}/upscale_models");
             Directory.CreateDirectory($"{modelRoot}/clip");
         }
@@ -336,6 +379,7 @@ public class Program
         T2IModelSets["LoRA"] = new() { ModelType = "LoRA", FolderPaths = buildPathList(ServerSettings.Paths.SDLoraFolder) };
         T2IModelSets["Embedding"] = new() { ModelType = "Embedding", FolderPaths = buildPathList(ServerSettings.Paths.SDEmbeddingFolder) };
         T2IModelSets["ControlNet"] = new() { ModelType = "ControlNet", FolderPaths = buildPathList(ServerSettings.Paths.SDControlNetsFolder) };
+        T2IModelSets["Clip"] = new() { ModelType = "Clip", FolderPaths = buildPathList(ServerSettings.Paths.SDClipFolder) };
         T2IModelSets["ClipVision"] = new() { ModelType = "ClipVision", FolderPaths = buildPathList(ServerSettings.Paths.SDClipVisionFolder) };
     }
 
@@ -365,6 +409,8 @@ public class Program
             return;
         }
         HasShutdown = true;
+        Task waitShutdown = WebhookManager.SendWebhook("Shutdown", ServerSettings.WebHooks.ServerShutdownWebhook, ServerSettings.WebHooks.ServerShutdownWebhookData);
+        Task.WaitAny(waitShutdown, Task.Delay(TimeSpan.FromMinutes(2)));
         Environment.ExitCode = code;
         Logs.Info("Shutting down...");
         GlobalCancelSource.Cancel();
@@ -451,6 +497,32 @@ public class Program
         {
             section.Set("DefaultUser.AutoComplete.Suffix", autoCompleteSuffix);
         }
+        bool? allowUnsafeOutpath = section.GetBool("DefaultUserRestriction.AllowUnsafeOutpaths", null);
+        if (allowUnsafeOutpath.HasValue)
+        {
+            SessionHandler.PatchOwnerAllowUnsafe = allowUnsafeOutpath.Value;
+        }
+        int? maxT2i = section.GetInt("DefaultUserRestriction.MaxT2ISimultaneous", null);
+        if (maxT2i.HasValue)
+        {
+            SessionHandler.PatchOwnerMaxT2I = maxT2i.Value;
+        }
+        int? maxDepth = section.GetInt("DefaultUserRestriction.MaxOutPathDepth", null);
+        if (maxDepth.HasValue)
+        {
+            SessionHandler.PatchOwnerMaxDepth = maxDepth.Value;
+        }
+        // TODO: Legacy format patch from beta 0.9.4!
+        bool? checkForUpdates = section.GetBool("CheckForUpdates", null);
+        if (checkForUpdates.HasValue)
+        {
+            section.Set("Maintenance.CheckForUpdates", checkForUpdates.Value);
+        }
+        bool? autoPullDevUpdates = section.GetBool("AutoPullDevUpdates", null);
+        if (autoPullDevUpdates.HasValue)
+        {
+            section.Set("Maintenance.AutoPullDevUpdates", autoPullDevUpdates.Value);
+        }
         ServerSettings.Load(section);
     }
 
@@ -465,11 +537,11 @@ public class Program
         {
             FDSUtility.SaveToFile(ServerSettings.Save(true), SettingsFilePath);
             bool hasAlwaysPullFile = File.Exists("./src/bin/always_pull");
-            if (ServerSettings.AutoPullDevUpdates && !hasAlwaysPullFile)
+            if (ServerSettings.Maintenance.AutoPullDevUpdates && !hasAlwaysPullFile)
             {
                 File.WriteAllText("./src/bin/always_pull", "true");
             }
-            else if (!ServerSettings.AutoPullDevUpdates && hasAlwaysPullFile)
+            else if (!ServerSettings.Maintenance.AutoPullDevUpdates && hasAlwaysPullFile)
             {
                 File.Delete("./src/bin/always_pull");
             }
@@ -515,6 +587,10 @@ public class Program
         }
         WebServer.SetHost(host, port);
         NetworkBackendUtils.NextPort = ServerSettings.Network.BackendStartingPort;
+        if (ServerSettings.Network.BackendPortRandomize)
+        {
+            NetworkBackendUtils.NextPort += Random.Shared.Next(2000);
+        }
         if (NetworkBackendUtils.NextPort < 1000)
         {
               Logs.Warning($"BackendStartingPort setting {NetworkBackendUtils.NextPort} is a low-range value (below 1000), which may cause it to conflict with the OS or other programs. You may want to change it.");

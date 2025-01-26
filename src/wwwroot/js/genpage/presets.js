@@ -16,7 +16,7 @@ function getPresetByTitle(title) {
 }
 
 function getPresetTypes() {
-    return gen_param_types.filter(type => !type.toggleable || getRequiredElementById(`preset_input_${type.id}_toggle`).checked);
+    return gen_param_types.filter(type => !type.toggleable || getRequiredElementById(`input_${type.id}_toggle`).checked);
 }
 
 function clearPresetView() {
@@ -63,7 +63,7 @@ function create_new_preset_button() {
     clearPresetView();
     $('#add_preset_modal').modal('show');
     let curImg = document.getElementById('current_image_img');
-    if (curImg) {
+    if (curImg && curImg.tagName == 'IMG') {
         let newImg = curImg.cloneNode(true);
         newImg.id = 'new_preset_image_img';
         newImg.style.maxWidth = '100%';
@@ -191,11 +191,21 @@ function updatePresetList() {
             }
         }
     }
+    localStorage.setItem('current_presets', currentPresets.map(p => p.title).join('|||'));
     getRequiredElementById('current_presets_wrapper').style.display = currentPresets.length > 0 ? 'inline-block' : 'none';
     getRequiredElementById('preset_info_slot').innerText = ` (${currentPresets.length}, overriding ${overrideCount} params)`;
     setTimeout(() => {
         setPageBarsFunc();
     }, 1);
+}
+
+function selectInitialPresetList() {
+    let presetList = localStorage.getItem('current_presets');
+    if (presetList) {
+        currentPresets = presetList.split('|||').map(p => getPresetByTitle(p)).filter(p => p);
+        updatePresetList();
+        presetBrowser.rerender();
+    }
 }
 
 function applyOnePreset(preset) {
@@ -206,7 +216,14 @@ function applyOnePreset(preset) {
             let val = preset.param_map[key];
             let rawVal = getInputVal(elem);
             if (typeof val == "string" && val.includes("{value}")) {
-                val = val.replace("{value}", elem.value);
+                let low = elem.value.toLowerCase();
+                let end = [low.indexOf('<segment:'), low.indexOf('<object:'), low.indexOf('<region:')].filter(i => i != -1).sort()[0];
+                if (end !== undefined && end != -1) {
+                    val = val.replace("{value}", elem.value.substring(0, end).trim()) + ' ' + elem.value.substring(end).trim();
+                }
+                else {
+                    val = val.replace("{value}", elem.value);
+                }
             }
             else if (key == 'loras' && rawVal) {
                 val = rawVal + "," + val;
@@ -245,7 +262,7 @@ function editPreset(preset) {
     getRequiredElementById('new_preset_name').value = preset.title;
     getRequiredElementById('preset_description').value = preset.description;
     let curImg = document.getElementById('current_image_img');
-    if (curImg) {
+    if (curImg && curImg.tagName == 'IMG') {
         let newImg = curImg.cloneNode(true);
         newImg.id = 'new_preset_image_img';
         newImg.style.maxWidth = '100%';
@@ -327,7 +344,9 @@ function describePreset(preset) {
             }
         } }
     ];
-    let description = `${preset.data.title}:\n${preset.data.description}\n\n${Object.keys(preset.data.param_map).map(key => `${key}: ${preset.data.param_map[key]}`).join('\n')}`;
+    let paramText = Object.keys(preset.data.param_map).map(key => `${key}: ${preset.data.param_map[key]}`);
+    let description = `${preset.data.title}:\n${preset.data.description}\n\n${paramText.join('\n')}`;
+    let detail_list = [escapeHtml(preset.data.title), escapeHtml(preset.data.description), escapeHtmlNoBr(paramText.join('\n').replaceAll('\n', '&emsp;'))];
     let className = currentPresets.some(p => p.title == preset.data.title) ? 'preset-block-selected preset-block' : 'preset-block';
     let name = preset.data.title;
     let index = name.lastIndexOf('/');
@@ -335,7 +354,7 @@ function describePreset(preset) {
         name = name.substring(index + 1);
     }
     let searchable = description;
-    return { name, description: escapeHtml(description), buttons, 'image': preset.data.preview_image, className, searchable };
+    return { name, description: escapeHtml(description), buttons, 'image': preset.data.preview_image, className, searchable, detail_list };
 }
 
 function selectPreset(preset) {
@@ -403,7 +422,33 @@ function importPresetsToData(text) {
     }
     if (text.startsWith('name,prompt,negative_prompt')) {
         data = {};
-        let lines = text.split('\n');
+        let lines = [];
+        let isQuoted = false;
+        let piece = '';
+        let skipNext = false;
+        for (let char of text) {
+            if (char == '\\') {
+                piece += char;
+                skipNext = true;
+                continue;
+            }
+            if (skipNext) {
+                piece += char;
+                skipNext = false;
+                continue;
+            }
+            if (char == '"') {
+                isQuoted = !isQuoted;
+            }
+            if (char == '\n' && !isQuoted) {
+                lines.push(piece);
+                piece = '';
+            }
+            else {
+                piece += char;
+            }
+        }
+        lines.push(piece);
         for (let line of lines.slice(1)) {
             if (line.trim() == '') {
                 continue;

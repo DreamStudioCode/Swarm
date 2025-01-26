@@ -13,13 +13,12 @@ using System.Net.WebSockets;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
-using System;
 using System.Net;
 using System.Diagnostics;
 using SwarmUI.Text2Image;
 using System.Net.Sockets;
 using Microsoft.VisualBasic.FileIO;
-using Hardware.Info;
+using Microsoft.AspNetCore.Cryptography.KeyDerivation;
 
 namespace SwarmUI.Utils;
 
@@ -35,12 +34,54 @@ public static class Utilities
         Program.TickIsGeneratingEvent += MemCleaner.TickIsGenerating;
         Program.TickNoGenerationsEvent += MemCleaner.TickNoGenerations;
         Program.TickEvent += SystemStatusMonitor.Tick;
+        Program.SlowTickEvent += AutoRestartCheck;
         new Thread(TickLoop).Start();
+    }
+
+    /// <summary>The <see cref="Environment.TickCount64"/> value when the server started.</summary>
+    public static long ServerStartTime = Environment.TickCount64;
+
+    /// <summary>Check if the server wants an auto-restart.</summary>
+    public static void AutoRestartCheck()
+    {
+        if (Program.ServerSettings.Maintenance.RestartAfterHours < 0.1)
+        {
+            return;
+        }
+        double hoursPassed = TimeSpan.FromMilliseconds(Environment.TickCount64 - ServerStartTime).TotalHours;
+        if (hoursPassed < Program.ServerSettings.Maintenance.RestartAfterHours)
+        {
+            return;
+        }
+        string limitHours = Program.ServerSettings.Maintenance.RestartHoursAllowed, limitDays = Program.ServerSettings.Maintenance.RestartDayAllowed;
+        DateTimeOffset now = DateTimeOffset.Now;
+        if (!string.IsNullOrWhiteSpace(limitHours))
+        {
+            string[] hours = [.. limitHours.SplitFast(',').Select(h => h.Trim())];
+            if (hours.Length > 0 && !hours.Contains($"{now.Hour}") && !hours.Contains($"0{now.Hour}"))
+            {
+                return;
+            }
+        }
+        if (!string.IsNullOrWhiteSpace(limitDays))
+        {
+            string[] days = [.. limitDays.SplitFast(',').Select(d => d.Trim().ToLowerFast())];
+            if (days.Length > 0 && !days.Contains($"{(int)now.DayOfWeek}") && !days.Contains($"{now.DayOfWeek.ToString().ToLowerFast()}"))
+            {
+                return;
+            }
+        }
+        if (Program.Backends.T2IBackendRequests.Any() || Program.Backends.QueuedRequests > 0 || Program.Backends.T2IBackends.Values.Any(b => b.CheckIsInUseAtAll))
+        {
+            return;
+        }
+        Program.Shutdown(42);
     }
 
     /// <summary>Internal tick loop thread main method.</summary>
     public static void TickLoop()
     {
+        int ticks = 0;
         while (!Program.GlobalProgramCancel.IsCancellationRequested)
         {
             try
@@ -53,7 +94,12 @@ public static class Utilities
             }
             try
             {
+                ticks++;
                 Program.TickEvent?.Invoke();
+                if (ticks % 60 == 0)
+                {
+                    Program.SlowTickEvent?.Invoke();
+                }
             }
             catch (Exception ex)
             {
@@ -61,6 +107,9 @@ public static class Utilities
             }
         }
     }
+
+    /// <summary>If true, presume that this system has an NVIDIA 40xx or newer graphics card.</summary>
+    public static bool PresumeNVidia40xx = false;
 
     /// <summary>SwarmUI's current version.</summary>
     public static readonly string Version = Assembly.GetEntryAssembly()?.GetName().Version.ToString();
@@ -110,7 +159,7 @@ public static class Utilities
         {
             name = name.Replace("//", "/");
         }
-        name = name.Trim();
+        name = name.TrimStart('/').Trim();
         string[] parts = name.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         for (int i = 0; i < parts.Length; i++)
         {
@@ -355,6 +404,16 @@ public static class Utilities
         return content;
     }
 
+    public static MultipartFormDataContent MultiPartFormContentDiscordImage(Image image, JObject jobj)
+    {
+        MultipartFormDataContent content = [];
+        ByteArrayContent imageContent = new(image.ImageData);
+        imageContent.Headers.ContentType = new MediaTypeHeaderValue(image.MimeType());
+        content.Add(imageContent, "file", $"image.{image.Extension}");
+        content.Add(JSONContent(jobj), "payload_json");
+        return content;
+    }
+
     /// <summary>Takes an escaped JSON string, and returns the plaintext unescaped form of it.</summary>
     public static string UnescapeJsonString(string input)
     {
@@ -538,48 +597,61 @@ public static class Utilities
         using Stream dlStream = await response.Content.ReadAsStreamAsync();
         Task loadData = Task.Run(async () =>
         {
-            byte[] buffer = new byte[Math.Min(length + 1024, 1024 * 1024 * 64)]; // up to 64 megabytes, just grab as big a chunk as we can at a time
-            int nextOffset = 0;
-            while (true)
+            try
             {
-                Task<int> readTask = Task.Run(async () => await dlStream.ReadAsync(buffer.AsMemory(nextOffset), combinedCancel.Token));
-                Task waiting = Task.Delay(TimeSpan.FromMinutes(2));
-                Task reading = Task.Run(async () => await readTask);
-                Task first = await Task.WhenAny(waiting, reading);
-                if (first == waiting)
+                byte[] buffer = new byte[Math.Min(length + 1024, 1024 * 1024 * 64)]; // up to 64 megabytes, just grab as big a chunk as we can at a time
+                int nextOffset = 0;
+                while (true)
                 {
-                    Logs.Warning($"Download from '{url}' has had no update for 2 minutes. Download may be failing. Will wait 3 more minutes and consider failed if it exceeds 5 total minutes.");
-                    Task waiting2 = Task.Delay(TimeSpan.FromMinutes(5));
-                    if (waiting2 == waiting)
+                    using CancellationTokenSource delayCleanup = new();
+                    Task<int> readTask = Task.Run(async () => await dlStream.ReadAsync(buffer.AsMemory(nextOffset), combinedCancel.Token));
+                    Task waiting = Task.Delay(TimeSpan.FromMinutes(2), delayCleanup.Token);
+                    Task reading = Task.Run(async () => await readTask);
+                    Task first = await Task.WhenAny(waiting, reading);
+                    if (first == waiting)
+                    {
+                        Logs.Warning($"Download from '{altUrl}' has had no update for 2 minutes. Download may be failing. Will wait 3 more minutes and consider failed if it exceeds 5 total minutes.");
+                        Task waiting2 = Task.Delay(TimeSpan.FromMinutes(3), delayCleanup.Token);
+                        Task second = await Task.WhenAny(waiting2, reading);
+                        if (second == waiting2)
+                        {
+                            chunks.Enqueue(null);
+                            throw new SwarmReadableErrorException("Download timed out, 5 minutes with no new data over stream.");
+                        }
+                        Logs.Info($"Download progressed before timeout, continuing as normal (received {new MemoryNum(await readTask)}).");
+                    }
+                    delayCleanup.Cancel();
+                    int read = await readTask;
+                    if (read <= 0)
+                    {
+                        if (nextOffset > 0)
+                        {
+                            chunks.Enqueue(buffer[..nextOffset]);
+                        }
+                        chunks.Enqueue(null);
+                        break;
+                    }
+                    if (nextOffset + read < 1024 * 1024 * 5)
+                    {
+                        nextOffset += read;
+                    }
+                    else
+                    {
+                        chunks.Enqueue(buffer[..(nextOffset + read)]);
+                        nextOffset = 0;
+                    }
+                    if (cancel is not null && cancel.IsCancellationRequested)
                     {
                         chunks.Enqueue(null);
-                        throw new SwarmReadableErrorException("Download timed out, 5 minutes with no new data over stream.");
+                        break;
                     }
                 }
-                int read = await readTask;
-                if (read <= 0)
-                {
-                    if (nextOffset > 0)
-                    {
-                        chunks.Enqueue(buffer[..nextOffset]);
-                    }
-                    chunks.Enqueue(null);
-                    break;
-                }
-                if (nextOffset + read < 1024 * 1024 * 5)
-                {
-                    nextOffset += read;
-                }
-                else
-                {
-                    chunks.Enqueue(buffer[..(nextOffset + read)]);
-                    nextOffset = 0;
-                }
-                if (cancel is not null && cancel.IsCancellationRequested)
-                {
-                    chunks.Enqueue(null);
-                    break;
-                }
+            }
+            catch (Exception ex)
+            {
+                Logs.Error($"Download from '{altUrl}' failed in loadData with internal exception: {ex.ReadableString()}");
+                chunks.Enqueue(null);
+                throw;
             }
         });
         void removeFile()
@@ -589,77 +661,94 @@ public static class Utilities
         }
         Task saveChunks = Task.Run(async () =>
         {
-            long progress = 0;
-            long startTime = Environment.TickCount64;
-            long lastUpdate = startTime;
-            SHA256 sha256 = SHA256.Create();
-            while (true)
+            try
             {
-                if (chunks.TryDequeue(out byte[] chunk))
+                long progress = 0;
+                long startTime = Environment.TickCount64;
+                long lastUpdate = startTime;
+                SHA256 sha256 = SHA256.Create();
+                while (true)
                 {
-                    if (chunk is null)
+                    if (chunks.TryDequeue(out byte[] chunk))
                     {
-                        Logs.Verbose($"Download {altUrl} completed with {progress} bytes.");
-                        progUpdates.Enqueue((progress, length, 0, true));
-                        if (length != 0 && progress != length)
+                        if (chunk is null)
                         {
-                            removeFile();
-                            if (cancel is not null && cancel.IsCancellationRequested)
+                            Logs.Verbose($"Download {altUrl} completed with {progress} bytes.");
+                            progUpdates.Enqueue((progress, length, 0, true));
+                            if (length != 0 && progress != length)
                             {
-                                throw new TaskCanceledException($"Download {altUrl} was cancelled.");
+                                removeFile();
+                                if (cancel is not null && cancel.IsCancellationRequested)
+                                {
+                                    throw new TaskCanceledException($"Download {altUrl} was cancelled.");
+                                }
+                                throw new SwarmReadableErrorException($"Download {altUrl} failed: expected {length} bytes but got {progress} bytes.");
                             }
-                            throw new SwarmReadableErrorException($"Download {altUrl} failed: expected {length} bytes but got {progress} bytes.");
+                            sha256.TransformFinalBlock([], 0, 0);
+                            byte[] hash = sha256.Hash;
+                            string hashStr = Convert.ToHexString(hash).ToLowerFast();
+                            Logs.Verbose($"Raw file hash for {altUrl} is {hashStr}");
+                            if (verifyHash is not null && hashStr != verifyHash.ToLowerFast())
+                            {
+                                removeFile();
+                                throw new SwarmReadableErrorException($"Download {altUrl} failed: expected SHA256 hash {verifyHash} but got {hashStr}.");
+                            }
+                            break;
                         }
-                        sha256.TransformFinalBlock([], 0, 0);
-                        byte[] hash = sha256.Hash;
-                        string hashStr = Convert.ToHexString(hash).ToLowerFast();
-                        Logs.Verbose($"Raw file hash for {altUrl} is {hashStr}");
-                        if (verifyHash is not null && hashStr != verifyHash.ToLowerFast())
+                        progress += chunk.Length;
+                        long timeNow = Environment.TickCount64;
+                        if (timeNow - lastUpdate > 1000 && chunks.Count < 3)
                         {
-                            removeFile();
-                            throw new SwarmReadableErrorException($"Download {altUrl} failed: expected SHA256 hash {verifyHash} but got {hashStr}.");
+                            long bytesPerSecond = progress * 1000 / (timeNow - startTime);
+                            Logs.Verbose($"Download {altUrl} now at {new MemoryNum(progress)} / {new MemoryNum(length)}... {(progress / (double)length) * 100:00.0}% ({new MemoryNum(bytesPerSecond)} per sec)");
+                            progUpdates.Enqueue((progress, length, bytesPerSecond, false));
+                            lastUpdate = timeNow;
                         }
-                        break;
+                        sha256.TransformBlock(chunk, 0, chunk.Length, null, 0);
+                        await writer.WriteAsync(chunk, combinedCancel.Token);
                     }
-                    progress += chunk.Length;
-                    long timeNow = Environment.TickCount64;
-                    if (timeNow - lastUpdate > 1000 && chunks.Count < 3)
+                    else
                     {
-                        long bytesPerSecond = progress * 1000 / (timeNow - startTime);
-                        Logs.Verbose($"Download {altUrl} now at {new MemoryNum(progress)} / {new MemoryNum(length)}... {(progress / (double)length) * 100:00.0}% ({new MemoryNum(bytesPerSecond)} per sec)");
-                        progUpdates.Enqueue((progress, length, bytesPerSecond, false));
-                        lastUpdate = timeNow;
+                        await Task.Delay(TimeSpan.FromSeconds(0.1), combinedCancel.Token);
                     }
-                    sha256.TransformBlock(chunk, 0, chunk.Length, null, 0);
-                    await writer.WriteAsync(chunk, combinedCancel.Token);
                 }
-                else
-                {
-                    await Task.Delay(TimeSpan.FromSeconds(0.1), combinedCancel.Token);
-                }
+            }
+            catch (Exception ex)
+            {
+                Logs.Error($"Download from '{altUrl}' failed in saveChunks with internal exception: {ex.ReadableString()}");
+                removeFile();
+                throw;
             }
         });
         Task sendUpdates = Task.Run(async () =>
         {
-            if (progressUpdate is null)
+            try
             {
-                return;
-            }
-            progressUpdate(0, length, 0);
-            while (true)
-            {
-                if (progUpdates.TryDequeue(out (long, long, long, bool) update))
+                if (progressUpdate is null)
                 {
-                    progressUpdate(update.Item1, update.Item2, update.Item3);
-                    if (update.Item4)
+                    return;
+                }
+                progressUpdate(0, length, 0);
+                while (true)
+                {
+                    if (progUpdates.TryDequeue(out (long, long, long, bool) update))
                     {
-                        break;
+                        progressUpdate(update.Item1, update.Item2, update.Item3);
+                        if (update.Item4)
+                        {
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(0.1), combinedCancel.Token);
                     }
                 }
-                else
-                {
-                    await Task.Delay(TimeSpan.FromSeconds(0.1), combinedCancel.Token);
-                }
+            }
+            catch (Exception ex)
+            {
+                Logs.Error($"Download from '{altUrl}' failed in sendUpdates with internal exception: {ex.ReadableString()}");
+                throw;
             }
         });
         await Task.WhenAll(loadData, saveChunks, sendUpdates);
@@ -878,8 +967,63 @@ public static class Utilities
         });
     }
 
+    /// <summary>Helper to locate a valid Ffmpeg executable.</summary>
+    public static Lazy<string> FfmegLocation = new(() =>
+    {
+        try
+        {
+            string result = QuickRunProcess("ffmpeg", ["-version"]).Result;
+            if (!string.IsNullOrWhiteSpace(result) && result.Contains("ffmpeg version"))
+            {
+                Logs.Debug($"Will use global 'ffmpeg' install");
+                return "ffmpeg";
+            }
+        }
+        catch (Exception) { }
+        string comfyCopyPath = "dlbackend/comfy/python_embeded/Lib/site-packages/imageio_ffmpeg/binaries";
+        if (Directory.Exists(comfyCopyPath))
+        {
+            string exe = Directory.EnumerateFiles(comfyCopyPath, "*.exe").Where(c => c.Contains("ffmpeg-win")).FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(exe))
+            {
+                Logs.Debug($"Will use comfy copy of ffmpeg at '{exe}'");
+                return exe;
+            }
+        }
+        Logs.Warning($"No ffmpeg available, some video-related features will not work. Install ffmpeg and ensure it is in your PATH to enable these features.");
+        return null;
+    }, true);
+
     /// <summary>MultiSemaphoreSet to prevent git calls in the same directory from overlapping.</summary>
     public static MultiSemaphoreSet<string> GitOverlapLocks = new(32);
+
+    /// <summary>Quick and simple run a process async and get the result.</summary>
+    public static async Task<string> QuickRunProcess(string process, string[] args, string workingDirectory = null)
+    {
+        ProcessStartInfo start = new(process, args)
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+        };
+        if (workingDirectory is not null)
+        {
+            start.WorkingDirectory = workingDirectory;
+        }
+        Process p = Process.Start(start);
+        Task<string> stdOutRead = p.StandardOutput.ReadToEndAsync();
+        Task<string> stdErrRead = p.StandardError.ReadToEndAsync();
+        await p.WaitForExitAsync(Program.GlobalProgramCancel);
+        string stdout = await stdOutRead;
+        string stderr = await stdErrRead;
+        string result = stdout;
+        if (!string.IsNullOrWhiteSpace(stderr))
+        {
+            result = $"{stdout}\n{stderr}";
+        }
+        result = result.Trim();
+        return result;
+    }
 
     /// <summary>Launch, run, and return the text output of, a 'git' command input.</summary>
     public static async Task<string> RunGitProcess(string args, string dir = null, bool canRetry = true)
@@ -893,6 +1037,7 @@ public static class Utilities
             UseShellExecute = false,
             WorkingDirectory = dir
         };
+        start.Environment["GIT_TERMINAL_PROMPT"] = "0";
         SemaphoreSlim semaphore = GitOverlapLocks.GetLock(dir);
         await semaphore.WaitAsync();
         try
@@ -981,14 +1126,23 @@ public static class Utilities
         return $"{ex}";
     }
 
-    /// <summary>Returns the total virtual memory for this <see cref="MemoryStatus"/> instance, equivalent to <see cref="MemoryStatus.TotalVirtual"/>, but with a correction for the fact that this appears to scale gigabytes up to terabytes in some cases.</summary>
-    public static ulong FixedTotalVirtual(this MemoryStatus memStatus)
+    /// <summary>Hashes a password for storage.</summary>
+    public static string HashPassword(string username, string password)
     {
-        ulong totalVirtual = memStatus.TotalVirtual;
-        if (totalVirtual > 2ul * 1024 * 1024 * 1024 * 1024)
-        {
-            totalVirtual /= 1024;
-        }
-        return totalVirtual;
+        byte[] salt = RandomNumberGenerator.GetBytes(128 / 8);
+        string borkedPw = $"*SwarmHashedPw:{username}:{password}*";
+        byte[] hashed = KeyDerivation.Pbkdf2(password: borkedPw, salt: salt, prf: KeyDerivationPrf.HMACSHA256, iterationCount: 100_000, numBytesRequested: 256 / 8);
+        return Convert.ToBase64String(salt) + ":" + Convert.ToBase64String(hashed);
+    }
+
+    /// <summary>Returns whether the given password matches the stored hash.</summary>
+    public static bool CompareHashedPassword(string username, string password, string hashed)
+    {
+        string saltRaw = hashed.BeforeAndAfter(':', out string hashRaw);
+        byte[] salt = Convert.FromBase64String(saltRaw);
+        byte[] hash = Convert.FromBase64String(hashRaw);
+        string borkedPw = $"*SwarmHashedPw:{username}:{password}*";
+        byte[] hashedAttempt = KeyDerivation.Pbkdf2(password: borkedPw, salt: salt, prf: KeyDerivationPrf.HMACSHA256, iterationCount: 100_000, numBytesRequested: 256 / 8);
+        return hashedAttempt.SequenceEqual(hash);
     }
 }

@@ -677,11 +677,11 @@ public class BackendHandler
             }
             try
             {
-                any = (await backend.Backend.LoadModel(model)) || any;
+                any = (await backend.Backend.LoadModel(model, null)) || any;
             }
             catch (Exception ex)
             {
-                Logs.Error($"Error loading model '{model.RawFilePath}' on backend {backend.ID} ({backend.Backend.HandlerTypeData.Name}): {ex.ReadableString()}");
+                Logs.Error($"Error loading model '{model.RawFilePath}' (arch={model.Metadata?.ModelClassType}) on backend {backend.ID} ({backend.Backend.HandlerTypeData.Name}): {ex.ReadableString()}");
             }
             backend.ReserveModelLoad = false;
         }
@@ -1202,7 +1202,7 @@ public class BackendHandler
                             }
                             else
                             {
-                                availableBackend.Backend.LoadModel(highestPressure.Model).Wait(cancel);
+                                availableBackend.Backend.LoadModel(highestPressure.Model, highestPressure.Requests.FirstOrDefault()?.UserInput).Wait(cancel);
                             }
                             Logs.Debug($"[BackendHandler] backend #{availableBackend.ID} loaded model, returning to pool");
                         }

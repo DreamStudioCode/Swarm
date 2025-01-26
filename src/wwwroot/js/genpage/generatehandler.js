@@ -73,6 +73,38 @@ class GenerateHandler {
     getBatchId() {
         return ++this.batchesEver;
     }
+
+    setImageFor(imgHolder, src) {
+        if (imgHolder.div.dataset.is_placeholder) {
+            delete imgHolder.div.dataset.is_placeholder;
+            imgHolder.div.classList.remove('image-block-placeholder');
+        }
+        let imgElem = imgHolder.div.querySelector('img');
+        let vid = imgHolder.div.querySelector('video');
+        if (vid) {
+            vid.remove();
+        }
+        if (isVideoExt(src)) {
+            if (imgElem) {
+                imgElem.remove();
+            }
+            vid = document.createElement('video');
+            vid.loop = true;
+            vid.autoplay = true;
+            vid.muted = true;
+            vid.width = 16 * 10;
+            let sourceObj = document.createElement('source');
+            sourceObj.src = src;
+            sourceObj.type = `video/${src.substring(src.lastIndexOf('.') + 1)}`;
+            vid.appendChild(sourceObj);
+            imgHolder.div.appendChild(vid);
+        }
+        else {
+            imgElem.src = src;
+        }
+        imgHolder.image = src;
+        imgHolder.div.dataset.src = src;
+    }
     
     doGenerate(input_overrides = {}, input_preoverrides = {}) {
         if (session_id == null) {
@@ -137,10 +169,12 @@ class GenerateHandler {
                             }
                         }
                         let imgElem = imgHolder.div.querySelector('img');
-                        imgElem.src = data.image;
+                        this.setImageFor(imgHolder, data.image);
+                        let spinner = imgHolder.div.querySelector('.loading-spinner-parent');
+                        if (spinner) {
+                            spinner.remove();
+                        }
                         delete imgElem.dataset.previewGrow;
-                        imgHolder.image = data.image;
-                        imgHolder.div.dataset.src = data.image;
                         imgHolder.div.dataset.metadata = data.metadata;
                         let progress_bars = imgHolder.div.querySelector('.image-preview-progress-wrapper');
                         if (progress_bars) {
@@ -161,7 +195,7 @@ class GenerateHandler {
                     let thisBatchId = `${batch_id}_${data.gen_progress.batch_index}`;
                     if (!(data.gen_progress.batch_index in images)) {
                         let metadataRaw = data.gen_progress.metadata ?? '{}';
-                        let batch_div = this.gotImagePreview(data.gen_progress.preview ?? 'imgs/model_placeholder.jpg', metadataRaw, thisBatchId);
+                        let batch_div = this.gotImagePreview(data.gen_progress.preview ?? `DOPLACEHOLDER:${actualInput.model || ''}`, metadataRaw, thisBatchId);
                         if (batch_div) {
                             images[data.gen_progress.batch_index] = {div: batch_div, image: null, metadata: metadataRaw, overall_percent: 0, current_percent: 0};
                             let progress_bars = createDiv(null, 'image-preview-progress-wrapper', this.progressBarHtml);
@@ -184,9 +218,7 @@ class GenerateHandler {
                                 if (curImgElem && curImgElem.dataset.batch_id == thisBatchId) {
                                     curImgElem.src = data.gen_progress.preview;
                                 }
-                                imgHolder.div.dataset.src = data.gen_progress.preview;
-                                imgHolder.div.querySelector('img').src = data.gen_progress.preview;
-                                imgHolder.image = data.gen_progress.preview;
+                                this.setImageFor(imgHolder, data.gen_progress.preview);
                             }
                         }
                     }
@@ -215,6 +247,20 @@ class GenerateHandler {
             };
             let handleError = e => {
                 console.log(`Error in GenerateText2ImageWS: ${e}, ${this.interrupted}, ${batch_id}`);
+                setTimeout(() => {
+                    for (let imgHolder of Object.values(images)) {
+                        let spinner = imgHolder.div.querySelector('.loading-spinner-parent');
+                        if (spinner) {
+                            spinner.remove();
+                            let failIcon = createDiv(null, 'image-block-failed');
+                            imgHolder.div.appendChild(failIcon);
+                        }
+                        let progress_bars = imgHolder.div.querySelector('.image-preview-progress-wrapper');
+                        if (progress_bars) {
+                            progress_bars.remove();
+                        }
+                    }
+                }, 1);
                 if (this.interrupted >= batch_id) {
                     return;
                 }

@@ -10,17 +10,24 @@ Second, feel free to open [issues here on GitHub](https://github.com/mcmonkeypro
 
 If you see an error message mentioning a failed connection to `https://api.nuget.org/v3/index.json`, such as `Unable to load the service index for source https://api.nuget.org/v3/index.json`
 
-That is the build dependency service, connections to it are required for the first launch. To fix this:
+That is the build dependency service, connections to it are required for the first launch and when updating. To fix this:
 - **A:** Ensure your network is enabled, not blocked by firewalls, VPNs, whatever. If you have anything like that running, disable it and try again. (Usually these aren't a problem but sometimes they can do weird things to your network)
 - **B:** Sometimes temporary internet outages are at fault. So just waiting a few hours or until tomorrow and trying again might be all you need.
 - **C:** It might also help to restart your computer.
 - **D:** You can also try emptying your NuGet cache, see below
 
-If you see errors like: `The type or namespace name 'Hardware' could not be found (are you missing a using directive or an assembly reference?) [src/SwarmUI.csproj]`, noting the mention of `Hardware` specifically (this is a NuGet package), that might mean your NuGet cache is corrupt. This is rare, but can happen. In that case, you must reset your NuGet cache.
+If you see errors like:
+- `The type or namespace name 'Hardware' could not be found (are you missing a using directive or an assembly reference?) [src/SwarmUI.csproj]`, noting the mention of `Hardware` specifically (this is a NuGet package)
+- `The type or namespace name 'Image<>' does not exist in the namespace 'SixLabors.ImageSharp'`
+
+that might mean your NuGet cache is corrupt. This is rare, but can happen. In that case, you must reset your NuGet cache.
 
 #### Reset NuGet Cache
 
-If on Windows, open File Explorer to `%appdata%/NuGet` and delete the entire folder, and then also `%localappdata%/NuGet` and delete that as well.
+If on Windows:
+- open File Explorer to `%appdata%/NuGet` and delete the entire folder
+- open `%localappdata%/NuGet` and delete that all
+- open `%userprofile%/.nuget` and delete the `packages` folder
 
 If on Linux/Mac, `rm -rf ~/.nuget`
 
@@ -50,7 +57,7 @@ Step 2 is copy/paste the error message and search [GitHub](https://github.com/mc
 
 If both of those don't get you an instant easy answer, time for a bit more effort: Step 3 is go to `Server` -> `Logs` -> probably set `ViewType` to `Debug`, and look over the error details. Sometimes the full details of an error can give you the info you need to solve it yourself.
 
-If you can't solve it yourself from there, Step 4 is either post on [GitHub](https://github.com/mcmonkeyprojects/SwarmUI/issues) or [Discord](https://discord.gg/q2y38cqjNw) (in `#help-forum`). Make sure you copy the full Debug log and include it (not just the bottom part, copy the whole log! The info at the top of the log when Swarm is booting up is often important), also include details about what you're trying (what paramaters are you using? What are you clicking on? Does a problem happen right away or only halfway through generating an image, or...?). It also helps to add a screenshot of your UI when the error happens.
+If you can't solve it yourself from there, Step 4 is either post on [GitHub](https://github.com/mcmonkeyprojects/SwarmUI/issues) or [Discord](https://discord.gg/q2y38cqjNw) (in `#help-forum`). When you're making a post, click the `Pastebin` button on the `Logs` tab, to automatically generate a full clean pastebin of the Logs, and include the link it gives you in your post (It's important to do it this way to ensure the full log is included, as the info at the top of the log when Swarm is booting up is often important, and that button goes to a specific pastebin server that provides color highlighting and all to make it easy to read for those looking at it to help you with it), also include details about what you're trying (what parameters are you using? What are you clicking on? Does a problem happen right away or only halfway through generating an image, or...?). It also helps to add a screenshot of your UI when the error happens.
 
 ## I Need To Install Something With Pip
 
