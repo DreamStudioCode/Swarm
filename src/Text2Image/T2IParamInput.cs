@@ -62,6 +62,16 @@ public class T2IParamInput
                     }
                     input.Set(T2IParamTypes.LoraWeights, weights);
                 }
+                if (input.TryGet(T2IParamTypes.LoraTencWeights, out List<string> tencWeights) && tencWeights.Count != weights.Count)
+                {
+                    Logs.Warning($"Input has {loras.Count} loras, but {tencWeights.Count} textenc weights - the two lists must match to work properly. Applying an automatic fix.");
+                    tencWeights = [.. tencWeights.Take(weights.Count)];
+                    while (tencWeights.Count < weights.Count)
+                    {
+                        tencWeights.Add(weights[tencWeights.Count]);
+                    }
+                    input.Set(T2IParamTypes.LoraTencWeights, tencWeights);
+                }
             }
         },
         input =>
@@ -134,6 +144,12 @@ public class T2IParamInput
             Depth--;
             return result;
         }
+    }
+
+    /// <summary>Escapes text to for handling but the special text handler python script.</summary>
+    public static string EscapeForTextHandler(string input)
+    {
+        return input.Replace("\\", "\\\\").Replace(":", "\\:").Replace("|", "\\|").Replace("[", "\\[").Replace("]", "\\]");
     }
 
     /// <summary>Splits the text within a tag input, in a way that avoids splitting inside subtags, and allows for double-pipe, pipe, or comma separation.</summary>
@@ -315,7 +331,7 @@ public class T2IParamInput
             {
                 rawVals[i] = context.Parse(rawVals[i]);
             }
-            return $"[{rawVals.JoinString("|")}]";
+            return $"[{rawVals.Select(EscapeForTextHandler).JoinString("|")}]";
         };
         PromptTagProcessors["alt"] = PromptTagProcessors["alternate"];
         PromptTagLengthEstimators["alternate"] = PromptTagLengthEstimators["random"];
@@ -338,7 +354,7 @@ public class T2IParamInput
             {
                 rawVals[i] = context.Parse(rawVals[i]);
             }
-            return $"[{rawVals.JoinString(":")}:{stepIndex}]";
+            return $"[{rawVals.Select(EscapeForTextHandler).JoinString(":")}:{stepIndex}]";
         };
         PromptTagLengthEstimators["fromto"] = PromptTagLengthEstimators["random"];
         PromptTagProcessors["wildcard"] = (data, context) =>
@@ -514,9 +530,22 @@ public class T2IParamInput
             string lora = data.ToLowerFast().Replace('\\', '/');
             int colonIndex = lora.IndexOf(':');
             double strength = 1;
-            if (colonIndex != -1 && double.TryParse(lora[(colonIndex + 1)..], out strength))
+            double tencStrength = double.NaN;
+            if (colonIndex != -1)
             {
+                string after = lora[(colonIndex + 1)..];
                 lora = lora[..colonIndex];
+                colonIndex = after.IndexOf(':');
+                if (colonIndex != -1)
+                {
+                    strength = double.Parse(after[..colonIndex]);
+                    after = after[(colonIndex + 1)..];
+                    tencStrength = double.Parse(after);
+                }
+                else
+                {
+                    strength = double.Parse(after);
+                }
             }
             context.Loras ??= [.. Program.T2IModelSets["LoRA"].ListModelNamesFor(context.Input.SourceSession)];
             string matched = T2IParamTypes.GetBestModelInList(lora, context.Loras);
@@ -532,6 +561,7 @@ public class T2IParamInput
             }
             List<string> loraList = context.Input.Get(T2IParamTypes.Loras) ?? [];
             List<string> weights = context.Input.Get(T2IParamTypes.LoraWeights) ?? [];
+            List<string> tencWeights = context.Input.Get(T2IParamTypes.LoraTencWeights) ?? [];
             List<string> confinements = context.Input.Get(T2IParamTypes.LoraSectionConfinement);
             if (confinements is not null && confinements.Count > loraList.Count)
             {
@@ -542,6 +572,15 @@ public class T2IParamInput
             weights.Add(strength.ToString());
             context.Input.Set(T2IParamTypes.Loras, loraList);
             context.Input.Set(T2IParamTypes.LoraWeights, weights);
+            if (!double.IsNaN(tencStrength) || tencWeights.Count > 0)
+            {
+                while (tencWeights.Count < weights.Count - 1)
+                {
+                    tencWeights.Add(weights[tencWeights.Count]);
+                }
+                tencWeights.Add((double.IsNaN(tencStrength) ? strength : tencStrength).ToString());
+                context.Input.Set(T2IParamTypes.LoraTencWeights, tencWeights);
+            }
             string trigger = loraModel?.Metadata?.TriggerPhrase;
             if (!string.IsNullOrWhiteSpace(trigger))
             {
@@ -637,6 +676,11 @@ public class T2IParamInput
             return phrases.JoinString(", ") + "\0triggerextra";
         };
         PromptTagLengthEstimators["trigger"] = estimateEmpty;
+        PromptTagBasicProcessors["comment"] = (data, context) =>
+        {
+            return "";
+        };
+        PromptTagLengthEstimators["comment"] = estimateEmpty;
     }
 
     /// <summary>The raw values in this input. Do not use this directly, instead prefer:
@@ -659,15 +703,40 @@ public class T2IParamInput
     /// <summary>List of reasons this input did not match backend requests, if any.</summary>
     public HashSet<string> RefusalReasons = [];
 
+    /// <summary>Exact system time that the request was made at.</summary>
+    public DateTimeOffset RequestTime = DateTimeOffset.Now;
+
     /// <summary>Original seed the input had, before randomization handling.</summary>
     public long? RawOriginalSeed;
+
+    /// <summary>Dense local time with incrementer.</summary>
+    public int RequestRefTime;
+
+    /// <summary>Arbitrary incrementer for sub-minute unique IDs.</summary>
+    public static int UIDIncrementer = 0;
+
+    /// <summary>Last minute number that <see cref="UIDIncrementer"/> was reset at.</summary>
+    public static int UIDLast = -1;
+
+    /// <summary>Locker for editing <see cref="UIDIncrementer"/>.</summary>
+    public static LockObject UIDLock = new();
 
     /// <summary>Construct a new parameter input handler for a session.</summary>
     public T2IParamInput(Session session)
     {
         SourceSession = session;
         InterruptToken = session is null ? new CancellationTokenSource().Token : session.SessInterrupt.Token;
-        ExtraMeta["date"] = DateTime.Now.ToString("yyyy-MM-dd");
+        ExtraMeta["date"] = $"{RequestTime:yyyy-MM-dd}";
+        lock (UIDLock)
+        {
+            if (RequestTime.Minute != UIDLast || UIDIncrementer > 998)
+            {
+                UIDIncrementer = 0;
+                UIDLast = RequestTime.Minute;
+            }
+            UIDIncrementer++;
+            RequestRefTime = UIDIncrementer;
+        }
     }
 
     /// <summary>Gets the desired image width.</summary>

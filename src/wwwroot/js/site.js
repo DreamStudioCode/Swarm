@@ -269,9 +269,13 @@ function textPromptDoCount(elem, countElem = null, prefix = '') {
     }
 }
 
-function textPromptInputHandle(elem) {
+function textBoxSizeAdjust(elem) {
     elem.style.height = '0px';
     elem.style.height = `max(3.4rem, min(15rem, ${elem.scrollHeight + 5}px))`;
+}
+
+function textPromptInputHandle(elem) {
+    textBoxSizeAdjust(elem);
     textPromptDoCount(elem);
 }
 
@@ -875,4 +879,13 @@ function specialDebug(message) {
     let diff = now - specialDebugTime;
     specialDebugTime = now;
     console.log(`${message} (${diff}ms since last debug)`);
+}
+
+function playCompletionAudio() {
+    let audioFile = getUserSetting('audio.completionsound');
+    if (audioFile) {
+        let audio = new Audio(`/Audio/${audioFile}`);
+        audio.volume = parseFloat(getUserSetting('audio.volume', '0.5'));
+        audio.play();
+    }
 }

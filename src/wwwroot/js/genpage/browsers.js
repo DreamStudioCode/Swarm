@@ -1,4 +1,32 @@
 
+/** Helper utilities for browsers. */
+class BrowserUtil {
+    /**
+     * Make any visible images within a container actually load now.
+     */
+    makeVisible(elem) {
+        for (let subElem of elem.querySelectorAll('.lazyload')) {
+            let top = subElem.getBoundingClientRect().top;
+            if (top >= window.innerHeight + 512 || top == 0) { // Note top=0 means not visible
+                continue;
+            }
+            subElem.classList.remove('lazyload');
+            if (subElem.tagName == 'IMG') {
+                if (!subElem.dataset.src) {
+                    continue;
+                }
+                subElem.src = subElem.dataset.src;
+                delete subElem.dataset.src;
+            }
+            else if (subElem.classList.contains('browser-section-loader')) {
+                subElem.click();
+                subElem.remove();
+            }
+        }
+    }
+}
+
+let browserUtil = new BrowserUtil();
 
 /**
  * Hack to attempt to prevent callback recursion.
@@ -27,6 +55,7 @@ class BrowserTreePart {
         this.isOpen = isOpen;
         this.fileData = fileData;
         this.fullPath = fullPath.startsWith('/') ? fullPath.substring(1) : fullPath;
+        this.clickme = null;
     }
 }
 
@@ -107,7 +136,7 @@ class GenPageBrowserClass {
         let tree = this.tree;
         if (!tree.isOpen) {
             tree.clickme(() => {
-                this.clickPath(path, tree);
+                this.clickPath(path);
             });
             return;
         }
@@ -463,32 +492,8 @@ class GenPageBrowserClass {
             }
         }
         setTimeout(() => {
-            this.makeVisible(container);
+            browserUtil.makeVisible(container);
         }, 100);
-    }
-
-    /**
-     * Make any visible images within a container actually load now.
-     */
-    makeVisible(elem) {
-        for (let subElem of elem.querySelectorAll('.lazyload')) {
-            let top = subElem.getBoundingClientRect().top;
-            if (top >= window.innerHeight + 512 || top == 0) { // Note top=0 means not visible
-                continue;
-            }
-            subElem.classList.remove('lazyload');
-            if (subElem.tagName == 'IMG') {
-                if (!subElem.dataset.src) {
-                    continue;
-                }
-                subElem.src = subElem.dataset.src;
-                delete subElem.dataset.src;
-            }
-            else if (subElem.classList.contains('browser-section-loader')) {
-                subElem.click();
-                subElem.remove();
-            }
-        }
     }
 
     /**
@@ -620,13 +625,13 @@ class GenPageBrowserClass {
             this.fullContentDiv.appendChild(this.headerBar);
             this.contentDiv = createDiv(`${this.id}-content`, 'browser-content-container');
             this.contentDiv.addEventListener('scroll', () => {
-                this.makeVisible(this.contentDiv);
+                browserUtil.makeVisible(this.contentDiv);
             });
             this.fullContentDiv.appendChild(this.contentDiv);
             this.barSpot = 0;
             let setBar = () => {
                 this.folderTreeDiv.style.width = `${this.barSpot}px`;
-                this.fullContentDiv.style.width = `calc(100vw - ${this.barSpot}px - 0.6rem)`;
+                this.fullContentDiv.style.width = `calc(100% - ${this.barSpot}px - 0.6rem)`;
                 if (this.sizeChangedEvent) {
                     this.sizeChangedEvent();
                 }
@@ -655,7 +660,7 @@ class GenPageBrowserClass {
             };
             document.addEventListener('mousemove', this.lastListen);
             document.addEventListener('mouseup', this.lastListenUp);
-            layoutResets.push(() => {
+            genTabLayout.layoutResets.push(() => {
                 localStorage.removeItem(`barspot_browser_${this.id}`);
                 this.lastReset();
             });
@@ -674,7 +679,7 @@ class GenPageBrowserClass {
         this.buildTreeElements(this.folderTreeDiv, '', this.tree);
         this.buildContentList(this.contentDiv, files);
         this.folderTreeDiv.scrollTop = folderScroll;
-        this.makeVisible(this.contentDiv);
+        browserUtil.makeVisible(this.contentDiv);
         if (scrollOffset) {
             this.contentDiv.scrollTop = scrollOffset;
         }

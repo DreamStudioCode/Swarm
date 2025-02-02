@@ -46,9 +46,7 @@
     transition: background .2s;
 }
 
-.nav-tabs,
-#t2i_top_bar,
-#t2i_bottom_bar {
+.nav-tabs, #currentimagecontent, #inputsidebartab_content, #rightsidebarcontent, #t2i_bottom_bar {
     background-color: var(--background-panel);
     background-image: url(imgs/noise.png);
 }
@@ -167,7 +165,6 @@
 }
 
 #t2i-top-2nd-split-bar {
-    margin-top: -8px;
     width: var(--panel-gap);
     position: relative;
     z-index: 1;

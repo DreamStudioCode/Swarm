@@ -201,6 +201,9 @@ public class Settings : AutoConfiguration
 
         [ConfigComment("If true, special network forwarding logic will apply for developer modes.\nNotably, ComfyUI Frontend NPM Developer Mode requires significant special forwarding as it misroutes itself.\nDefaults to false.")]
         public bool EnableSpecialDevForwarding = false;
+
+        [ConfigComment("How long should browsers be told they can store cached copies of output images.\nDefaults to 30 seconds.\nDo not set less than 5-ish, temp-caching is important. Setting to a low value (like 5) can help if you often delete images and regenerate with the same filename.\nSome files (eg html/js for grids) in output always have a very low cache duration.")]
+        public int OutputCacheSeconds = 30;
     }
 
     /// <summary>Settings related to file paths.</summary>
@@ -436,6 +439,26 @@ public class Settings : AutoConfiguration
 
         [ConfigComment("Comma-separated list of parameters to exclude from 'Reuse Parameters'.\nFor example, set 'model' to not copy the model, or 'model,refinermodel,videomodel' to really never copy any models.")]
         public string ReuseParamExcludeList = "wildcardseed";
+
+        /// <summary>Settings related to audio.</summary>
+        public class AudioData : AutoConfiguration
+        {
+
+            public class AudioImpl : SettingsOptionsAttribute.AbstractImpl
+            {
+                public override string[] GetOptions => ["", .. UserSoundHelper.Filenames];
+            }
+
+            [ConfigComment($"Optional audio file to play when a generation is completed.\nSupported file formats: .wav, .wave, .mp3, .aac, .ogg, .flac\nSee <a target=\"_blank\" href=\"{Utilities.RepoDocsRoot}Features/UISounds.md\">docs/Features/UISounds</a> for info.")]
+            [SettingsOptions(Impl = typeof(AudioImpl))]
+            public string CompletionSound = "";
+
+            [ConfigComment($"If any sound effects are enabled, this is the volume they will play at.\n0 means silent, 1 means max volume, 0.5 means half volume.")]
+            public double Volume = 0.5;
+        }
+
+        [ConfigComment("Settings related to audio.")]
+        public AudioData Audio = new();
 
         [ConfigComment("Settings related to autocompletions.")]
         public AutoCompleteData AutoComplete = new();

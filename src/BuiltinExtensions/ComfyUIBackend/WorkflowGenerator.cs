@@ -288,6 +288,7 @@ public class WorkflowGenerator
             return (model, clip);
         }
         List<string> weights = UserInput.Get(T2IParamTypes.LoraWeights);
+        List<string> tencWeights = UserInput.Get(T2IParamTypes.LoraTencWeights);
         List<string> confinements = UserInput.Get(T2IParamTypes.LoraSectionConfinement);
         if (confinement > 0 && (confinements is null || confinements.Count == 0))
         {
@@ -316,14 +317,15 @@ public class WorkflowGenerator
                     continue;
                 }
             }
-            float weight = weights == null ? 1 : float.Parse(weights[i]);
+            float weight = weights is null || i >= weights.Count ? 1 : float.Parse(weights[i]);
+            float tencWeight = tencWeights is null || i >= tencWeights.Count ? weight : float.Parse(tencWeights[i]);
             string newId = CreateNode("LoraLoader", new JObject()
             {
                 ["model"] = model,
                 ["clip"] = clip,
                 ["lora_name"] = lora.ToString(ModelFolderFormat),
                 ["strength_model"] = weight,
-                ["strength_clip"] = weight
+                ["strength_clip"] = tencWeight
             }, GetStableDynamicID(500, i));
             model = [newId, 0];
             clip = [newId, 1];
@@ -1127,6 +1129,16 @@ public class WorkflowGenerator
                 img = [MaskShrunkInfo.ScaledImage, 0];
                 mask = [MaskShrunkInfo.CroppedMask, 0];
             }
+            if (mask is null)
+            {
+                string maskNode = CreateNode("SolidMask", new JObject()
+                {
+                    ["value"] = 1,
+                    ["width"] = UserInput.GetImageWidth(),
+                    ["height"] = UserInput.GetImageHeight()
+                });
+                mask = [maskNode, 0];
+            }
             string inpaintNode = CreateNode("InpaintModelConditioning", new JObject()
             {
                 ["positive"] = pos,
@@ -1134,7 +1146,7 @@ public class WorkflowGenerator
                 ["vae"] = FinalVae,
                 ["pixels"] = img,
                 ["mask"] = mask,
-                ["noise_mask"] = true
+                ["noise_mask"] = false
             });
             pos = [inpaintNode, 0];
             neg = [inpaintNode, 1];

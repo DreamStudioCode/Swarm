@@ -15,8 +15,8 @@ function getPresetByTitle(title) {
     return allPresets.find(p => p.title.toLowerCase() == title);
 }
 
-function getPresetTypes() {
-    return gen_param_types.filter(type => !type.toggleable || getRequiredElementById(`input_${type.id}_toggle`).checked);
+function getPresetTypes(prefix) {
+    return gen_param_types.filter(type => !type.toggleable || getRequiredElementById(`${prefix}_${type.id}_toggle`).checked);
 }
 
 function clearPresetView() {
@@ -30,7 +30,7 @@ function clearPresetView() {
     let enableImage = getRequiredElementById('new_preset_enable_image');
     enableImage.checked = false;
     enableImage.disabled = true;
-    for (let type of getPresetTypes()) {
+    for (let type of getPresetTypes(`input`)) {
         try {
             let elem = getRequiredElementById('input_' + type.id);
             let presetElem = getRequiredElementById('preset_input_' + type.id);
@@ -89,11 +89,11 @@ function save_new_preset() {
     }
     let description = getRequiredElementById('preset_description').value;
     let data = {};
-    for (let type of getPresetTypes()) {
-        if (!getRequiredElementById(`preset_input_${type.id}_toggle`).checked) {
+    for (let type of getPresetTypes(`preset_input`)) {
+        let elem = getRequiredElementById(`preset_input_${type.id}`);
+        if (!elem || !getRequiredElementById(`preset_input_${type.id}_toggle`).checked) {
             continue;
         }
-        let elem = getRequiredElementById(`preset_input_${type.id}`);
         if (type.type == "boolean") {
             data[type.id] = elem.checked ? "true" : "false";
         }
@@ -195,7 +195,7 @@ function updatePresetList() {
     getRequiredElementById('current_presets_wrapper').style.display = currentPresets.length > 0 ? 'inline-block' : 'none';
     getRequiredElementById('preset_info_slot').innerText = ` (${currentPresets.length}, overriding ${overrideCount} params)`;
     setTimeout(() => {
-        setPageBarsFunc();
+        genTabLayout.reapplyPositions();
     }, 1);
 }
 
@@ -336,6 +336,7 @@ function describePreset(preset) {
         { label: 'Direct Apply', onclick: () => applyOnePreset(preset.data) },
         { label: 'Edit Preset', onclick: () => editPreset(preset.data) },
         { label: 'Duplicate Preset', onclick: () => duplicatePreset(preset.data) },
+        { label: 'Export Preset', onclick: () => exportOnePresetButton(preset.data) },
         { label: 'Delete Preset', onclick: () => {
             if (confirm("Are you sure want to delete that preset?")) {
                 genericRequest('DeletePreset', { preset: preset.data.title }, data => {
@@ -627,18 +628,28 @@ function importPresetsActivate() {
     }
 }
 
-function exportPresetsButton() {
+exportingPresets = [];
+
+function exportOnePresetButton(preset) {
+    exportingPresets = [preset];
+    exportPresetsButton(true);
+}
+
+function exportPresetsButton(reuse = false) {
+    if (!reuse) {
+        exportingPresets = allPresets;
+    }
     let text = '';
     if (getRequiredElementById('export_preset_format_json').checked) {
         let data = {};
-        for (let preset of allPresets) {
+        for (let preset of exportingPresets) {
             data[preset.title] = preset;
         }
         text = JSON.stringify(data, null, 4);
     }
     else { // CSV
         text = 'name,prompt,negative_prompt,\n';
-        for (let preset of allPresets) {
+        for (let preset of exportingPresets) {
             if (preset.param_map.prompt || preset.param_map.negativeprompt) {
                 text += `"${preset.title.replace('"', '""')}","${(preset.param_map.prompt || '').replaceAll('"', '""')}","${(preset.param_map.negativeprompt || '').replaceAll('"', '""')}",\n`;
             }
