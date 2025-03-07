@@ -108,8 +108,8 @@ public static class Utilities
         }
     }
 
-    /// <summary>If true, presume that this system has an NVIDIA 40xx or newer graphics card.</summary>
-    public static bool PresumeNVidia40xx = false;
+    /// <summary>If true, presume that this system has a certain generation of NVIDIA or newer graphics card.</summary>
+    public static bool PresumeNVidia30xx = false, PresumeNVidia40xx = false, PresumeNVidia50xx = false;
 
     /// <summary>SwarmUI's current version.</summary>
     public static readonly string Version = Assembly.GetEntryAssembly()?.GetName().Version.ToString();
@@ -487,6 +487,24 @@ public static class Utilities
         return CommonContentTypes.GetValueOrDefault(extension, "application/octet-stream");
     }
 
+    public static AsciiMatcher GeneralValidSymbolsMatcher = new(c => (c >= 32 && c <= 126) || c == 9 || c == 10 || c == 13);
+
+    /// <summary>Clean some potentially-trash text for output into logs. Strips invalid non-ascii characters and cuts to max length.
+    /// Useful for situations such as logging parser errors, to avoid corrupt data trashing the logs.</summary>
+    public static string CleanTrashTextForDebug(string text)
+    {
+        string clean = GeneralValidSymbolsMatcher.TrimToMatches(text);
+        if (clean != text)
+        {
+            clean = $"(Invalid Characters Stripped) {clean}";
+        }
+        if (clean.Length > 256)
+        {
+            clean = $"{clean[..256]}...";
+        }
+        return clean;
+    }
+
     public static JObject ParseToJson(this string input)
     {
         try
@@ -495,7 +513,7 @@ public static class Utilities
         }
         catch (JsonReaderException ex)
         {
-            throw new JsonReaderException($"Failed to parse JSON `{input.Replace("\n", "  ")}`: {ex.Message}");
+            throw new JsonReaderException($"Failed to parse JSON `{CleanTrashTextForDebug(input.Replace("\n", "  "))}`: {ex.Message}");
         }
     }
 
@@ -815,12 +833,12 @@ public static class Utilities
     }
 
     /// <summary>Modifies a width/height resolution to get the nearest valid resolution for the given megapixel target scale, and rounds to a factor of x64.</summary>
-    public static (int, int) ResToModelFit(int width, int height, int mpTarget)
+    public static (int, int) ResToModelFit(int width, int height, int mpTarget, int precision = 64)
     {
         int mp = width * height;
         double scale = Math.Sqrt(mpTarget / (double)mp);
-        int newWid = (int)RoundToPrecision(width * scale, 64);
-        int newHei = (int)RoundToPrecision(height * scale, 64);
+        int newWid = (int)RoundToPrecision(width * scale, precision);
+        int newHei = (int)RoundToPrecision(height * scale, precision);
         return (newWid, newHei);
     }
 
@@ -1134,7 +1152,8 @@ public static class Utilities
     {
         byte[] salt = RandomNumberGenerator.GetBytes(128 / 8);
         string borkedPw = $"*SwarmHashedPw:{username}:{password}*";
-        byte[] hashed = KeyDerivation.Pbkdf2(password: borkedPw, salt: salt, prf: KeyDerivationPrf.HMACSHA256, iterationCount: 100_000, numBytesRequested: 256 / 8);
+        // 10k is low enough that the swarm server won't thrash its CPU if it has to hash passwords often (eg somebody spamming bad auth requests), but high enough to at least be a bit of a barrier to somebody that yoinks the raw hashes
+        byte[] hashed = KeyDerivation.Pbkdf2(password: borkedPw, salt: salt, prf: KeyDerivationPrf.HMACSHA256, iterationCount: 10_000, numBytesRequested: 256 / 8);
         return Convert.ToBase64String(salt) + ":" + Convert.ToBase64String(hashed);
     }
 
@@ -1145,7 +1164,7 @@ public static class Utilities
         byte[] salt = Convert.FromBase64String(saltRaw);
         byte[] hash = Convert.FromBase64String(hashRaw);
         string borkedPw = $"*SwarmHashedPw:{username}:{password}*";
-        byte[] hashedAttempt = KeyDerivation.Pbkdf2(password: borkedPw, salt: salt, prf: KeyDerivationPrf.HMACSHA256, iterationCount: 100_000, numBytesRequested: 256 / 8);
+        byte[] hashedAttempt = KeyDerivation.Pbkdf2(password: borkedPw, salt: salt, prf: KeyDerivationPrf.HMACSHA256, iterationCount: 10_000, numBytesRequested: 256 / 8);
         return hashedAttempt.SequenceEqual(hash);
     }
 }

@@ -252,6 +252,7 @@ public static class T2IAPI
             setError(ex.Message);
             return;
         }
+        images = user_input.Get(T2IParamTypes.Images, images);
         Logs.Info($"User {session.User.UserID} requested {images} image{(images == 1 ? "" : "s")} with model '{user_input.Get(T2IParamTypes.Model)?.Name}'...");
         if (Logs.MinimumLevel <= Logs.LogLevel.Verbose)
         {
@@ -450,7 +451,6 @@ public static class T2IAPI
 
     public enum ImageHistorySortMode { Name, Date }
 
-    // TODO: Configurable limit
     private static JObject GetListAPIInternal(Session session, string path, string root, HashSet<string> extensions, Func<string, bool> isAllowed, int depth, ImageHistorySortMode sortBy, bool sortReverse)
     {
         int maxInHistory = session.User.Settings.MaxImagesInHistory;
@@ -694,16 +694,19 @@ public static class T2IAPI
             Logs.Warning($"User {session.User.UserID} tried to star image path '{origPath}' which maps to '{path}', but cannot as the image does not exist.");
             return new JObject() { ["error"] = "That file does not exist, cannot star." };
         }
-        string txtFile = path.BeforeLast('.') + ".txt";
+        string pathBeforeDot = path.BeforeLast('.');
         string starPath = $"Starred/{(session.User.Settings.StarNoFolders ? origPath.Replace("/", "") : origPath)}";
         (starPath, _, _) = WebServer.CheckFilePath(root, starPath);
-        string starTxtFile = starPath.BeforeLast('.') + ".txt";
+        string starBeforeDot = starPath.BeforeLast('.');
         if (File.Exists(starPath))
         {
             File.Delete(starPath);
-            if (File.Exists(starTxtFile))
+            foreach (string ext in DeletableFileExtensions)
             {
-                File.Delete(starTxtFile);
+                if (File.Exists($"{starBeforeDot}{ext}"))
+                {
+                    File.Delete($"{starBeforeDot}{ext}");
+                }
             }
             ImageMetadataTracker.RemoveMetadataFor(path);
             ImageMetadataTracker.RemoveMetadataFor(starPath);
@@ -713,9 +716,12 @@ public static class T2IAPI
         {
             Directory.CreateDirectory(Path.GetDirectoryName(starPath));
             File.Copy(path, starPath);
-            if (File.Exists(txtFile))
+            foreach (string ext in DeletableFileExtensions)
             {
-                File.Copy(txtFile, starTxtFile);
+                if (File.Exists($"{pathBeforeDot}{ext}"))
+                {
+                    File.Copy($"{pathBeforeDot}{ext}", $"{starBeforeDot}{ext}");
+                }
             }
             ImageMetadataTracker.RemoveMetadataFor(path);
             ImageMetadataTracker.RemoveMetadataFor(starPath);
@@ -748,6 +754,7 @@ public static class T2IAPI
             await RefreshSemaphore.WaitAsync(Program.GlobalProgramCancel);
             if (botherToRun)
             {
+                using ManyReadOneWriteLock.WriteClaim claim = Program.RefreshLock.LockWrite();
                 Program.ModelRefreshEvent?.Invoke();
             }
         }

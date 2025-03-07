@@ -94,15 +94,22 @@ function save_edit_wildcard() {
         'card': getRequiredElementById('edit_wildcard_name').value,
         'options': getRequiredElementById('edit_wildcard_contents').value.trim() + '\n',
         'preview_image': '',
-        'preview_image_metadata': currentMetadataVal
+        'preview_image_metadata': null
     };
     function complete() {
-        genericRequest('EditWildcard', data, data => {
+        if (card.name != data.card && !data['preview_image'] && card.image && card.image != 'imgs/model_placeholder.jpg') {
+            data['preview_image'] = card.image;
+        }
+        genericRequest('EditWildcard', data, resData => {
             wildcardsBrowser.browser.refresh();
+            if (card.name != data.card) {
+                genericRequest('DeleteWildcard', { card: card.name }, data => {});
+            }
         });
         $('#edit_wildcard_modal').modal('hide');
     }
     if (getRequiredElementById('edit_wildcard_enable_image').checked) {
+        data['preview_image_metadata'] = currentMetadataVal;
         imageToData(getRequiredElementById('edit_wildcard_image').getElementsByTagName('img')[0].src, (dataURL) => {
             data['preview_image'] = dataURL;
             complete();
@@ -111,6 +118,26 @@ function save_edit_wildcard() {
     else {
         complete();
     }
+}
+
+function duplicateWildcard(card) {
+    if (card == null) {
+        return;
+    }
+    let name = card.name;
+    let i = 2;
+    while (allWildcards.includes(`${name} - ${i}`)) {
+        i++;
+    }
+    let data = {
+        'card': `${name} - ${i}`,
+        'options': card.raw,
+        'preview_image': card.image && card.image != 'imgs/model_placeholder.jpg' ? card.image : '',
+        'preview_image_metadata': null
+    }
+    genericRequest('EditWildcard', data, resData => {
+        wildcardsBrowser.browser.refresh();
+    });
 }
 
 function editModelGetHashNow() {
@@ -610,6 +637,7 @@ class ModelBrowserWrapper {
             buttons = [starButton];
             if (permissions.hasPermission('edit_wildcards')) {
                 buttons.push({ label: 'Edit Wildcard', onclick: () => editWildcard(model.data) });
+                buttons.push({ label: 'Duplicate Wildcard', onclick: () => duplicateWildcard(model.data) });
             }
             buttons.push({ label: 'Test Wildcard', onclick: () => testWildcard(model.data) });
             if (permissions.hasPermission('edit_wildcards')) {
@@ -914,8 +942,6 @@ function updateLoraWeights(doChange = true) {
     if (doChange) {
         inputWeights.dispatchEvent(new Event('change'));
     }
-    getRequiredElementById('input_loraweights_toggle').checked = valSet.length > 0;
-    doToggleEnable('input_loraweights');
 }
 
 function updateLoraList() {
@@ -981,8 +1007,6 @@ function toggleSelectLora(lora) {
     $(loraInput).val(selected);
     $(loraInput).trigger('change');
     loraInput.dispatchEvent(new Event('change'));
-    getRequiredElementById('input_loras_toggle').checked = selected.length > 0;
-    doToggleEnable('input_loras');
     updateLoraWeights();
     updateLoraList();
 }
@@ -1132,7 +1156,10 @@ function doModelInstallRequiredCheck() {
         $('#bnb_nf4_installer').modal('show');
         return true;
     }
-    if (curModelSpecialFormat == 'gguf' && !currentBackendFeatureSet.includes('gguf') && !localStorage.getItem('hide_gguf_check')) {
+    let imageVidToggler = document.getElementById('input_group_content_imagetovideo_toggle');
+    let isImageVidToggled = imageVidToggler && imageVidToggler.checked;
+    let videoModel = isImageVidToggled ? document.getElementById('input_videomodel')?.value : '';
+    if ((curModelSpecialFormat == 'gguf' || videoModel.endsWith('.gguf')) && !currentBackendFeatureSet.includes('gguf') && !localStorage.getItem('hide_gguf_check')) {
         $('#gguf_installer').modal('show');
         return true;
     }

@@ -104,18 +104,39 @@
         <div class="install_hint">You can always change settings later.</div>
         <br>
         <fieldset class="form-group" id="install_path_selection_field">
-            <div class="form-check">
-                <input class="form-check-input" type="radio" name="install_path_radio" id="install_path_just_install" value="just_install" checked="">
+            <div class="form-check installer-click-radio">
+                <input class="form-check-input" type="radio" name="install_path_radio" id="install_path_just_install" value="just_install">
                 <label class="form-check-label" for="install_path_just_install">Just Install</label>
                 <div class="install_hint">Installs with good defaults for personal usage (you can always customize settings later).</div>
             </div>
-            <div class="form-check">
+            <div class="form-check installer-click-radio">
                 <input class="form-check-input" type="radio" name="install_path_radio" id="install_path_customize" value="customize">
                 <label class="form-check-label" for="install_path_customize">Customize Settings</label>
                 <div class="install_hint">Customize theme, backend, network config, etc. before installing.</div>
             </div>
         </fieldset>
     </div>
+
+    @if (WebUtil.IsWindows())
+    {
+        <div id="installer_section_shortcut" style="display: none;">
+            <div class="install_q_head">Would you like a Desktop shortcut for SwarmUI?</div>
+            <div class="install_hint">You can always delete it later.</div>
+            <br>
+            <fieldset class="form-group" id="shortcut_selection_field">
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="shortcut_radio" id="shortcut_no" value="no">
+                    <label class="form-check-label" for="shortcut_no">No</label>
+                    <div class="install_hint">Don't give me a Desktop shortcut.</div>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="radio" name="shortcut_radio" id="shortcut_yes" value="yes" checked="">
+                    <label class="form-check-label" for="shortcut_yes">Yes</label>
+                    <div class="install_hint">Give me a Desktop shortcut.</div>
+                </div>
+            </fieldset>
+        </div>
+    }
 
     <div id="installer_section_themes" style="display: none;">
         <div class="install_q_head">Choose a theme:</div>
@@ -234,7 +255,6 @@
     <div id="installer_section_models" style="display: none;">
         <div class="install_q_head">Download Models</div>
         <div class="install_hint">You can select models to automatically download for local running here.</div>
-        Note: by downloading Stable Diffusion models, you agree to the terms of <a href="https://github.com/Stability-AI/stablediffusion/blob/main/LICENSE-MODEL" target="_blank" rel="noopener noreferrer">The CreativeML Open RAIL++-M License</a>.
         <br>
         <fieldset class="form-group" id="models_fieldset">
             <div class="form-check form-switch">

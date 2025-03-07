@@ -121,8 +121,11 @@ public class Settings : AutoConfiguration
         [ConfigComment("Can be enabled to cache certain backend data.\nFor example, with ComfyUI backends this will add an extended cache on the object_info data.\nDefaults to false.")]
         public bool DoBackendDataCache = false;
 
-        [ConfigComment("If true, Swarm may use GPU-specific optimizations.\nIf false, Swarm will not try to optimize anything in a way specific to the GPU(s) you have.\nIf you encounter error that are solved by turning this off, please report that as a bug immediately.\nDefaults to 'true'. Should be left as 'true' in almost all circumstances.")]
+        [ConfigComment("If true, Swarm may use GPU-specific optimizations.\nIf false, Swarm will not try to optimize anything in a way specific to the GPU(s) you have.\nSome very minor quality changes may result.\nIf you encounter error that are solved by turning this off, please report that as a bug immediately.\nDefaults to 'true'. Should be left as 'true' in almost all circumstances.")]
         public bool AllowGpuSpecificOptimizations = true;
+
+        [ConfigComment("How many models can be loaded in a model list at once.\nPast this count, the list will simply be cut off.\nUse sub-folder organization to prevent issues.")]
+        public int ModelListSanityCap = 2000;
     }
 
     /// <summary>Settings related to backends.</summary>
@@ -131,8 +134,8 @@ public class Settings : AutoConfiguration
         [ConfigComment("How many times to retry initializing a backend before giving up. Default is 3.")]
         public int MaxBackendInitAttempts = 3;
 
-        [ConfigComment("Safety check, the maximum duration all requests can be waiting for a backend before the system declares a backend handling failure.")]
-        public int MaxTimeoutMinutes = 20;
+        [ConfigComment("Safety check, the maximum duration all requests can be waiting for a backend before the system declares a backend handling failure.\nIf you get backend timeout errors while intentionally running very long generations, increase this value.")]
+        public int MaxTimeoutMinutes = 120;
 
         [ConfigComment("The maximum duration an individual request can be waiting on a backend to be available before giving up.\n"
             + "Not to be confused with 'MaxTimeoutMinutes' which requires backends be unresponsive for that duration, this duration includes requests that are merely waiting because other requests are queued."
@@ -204,6 +207,9 @@ public class Settings : AutoConfiguration
 
         [ConfigComment("How long should browsers be told they can store cached copies of output images.\nDefaults to 30 seconds.\nDo not set less than 5-ish, temp-caching is important. Setting to a low value (like 5) can help if you often delete images and regenerate with the same filename.\nSome files (eg html/js for grids) in output always have a very low cache duration.")]
         public int OutputCacheSeconds = 30;
+
+        [ConfigComment("Optional CORS header to set. If empty, no CORS header will be set.\nDefaults to empty.")]
+        public string AccessControlAllowOrigin = "";
     }
 
     /// <summary>Settings related to file paths.</summary>
@@ -267,7 +273,7 @@ public class Settings : AutoConfiguration
     public class MetadataSection : AutoConfiguration
     {
         [ConfigComment("If true, model metadata is tracked on a per-folder basis. This is better for example if you copy model folders to different machines, or have symlinks to different instances, or etc.\nIf false, model metadata is tracked in the central data folder. This is better if you don't want stray files in your model folders, or if you have several Swarm instances running simultaneously.")]
-        public bool ModelMetadataPerFolder = true;
+        public bool ModelMetadataPerFolder = false;
 
         [ConfigComment("If true, image metadata is tracked on a per-folder basis.\nIf false, image metadata is tracked in the central data folder.\nThis is better if you don't want stray files in your output folders, or if you have several Swarm instances running simultaneously over the same output folders.")]
         public bool ImageMetadataPerFolder = true;
@@ -289,7 +295,7 @@ public class Settings : AutoConfiguration
         {
             [ConfigComment("Builder for output file paths. Can use auto-filling placeholders like '[model]' for the model name, '[prompt]' for a snippet of prompt text, etc.\n"
                 + $"Full details in <a target=\"_blank\" href=\"{Utilities.RepoDocsRoot}User%20Settings.md#path-format\">the docs here</a>")]
-            public string Format = "raw/[year]-[month]-[day]/[hour][minute]-[prompt]-[model]-[seed]";
+            public string Format = "raw/[year]-[month]-[day]/[hour][minute][request_time_inc]-[prompt]-[model]";
 
             [ConfigComment("How long any one part can be.\nDefault is 40 characters.")]
             public int MaxLenPerPart = 40;
@@ -329,10 +335,6 @@ public class Settings : AutoConfiguration
         [ConfigComment("List of role IDs applied to this user. Defaults to owner (for local/accountless usage).")]
         [ValueIsRestricted]
         public List<string> Roles = ["owner"];
-
-        [ConfigComment("The user's password.\nThis is not stored in user-readable format.\nReplace the value to set a new password.")]
-        [ValueIsSecret]
-        public string Password = "";
 
         public class ThemesImpl : SettingsOptionsAttribute.AbstractImpl
         {

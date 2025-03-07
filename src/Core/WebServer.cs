@@ -133,6 +133,18 @@ public class WebServer
                     */
                 }
             }
+            if (!string.IsNullOrWhiteSpace(Program.ServerSettings.Network.AccessControlAllowOrigin))
+            {
+                context.Response.Headers.AccessControlAllowOrigin = Program.ServerSettings.Network.AccessControlAllowOrigin;
+                if (context.Request.Method == "OPTIONS")
+                {
+                    context.Response.Headers.AccessControlAllowMethods = "*";
+                    context.Response.Headers.AccessControlAllowHeaders = "*";
+                    context.Response.Headers.AccessControlMaxAge = "3600";
+                    context.Response.StatusCode = 204;
+                    return;
+                }
+            }
             string authKey = Program.ServerSettings.Network.RequiredAuthorization;
             if (!string.IsNullOrWhiteSpace(authKey))
             {
@@ -382,6 +394,7 @@ public class WebServer
         else
         {
             context.Response.StatusCode = 404;
+            Logs.Verbose($"Giving 404 for extension file request '{requested}'");
             await context.Response.WriteAsync("404, file not found.");
         }
         await context.Response.CompleteAsync();

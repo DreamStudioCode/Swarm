@@ -57,6 +57,12 @@ The message `AssertionError: Torch not compiled with CUDA enabled` means that py
 
 **So how do I fix it?** The concept is easy, just the details vary. You need to reinstall torch, which means you need to trigger a pip install of: `torch torchvision torchaudio -U --index-url https://download.pytorch.org/whl/cu126` (the cu126 is CUDA version and may change over time, refer to [PyTorch's Website](https://pytorch.org/get-started/locally/) for updated index-url options). Note the usage of `-U` to tell pip to upgrade/replace the existing torch. To see how to install pip packages, refer to [I need to install something with pip](#i-need-to-install-something-with-pip) below.
 
+### fatal: detected dubious ownership in repository at '...'
+
+The message `fatal: detected dubious ownership in repository at` is a relatively common error from git, indicating that you are trying to install Swarm on an improper drive. Most commonly this is an external drive (eg a USB flash drive).
+
+Swarm needs to be installed on a standard system drive. On Windows, this means any NTFS formatted drive, such as your 'C:' drive or any secondary internal drive.
+
 ## I Have An Error Message And Don't Know What To Do
 
 Step 1 is read the error message. A lot of error messages in Swarm are intentionally written in clear plain English to tell you exactly what went wrong and how to fix it. Sometimes it's not clear enough or you'll get an internal error without good info, so:
@@ -89,6 +95,26 @@ When you need to install a pip dependency, you're gonna have to use the command 
 ### Note
 
 If you're an advanced user familiar with command line usage and/or with a custom python env, you can adapt the specifics as needed, just make note of the `python -s -m pip` syntax: that `-s` tells python to store the installed package in your current env. Without this (if you eg use just `pip install ...`) it may link to packages that are in your OS global install, which tends to cause a lot of issues. So, avoid that with `-s`.
+
+## I Want To Reinstall SwarmUI
+
+The easiest way to reinstall, is just:
+- Close SwarmUI
+- Rename the Swarm folder to `Old_SwarmUI`
+- run the installer again, fully, til you get to a working Generate tab
+- copy/move over any files you want from Old to new.
+
+However, if you want an "in-place reinstall":
+- Close SwarmUI
+- Move out the `SwarmUI/dlbackend` folder somewhere. This contains ComfyUI and anything saved in it, which may include eg workflows or past outputs. This is the most important part for Swarm to rebuild, but you should move not delete so you can restore any files you need.
+- Also move or delete everything inside `SwarmUI/src/BuiltinExtensions/ComfyUIBackend/DLNodes`
+- Open the `SwarmUI/Data` folder, and delete `Backends.fds`
+- In the same Data folder, edit `Settings.fds` in any text editor, find `IsInstalled: true` and change it to `IsInstalled: false`, and save
+- launch SwarmUI again. It will show you the usual installation interface.
+
+Most importantly after reinstalling:
+- Do not repeat whatever actions led to things breaking so bad you needed the reinstall in the first place!
+- The most common reason for a total reinstall is overusage of Comfy Manager leading to a corrupted comfy backend installation. If this is the case for you, either avoid Manager, or just be much more cautious about when to use it in the future.
 
 ## Other
 

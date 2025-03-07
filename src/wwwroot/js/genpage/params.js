@@ -18,23 +18,58 @@ function setGroupAdvancedOverride(groupId, enable) {
 }
 
 class AspectRatio {
-    constructor(id, width, height) {
+    constructor(id, width, height, altLogic = null) {
         this.id = id;
         this.width = width;
         this.height = height;
         this.ratio = width / height;
+        this.altLogic = altLogic;
+    }
+
+    read(inWidth, inHeight) {
+        if (this.altLogic) {
+            let [newWidth, newHeight] = this.altLogic(inWidth, inHeight);
+            if (newWidth && newHeight) {
+                return [newWidth, newHeight];
+            }
+        }
+        if (inWidth != inHeight) {
+            inWidth = roundTo(Math.sqrt(inWidth * inHeight), 16);
+            inHeight = inWidth;
+        }
+        let width = roundTo(this.width * (inWidth <= 0 ? 512 : inWidth) / 512, 16);
+        let height = roundTo(this.height * (inHeight <= 0 ? 512 : inHeight) / 512, 16);
+        return [width, height];
     }
 }
 
 let aspectRatios = [
     new AspectRatio("1:1", 512, 512),
     new AspectRatio("4:3", 576, 448),
-    new AspectRatio("3:2", 608, 416),
+    new AspectRatio("3:2", 608, 416, (w, h) => {
+        if (w == 768 && h == 512) {
+            return [768, 512];
+        }
+        return [null, null];
+    }),
     new AspectRatio("8:5", 608, 384),
-    new AspectRatio("16:9", 672, 384),
+    new AspectRatio("16:9", 672, 384, (w, h) => {
+        if (w == 640 && h == 640) {
+            return [832, 480]; // Wan 2.1, 1.3b
+        }
+        else if (w == 960 && h == 960) {
+            return [1280, 720]; // Wan 2.1, 14b
+        }
+        return [null, null];
+    }),
     new AspectRatio("21:9", 768, 320),
     new AspectRatio("3:4", 448, 576),
-    new AspectRatio("2:3", 416, 608),
+    new AspectRatio("2:3", 416, 608, (w, h) => {
+        if (w == 768 && h == 512) {
+            return [768, 512];
+        }
+        return [null, null];
+    }),
     new AspectRatio("5:8", 384, 608),
     new AspectRatio("9:16", 384, 672),
     new AspectRatio("9:21", 320, 768)
@@ -47,7 +82,11 @@ function getHtmlForParam(param, prefix) {
         let pop = param.no_popover ? '' : `<div class="sui-popover" id="popover_${prefix}${param.id}"><b class="translate">${escapeHtmlNoBr(param.name)}</b> (${param.type}):<br><span class="translate slight-left-margin-block">${safeHtmlOnly(param.description)}</span>${example}</div>`;
         switch (param.type) {
             case 'text':
-                let runnable = param.view_type == 'prompt' ? () => textPromptAddKeydownHandler(getRequiredElementById(`${prefix}${param.id}`)) : (param.view_type == 'big' ? () => dynamicSizeTextBox(getRequiredElementById(`${prefix}${param.id}`, 32)): null);
+                let runnable = param.view_type == 'prompt' ? () => {
+                    let pElem = getRequiredElementById(`${prefix}${param.id}`);
+                    textPromptAddKeydownHandler(pElem);
+                    textPromptInputHandle(pElem);
+                } : (param.view_type == 'big' ? () => dynamicSizeTextBox(getRequiredElementById(`${prefix}${param.id}`, 32)): null);
                 return {html: makeTextInput(param.feature_flag, `${prefix}${param.id}`, param.id, param.name, param.description, param.default, param.view_type, param.description, param.toggleable, false, !param.no_popover) + pop, runnable: runnable};
             case 'decimal':
             case 'integer':
@@ -369,13 +408,12 @@ function genInputs(delay_final = false) {
                     let width, height;
                     for (let ratio of aspectRatios) {
                         if (ratio.id == aspectRatio) {
-                            width = ratio.width;
-                            height = ratio.height;
+                            [width, height] = ratio.read(curModelWidth, curModelHeight);
                             break;
                         }
                     }
-                    inputWidth.value = roundTo(width * (curModelWidth == 0 ? 512 : curModelWidth) / 512, 16);
-                    inputHeight.value = roundTo(height * (curModelHeight == 0 ? 512 : curModelHeight) / 512, 16);
+                    inputWidth.value = width;
+                    inputHeight.value = height;
                     triggerChangeFor(inputWidth);
                     triggerChangeFor(inputHeight);
                 }
@@ -456,6 +494,23 @@ function genInputs(delay_final = false) {
         if (inputBatchSize && shouldResetBatch) {
             inputBatchSize.value = 1;
             triggerChangeFor(inputBatchSize);
+        }
+        let inputInterpolator1 = document.getElementById('input_textvideoframeinterpolationmethod');
+        if (inputInterpolator1) {
+            inputInterpolator1.addEventListener('change', () => {
+                console.log(inputInterpolator1.value, currentBackendFeatureSet);
+                if (inputInterpolator1.value == 'GIMM-VFI' && !currentBackendFeatureSet.includes('frameinterps_gimmvfi')) {
+                    installFeatureById('gimm_vfi', null);
+                }
+            });
+        }
+        let inputInterpolator2 = document.getElementById('input_videoframeinterpolationmethod');
+        if (inputInterpolator2) {
+            inputInterpolator2.addEventListener('change', () => {
+                if (inputInterpolator2.value == 'GIMM-VFI' && !currentBackendFeatureSet.includes('frameinterps_gimmvfi')) {
+                    installFeatureById('gimm_vfi', null);
+                }
+            });
         }
         let inputInitImage = document.getElementById('input_initimage');
         if (inputInitImage && inputAspectRatio && inputWidth && inputHeight) {
@@ -930,7 +985,7 @@ function hideUnsupportableParams() {
         let elem = document.getElementById(`input_${param.id}`);
         if (elem) {
             let box = findParentOfClass(elem, 'auto-input');
-            let supported = param.feature_flag == null || currentBackendFeatureSet.includes(param.feature_flag);
+            let supported = param.feature_flag == null || param.feature_flag.split(',').every(f => currentBackendFeatureSet.includes(f));
             let filterShow = true;
             if (filter && param.id != 'prompt') {
                 let searchText = `${param.id} ${param.name} ${param.description} ${param.group ? param.group.name : ''}`.toLowerCase();

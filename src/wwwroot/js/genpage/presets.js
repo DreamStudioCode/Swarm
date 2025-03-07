@@ -30,7 +30,7 @@ function clearPresetView() {
     let enableImage = getRequiredElementById('new_preset_enable_image');
     enableImage.checked = false;
     enableImage.disabled = true;
-    for (let type of getPresetTypes(`input`)) {
+    for (let type of gen_param_types) {
         try {
             let elem = getRequiredElementById('input_' + type.id);
             let presetElem = getRequiredElementById('preset_input_' + type.id);
@@ -91,7 +91,7 @@ function save_new_preset() {
     let data = {};
     for (let type of getPresetTypes(`preset_input`)) {
         let elem = getRequiredElementById(`preset_input_${type.id}`);
-        if (!elem || !getRequiredElementById(`preset_input_${type.id}_toggle`).checked) {
+        if (!getRequiredElementById(`preset_input_${type.id}_toggle`).checked) {
             continue;
         }
         if (type.type == "boolean") {

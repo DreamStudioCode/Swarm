@@ -89,9 +89,7 @@ public class Installation
             }
             else
             {
-                //await Utilities.DownloadFile("https://github.com/comfyanonymous/ComfyUI/releases/latest/download/ComfyUI_windows_portable_nvidia.7z", "dlbackend/comfyui_dl.7z", UpdateProgress);
-                // TEMPORARY: Use the last Python 3.11 release instead of the new Python 3.12 builds, as 3.12 has too many compat issues
-                await Utilities.DownloadFile("https://github.com/comfyanonymous/ComfyUI/releases/download/v0.2.3/ComfyUI_windows_portable_nvidia.7z", "dlbackend/comfyui_dl.7z", UpdateProgress);
+                await Utilities.DownloadFile("https://github.com/comfyanonymous/ComfyUI/releases/latest/download/ComfyUI_windows_portable_nvidia.7z", "dlbackend/comfyui_dl.7z", UpdateProgress);
             }
         }
         catch (HttpRequestException ex)
@@ -137,9 +135,16 @@ public class Installation
             }
         }
         await Output("Installing prereqs...");
-        await Utilities.DownloadFile("https://aka.ms/vs/16/release/vc_redist.x64.exe", "dlbackend/vc_redist.x64.exe", UpdateProgress);
-        UpdateProgress(0, 0, 0);
-        await Process.Start(new ProcessStartInfo(Path.GetFullPath("dlbackend/vc_redist.x64.exe"), "/quiet /install /passive /norestart") { UseShellExecute = true }).WaitForExitAsync(Program.GlobalProgramCancel);
+        try
+        {
+            await Utilities.DownloadFile("https://aka.ms/vs/16/release/vc_redist.x64.exe", "dlbackend/vc_redist.x64.exe", UpdateProgress);
+            UpdateProgress(0, 0, 0);
+            await Process.Start(new ProcessStartInfo(Path.GetFullPath("dlbackend/vc_redist.x64.exe"), "/quiet /install /passive /norestart") { UseShellExecute = true }).WaitForExitAsync(Program.GlobalProgramCancel);
+        }
+        catch (Exception ex)
+        {
+            Logs.Error($"Failed to install VC Redist: {ex}");
+        }
         string path = "dlbackend/comfy/ComfyUI/main.py";
         string comfyFolderPath = Path.GetFullPath("dlbackend/comfy");
         if (install_amd)
@@ -277,8 +282,40 @@ public class Installation
         Program.MainSDModels.Refresh();
     }
 
+    /// <summary>Make a desktop shortcut (Windows only).</summary>
+    public static void MakeShortcut()
+    {
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            return;
+        }
+        string path = $"{Environment.GetFolderPath(Environment.SpecialFolder.Desktop)}/SwarmUI.url";
+        string curDir = Directory.GetCurrentDirectory().TrimEnd('\\');
+        string content =
+            $"""
+            [InternetShortcut]
+            URL="{curDir}\launch-windows.bat"
+            IconFile="{curDir}\src\wwwroot\favicon.ico"
+            IconIndex=0
+            """;
+        File.WriteAllText(path, content);
+    }
+
+    /// <summary>Apply changes to server settings.</summary>
+    public static void SettingsApply()
+    {
+        Program.ServerSettings.IsInstalled = true;
+        Program.ServerSettings.InstallDate = $"{DateTimeOffset.Now:yyyy-MM-dd}";
+        Program.ServerSettings.InstallVersion = Utilities.Version;
+        if (Program.ServerSettings.LaunchMode == "webinstall")
+        {
+            Program.ServerSettings.LaunchMode = "web";
+        }
+        Program.SaveSettingsFile();
+    }
+
     /// <summary>Main install function entry point.</summary>
-    public static async Task Install(WebSocket socket, string theme, string installed_for, string backend, string models, bool install_amd, string language)
+    public static async Task Install(WebSocket socket, string theme, string installed_for, string backend, string models, bool install_amd, string language, bool make_shortcut)
     {
         if (Directory.Exists("dlbackend/comfy"))
         {
@@ -302,14 +339,11 @@ public class Installation
         StepsThusFar++;
         UpdateProgress(0, 0, 0);
         await Backend(backend, install_amd);
-        Program.ServerSettings.IsInstalled = true;
-        Program.ServerSettings.InstallDate = $"{DateTimeOffset.Now:yyyy-MM-dd}";
-        Program.ServerSettings.InstallVersion = Utilities.Version;
-        if (Program.ServerSettings.LaunchMode == "webinstall")
+        if (make_shortcut)
         {
-            Program.ServerSettings.LaunchMode = "web";
+            MakeShortcut();
         }
-        Program.SaveSettingsFile();
+        SettingsApply();
         await Models(models);
         StepsThusFar++;
         UpdateProgress(0, 0, 0);

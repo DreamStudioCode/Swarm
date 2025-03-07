@@ -38,7 +38,9 @@ public class T2IModelClassSorter
         bool isv2512name(string name) => name.Contains("512-") || name.Contains("-inpaint") || name.Contains("base-"); // keywords that identify the 512 vs the 768. Unfortunately no good proper detection here, other than execution-based hacks (see Auto WebUI ref)
         bool isControlLora(JObject h) => h.ContainsKey("lora_controlnet");
         bool isTurbo21(JObject h) => h.ContainsKey("denoiser.sigmas") && h.ContainsKey("conditioner.embedders.0.model.ln_final.bias");
-        bool isSD3(JObject h) => h.ContainsKey("model.diffusion_model.joint_blocks.0.context_block.attn.proj.bias");
+        bool tryGetSd3Tok(JObject h, out JToken tok) => h.TryGetValue("model.diffusion_model.joint_blocks.0.context_block.attn.proj.bias", out tok);
+        bool isSD3Med(JObject h) => tryGetSd3Tok(h, out JToken tok) && tok["shape"].ToArray()[0].Value<long>() != 2432;
+        bool isSD3Large(JObject h) => tryGetSd3Tok(h, out JToken tok) && tok["shape"].ToArray()[0].Value<long>() == 2432;
         bool isDitControlnet(JObject h) => h.ContainsKey("controlnet_blocks.0.bias") && h.ContainsKey("transformer_blocks.0.ff.net.0.proj.bias");
         bool isFluxControlnet(JObject h) => isDitControlnet(h) && h.ContainsKey("transformer_blocks.0.attn.norm_added_k.weight");
         bool isSD3Controlnet(JObject h) => isDitControlnet(h) && !isFluxControlnet(h);
@@ -74,16 +76,27 @@ public class T2IModelClassSorter
         bool isMochiVae(JObject h) => h.ContainsKey("encoder.layers.4.layers.1.attn_block.attn.qkv.weight") || h.ContainsKey("layers.4.layers.1.attn_block.attn.qkv.weight") || h.ContainsKey("blocks.2.blocks.3.stack.5.weight") || h.ContainsKey("decoder.blocks.2.blocks.3.stack.5.weight");
         bool isLtxv(JObject h) => h.ContainsKey("model.diffusion_model.adaln_single.emb.timestep_embedder.linear_1.bias");
         bool isSana(JObject h) => h.ContainsKey("attention_y_norm.weight") && h.ContainsKey("blocks.0.attn.proj.weight");
-        bool isHunyuanVideo(JObject h) => h.ContainsKey("model.model.txt_in.individual_token_refiner.blocks.1.self_attn.qkv.weight");
+        bool isHunyuanVideo(JObject h) => h.ContainsKey("model.model.txt_in.individual_token_refiner.blocks.1.self_attn.qkv.weight") || h.ContainsKey("txt_in.individual_token_refiner.blocks.1.self_attn_qkv.weight");
+        bool isHunyuanVideoSkyreels(JObject h) => h.ContainsKey("txt_in.individual_token_refiner.blocks.1.self_attn_qkv.weight"); // TODO: Bad detection hack
+        bool isHunyuanVideoSkyreelsImage2V(JObject h) => h.TryGetValue("img_in.proj.weight", out JToken jtok) && jtok["shape"].ToArray()[1].Value<long>() == 32;
+        bool isHunyuanVideoNativeImage2V(JObject h) => h.TryGetValue("img_in.proj.weight", out JToken jtok) && jtok["shape"].ToArray()[1].Value<long>() == 33;
         bool isHunyuanVideoVae(JObject h) => h.ContainsKey("decoder.conv_in.conv.bias");
-        bool isHunyuanVideoLora(JObject h) => h.ContainsKey("transformer.single_blocks.9.modulation.linear.lora_B.weight");
+        bool isHunyuanVideoLora(JObject h) => h.ContainsKey("transformer.single_blocks.9.modulation.linear.lora_B.weight") || h.ContainsKey("transformer.double_blocks.9.txt_mod.linear.lora_B.weight");
         bool isCosmos7b(JObject h) => h.TryGetValue("net.blocks.block0.blocks.0.adaLN_modulation.1.weight", out JToken jtok) && jtok["shape"].ToArray()[^1].Value<long>() == 4096;
         bool isCosmos14b(JObject h) => h.TryGetValue("net.blocks.block0.blocks.0.adaLN_modulation.1.weight", out JToken jtok) && jtok["shape"].ToArray()[^1].Value<long>() == 5120;
         bool isCosmosVae(JObject h) => h.ContainsKey("decoder.unpatcher3d._arange");
+        bool isLumina2(JObject h) => h.ContainsKey("model.diffusion_model.cap_embedder.0.weight") || h.ContainsKey("cap_embedder.0.weight");
+        bool tryGetWanTok(JObject h, out JToken tok) => h.TryGetValue("model.diffusion_model.blocks.0.cross_attn.k.bias", out tok) || h.TryGetValue("blocks.0.cross_attn.k.bias", out tok);
+        bool isWan21_1_3b(JObject h) => tryGetWanTok(h, out JToken tok) && tok["shape"].ToArray()[0].Value<long>() == 1536;
+        bool isWan21_14b(JObject h) => tryGetWanTok(h, out JToken tok) && tok["shape"].ToArray()[0].Value<long>() == 5120;
+        bool tryGetWanLoraTok(JObject h, out JToken tok) => h.TryGetValue("diffusion_model.blocks.0.cross_attn.k.lora_A.weight", out tok) || h.TryGetValue("blocks.0.cross_attn.k.lora_A.weight", out tok);
+        bool isWan21_1_3bLora(JObject h) => tryGetWanLoraTok(h, out JToken tok) && tok["shape"].ToArray()[1].Value<long>() == 1536;
+        bool isWan21_14bLora(JObject h) => tryGetWanLoraTok(h, out JToken tok) && tok["shape"].ToArray()[1].Value<long>() == 5120;
+        bool isWanI2v(JObject h) => h.ContainsKey("model.diffusion_model.blocks.0.cross_attn.k_img.bias") || h.ContainsKey("blocks.0.cross_attn.k_img.bias");
         // ====================== Stable Diffusion v1 ======================
         Register(new() { ID = "stable-diffusion-v1", CompatClass = "stable-diffusion-v1", Name = "Stable Diffusion v1", StandardWidth = 512, StandardHeight = 512, IsThisModelOfClass = (m, h) =>
         {
-            return isV1(h) && !IsAlt(h) && !isV2(h) && !isXL09Base(h) && !isSD3(h);
+            return isV1(h) && !IsAlt(h) && !isV2(h) && !isXL09Base(h) && !isSD3Med(h) && !isSD3Large(h);
         }});
         Register(new() { ID = "stable-diffusion-v1-inpainting", CompatClass = "stable-diffusion-v1", Name = "Stable Diffusion v1 (Inpainting)", StandardWidth = 512, StandardHeight = 512, IsThisModelOfClass = (m, h) =>
         {
@@ -214,15 +227,11 @@ public class T2IModelClassSorter
         // ====================== Stable Diffusion v3 ======================
         Register(new() { ID = "stable-diffusion-v3-medium", CompatClass = "stable-diffusion-v3-medium", Name = "Stable Diffusion 3 Medium", StandardWidth = 1024, StandardHeight = 1024, IsThisModelOfClass = (m, h) =>
         {
-            return isSD3(h);
+            return isSD3Med(h);
         }});
         Register(new() { ID = "stable-diffusion-v3.5-large", CompatClass = "stable-diffusion-v3.5-large", Name = "Stable Diffusion 3.5 Large", StandardWidth = 1024, StandardHeight = 1024, IsThisModelOfClass = (m, h) =>
         {
-            return false;
-        }});
-        Register(new() { ID = "stable-diffusion-v3.5-large-turbo", CompatClass = "stable-diffusion-v3.5-large", Name = "Stable Diffusion 3.5 Large Turbo", StandardWidth = 1024, StandardHeight = 1024, IsThisModelOfClass = (m, h) =>
-        {
-            return false;
+            return isSD3Large(h);
         }});
         Register(new() { ID = "stable-diffusion-v3.5-medium", CompatClass = "stable-diffusion-v3.5-medium", Name = "Stable Diffusion 3.5 Medium", StandardWidth = 1024, StandardHeight = 1024, IsThisModelOfClass = (m, h) =>
         {
@@ -298,6 +307,28 @@ public class T2IModelClassSorter
         {
             return false;
         }});
+        // ====================== Wan Video ======================
+        Register(new() { ID = "wan-2_1-text2video/vae", CompatClass = "wan-21", Name = "Wan 2.1 VAE", StandardWidth = 640, StandardHeight = 640, IsThisModelOfClass = (m, h) => { return false; }});
+        Register(new() { ID = "wan-2_1-text2video-1_3b", CompatClass = "wan-21-1_3b", Name = "Wan 2.1 Text2Video 1.3B", StandardWidth = 640, StandardHeight = 640, IsThisModelOfClass = (m, h) =>
+        {
+            return isWan21_1_3b(h) && !isWanI2v(h);
+        }});
+        Register(new() { ID = "wan-2_1-text2video-1_3b/lora", CompatClass = "wan-21-1_3b", Name = "Wan 2.1 Text2Video 1.3B LoRA", StandardWidth = 640, StandardHeight = 640, IsThisModelOfClass = (m, h) =>
+        {
+            return isWan21_1_3bLora(h);
+        }});
+        Register(new() { ID = "wan-2_1-text2video-14b", CompatClass = "wan-21-14b", Name = "Wan 2.1 Text2Video 14B", StandardWidth = 960, StandardHeight = 960, IsThisModelOfClass = (m, h) =>
+        {
+            return isWan21_14b(h) && !isWanI2v(h);
+        }});
+        Register(new() { ID = "wan-2_1-text2video-14b/lora", CompatClass = "wan-21-14b", Name = "Wan 2.1 Text2Video 14B LoRA", StandardWidth = 960, StandardHeight = 960, IsThisModelOfClass = (m, h) =>
+        {
+            return isWan21_14bLora(h);
+        }});
+        Register(new() { ID = "wan-2_1-image2video-14b", CompatClass = "wan-21-14b", Name = "Wan 2.1 Image2Video 14B", StandardWidth = 640, StandardHeight = 640, IsThisModelOfClass = (m, h) =>
+        {
+            return isWan21_14b(h) && isWanI2v(h);
+        }});
         // ====================== Random Other Models ======================
         Register(new() { ID = "alt_diffusion_v1_512_placeholder", CompatClass = "alt_diffusion_v1", Name = "Alt-Diffusion", StandardWidth = 512, StandardHeight = 512, IsThisModelOfClass = (m, h) =>
         {
@@ -309,7 +340,19 @@ public class T2IModelClassSorter
         }});
         Register(new() { ID = "hunyuan-video", CompatClass = "hunyuan-video", Name = "Hunyuan Video", StandardWidth = 720, StandardHeight = 720, IsThisModelOfClass = (m, h) =>
         {
-            return isHunyuanVideo(h);
+            return isHunyuanVideo(h) && !isHunyuanVideoNativeImage2V(h) && !isHunyuanVideoSkyreels(h);
+        }});
+        Register(new() { ID = "hunyuan-video-skyreels", CompatClass = "hunyuan-video", Name = "Hunyuan Video - SkyReels Text2Video", StandardWidth = 720, StandardHeight = 720, IsThisModelOfClass = (m, h) =>
+        {
+            return isHunyuanVideoSkyreels(h) && !isHunyuanVideoSkyreelsImage2V(h) && !isHunyuanVideoNativeImage2V(h);
+        }});
+        Register(new() { ID = "hunyuan-video-skyreels-i2v", CompatClass = "hunyuan-video", Name = "Hunyuan Video - SkyReels Image2Video", StandardWidth = 720, StandardHeight = 720, IsThisModelOfClass = (m, h) =>
+        {
+            return isHunyuanVideoSkyreels(h) && isHunyuanVideoSkyreelsImage2V(h);
+        }});
+        Register(new() { ID = "hunyuan-video-i2v", CompatClass = "hunyuan-video", Name = "Hunyuan Video - Image2Video", StandardWidth = 720, StandardHeight = 720, IsThisModelOfClass = (m, h) =>
+        {
+            return isHunyuanVideo(h) && isHunyuanVideoNativeImage2V(h);
         }});
         Register(new() { ID = "hunyuan-video/vae", CompatClass = "hunyuan-video", Name = "Hunyuan Video VAE", StandardWidth = 720, StandardHeight = 720, IsThisModelOfClass = (m, h) =>
         {
@@ -346,6 +389,10 @@ public class T2IModelClassSorter
         Register(new() { ID = "nvidia-cosmos-1/vae", CompatClass = "nvidia-cosmos-1", Name = "NVIDIA Cosmos 1.0 Diffusion VAE", StandardWidth = 960, StandardHeight = 960, IsThisModelOfClass = (m, h) =>
         {
             return isCosmosVae(h);
+        }});
+        Register(new() { ID = "lumina-2", CompatClass = "lumina-2", Name = "Lumina 2", StandardWidth = 1024, StandardHeight = 1024, IsThisModelOfClass = (m, h) =>
+        {
+            return isLumina2(h);
         }});
         // Everything below this point does not autodetect, it must match through ModelSpec
         Register(new() { ID = "stable-diffusion-v1/vae", CompatClass = "stable-diffusion-v1", Name = "Stable Diffusion v1 VAE", StandardWidth = 512, StandardHeight = 512, IsThisModelOfClass = (m, h) => { return false; } });
@@ -392,6 +439,11 @@ public class T2IModelClassSorter
         Remaps["Flux.1-schnell/controlnet"] = "Flux.1-dev/controlnet";
         Remaps["Flux.1-AE"] = "flux.1/vae";
         Remaps["stable-cascade-v1-stage-a"] = "stable-cascade-v1-stage-a/vae";
+        Remaps["stable-diffusion-3-3-5-large"] = "stable-diffusion-v3.5-large";
+        Remaps["stable-diffusion-3-3-5-large/lora"] = "stable-diffusion-v3.5-large/lora";
+        Remaps["stable-diffusion-v3.5-large-turbo"] = "stable-diffusion-v3.5-large";
+        Remaps["stable-diffusion-3-3-5-medium"] = "stable-diffusion-v3.5-medium";
+        Remaps["stable-diffusion-3-3-5-medium/lora"] = "stable-diffusion-v3.5-medium/lora";
         // ====================== GGUF Remaps ======================
         Remaps["flux"] = "Flux.1-dev";
         Remaps["sd3"] = "stable-diffusion-v3-medium";

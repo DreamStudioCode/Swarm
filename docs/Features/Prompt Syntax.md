@@ -112,7 +112,7 @@
 
 - You can use `<segment:texthere>` to automatically refine part of the image using CLIP Segmentation.
     - This is like a "restore faces" feature but much more versatile, you can refine anything and control what it does.
-    - Or `<segment:texthere,creativity,threshold>` - where creativity is inpaint strength, and threshold is segmentation minimum threshold - for example, `<segment:face,0.8,0.5>` - defaults to 0.6 creativity, 0.5 threshold.
+    - Or `<segment:texthere,creativity,threshold>` - where creativity is inpaint strength, and threshold is segmentation minimum threshold - for example, `<segment:face,0.6,0.5>` - defaults to 0.6 creativity, 0.5 threshold.
     - See [the feature announcement](https://github.com/Stability-AI/StableSwarmUI/discussions/11#discussioncomment-7236821) for details.
     - Note the first time you run with CLIPSeg, Swarm will automatically download [an fp16 safetensors version of the clipseg-rd64-refined model](https://huggingface.co/mcmonkey/clipseg-rd64-refined-fp16)
     - You can insert a `<lora:...>` inside the prompt area of the segment to have a lora model apply onto that segment
@@ -124,6 +124,8 @@
             - Without this, if there are multiple people, it will do a bulk segmented refine on all faces combined
             - Note the index order is sorted from leftmost detection to right
         - To control the creativity with a yolo model just append `,<creativity>,1`, for example `<segment:yolo-face_yolov8m-seg_60.pt-1,0.8,1>` sets a `0.8` creativity.
+            - Note that threshold does nothing with yolo models, and should always just be `1`.
+        - If you have a yolo model with multiple supported classes, you can filter specific classes by appending `:<classes>:` to the model name where `<classes>` is a comma-separated list of class IDs or names, e.g., `<segment:yolo-modelnamehere:0,apple,2:,0.8,1>`
     - There's an advanced parameter under `Regional Prompting` named `Segment Model` to customize the base model used for segment processing
     - There's also a parameter named `Save Segment Mask` to save a preview copy of the generated mask
 
@@ -172,6 +174,16 @@
     - Strength2 is Creativity of the automatic inpaint.
     - The automatic inpaint can be helpful for improving quality of objects, especially for small regions, but also might produce unexpected results.
     - Objects may use global feature changes, such as `<lora:` syntax input to apply a lora to the object in the inpaint phase.
+
+## Video Extend
+
+- You can use `<extend:frames>` to extend a video by a given number of frames using an Image-To-Video model.
+    - For example, `<extend:33>` will extend the video by 33 frames.
+    - Use the `Video Extend` parameter group to configure values for this. At least `Video Extend Model` must be set.
+    - Must set Overlap less than 1/3rd of the extend frame count.
+    - Use the `Advanced Video` parameters as well.
+    - Under `Other Fixes` -> `Trim Video End Frames` may be useful on some models. Do not use `Trim Start`
+    - 
 
 ## Comment
 

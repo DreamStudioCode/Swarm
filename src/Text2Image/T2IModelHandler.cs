@@ -246,12 +246,27 @@ public class T2IModelHandler
             {
                 return ModelMetadataCachePerFolder.GetOrCreate(folder, () =>
                 {
-                    LiteDatabase ldb = new(folder + "/model_metadata.ldb");
+                    string path = $"{folder}/model_metadata.ldb";
+                    LiteDatabase ldb;
+                    try
+                    {
+                        ldb = new(path);
+                    }
+                    catch (Exception ex)
+                    {
+                        Logs.Verbose($"Failed to read Lite Database for '{folder}' and will reset it: {ex}");
+                        File.Delete(path);
+                        ldb = new(path);
+                    }
                     return (ldb, ldb.GetCollection<ModelMetadataStore>("models"));
                 }).Item2;
             }
-            catch (UnauthorizedAccessException) { return null; }
-            catch (IOException) { return null; }
+            catch (Exception ex)
+            {
+                Logs.Warning($"Internal error, some model metadata caches will be missing or invalid, see debug log for details.");
+                Logs.Debug($"Failed to read Lite Database for '{folder}' and cannot reset it: {ex}");
+                return null;
+            }
         }
     }
 
@@ -325,6 +340,9 @@ public class T2IModelHandler
         return null;
     }
 
+    /// <summary>Model compat-class IDs that have variable text encoder content.</summary>
+    public static HashSet<string> VariableTextEncModelClasses = ["stable-diffusion-v3-medium", "stable-diffusion-v3.5-large", "stable-diffusion-v3.5-medium", "flux-1"];
+
     /// <summary>Force-load the metadata for a model.</summary>
     public void LoadMetadata(T2IModel model)
     {
@@ -360,9 +378,8 @@ public class T2IModelHandler
                 metadata = null;
             }
         }
-        if (metadata is not null && metadata.TextEncoders is null && metadata.ModelClassType == "stable-diffusion-v3-medium")
+        if (metadata is not null && metadata.TextEncoders is null && VariableTextEncModelClasses.Contains(metadata.ModelClassType))
         {
-            // TODO: Temporary metadata fix for SD3 models before the commit that added TextEncs tracking
             metadata = null;
         }
         if (metadata is null || metadata.ModelFileVersion != modified)

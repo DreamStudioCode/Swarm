@@ -45,6 +45,8 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
         public bool AutoRestart = true;
     }
 
+    public ComfyUISelfStartSettings Settings => SettingsRaw as ComfyUISelfStartSettings;
+
     public Process RunningProcess;
 
     public int Port;
@@ -55,7 +57,7 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
 
     public override bool CanIdle => false;
 
-    public override int OverQueue => (SettingsRaw as ComfyUISelfStartSettings).OverQueue;
+    public override int OverQueue => Settings.OverQueue;
 
     public static LockObject ComfyModelFileHelperLock = new();
 
@@ -111,12 +113,6 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
                 return backends;
             }
         }
-        else
-        {
-            AddLoadStatus($"Node folder '{folderName}' exists, will git pull it...");
-            string response = await Utilities.RunGitProcess($"pull", $"{nodePath}/{folderName}");
-            AddLoadStatus($"Node pull response for {folderName}: {response.Trim()}");
-        }
         return null;
     }
 
@@ -137,6 +133,7 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
                 await Task.WhenAll(tasks);
             }
             tasks.Clear();
+            string autoUpd = Settings.AutoUpdate.ToLowerFast();
             foreach (string node in Directory.EnumerateDirectories(nodePath))
             {
                 await Task.Delay(TimeSpan.FromSeconds(0.05));
@@ -147,7 +144,7 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
                     tasks.Add(Task.Run(async () =>
                     {
                         AddLoadStatus($"Ensure node repos - Will git pull for {pathSimple}...");
-                        string response = await Utilities.RunGitProcess($"pull", toUse);
+                        string response = await Utilities.RunGitProcess(autoUpd == "aggressive" ? "pull --autostash" : "pull", toUse);
                         AddLoadStatus($"Node pull response for {pathSimple}: {response.Trim()}");
                     }));
                 }
@@ -264,8 +261,7 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
         AddLoadStatus("Starting init...");
         EnsureComfyFile();
         string addedArgs = "";
-        ComfyUISelfStartSettings settings = SettingsRaw as ComfyUISelfStartSettings;
-        if (!settings.DisableInternalArgs)
+        if (!Settings.DisableInternalArgs)
         {
             string pathRaw = $"{Program.DataDir}/comfy-auto-model.yaml";
             if (pathRaw.Contains(' '))
@@ -273,46 +269,46 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
                 pathRaw = $"\"{pathRaw}\"";
             }
             addedArgs += $" --extra-model-paths-config {pathRaw}";
-            if (Utilities.PresumeNVidia40xx && Program.ServerSettings.Performance.AllowGpuSpecificOptimizations)
+            if (Utilities.PresumeNVidia30xx && Program.ServerSettings.Performance.AllowGpuSpecificOptimizations)
             {
                 addedArgs += " --fast";
             }
-            if (settings.EnablePreviews)
+            if (Settings.EnablePreviews)
             {
                 addedArgs += " --preview-method latent2rgb";
             }
-            if (settings.FrontendVersion == "Latest")
+            if (Settings.FrontendVersion == "Latest")
             {
                 addedArgs += " --front-end-version Comfy-Org/ComfyUI_frontend@latest";
             }
-            else if (settings.FrontendVersion == "LatestSwarmValidated")
+            else if (Settings.FrontendVersion == "LatestSwarmValidated")
             {
-                addedArgs += " --front-end-version Comfy-Org/ComfyUI_frontend@v1.7.14";
+                addedArgs += " --front-end-version Comfy-Org/ComfyUI_frontend@v1.9.18";
             }
-            else if (settings.FrontendVersion == "Legacy")
+            else if (Settings.FrontendVersion == "Legacy")
             {
                 addedArgs += " --front-end-version Comfy-Org/ComfyUI_legacy_frontend@latest";
             }
             // None needs no arg
             AddLoadStatus($"Will add args: {addedArgs}");
         }
-        settings.StartScript = settings.StartScript.Trim(' ', '"', '\'', '\n', '\r', '\t');
-        if (!settings.StartScript.EndsWith("main.py") && !string.IsNullOrWhiteSpace(settings.StartScript))
+        Settings.StartScript = Settings.StartScript.Trim(' ', '"', '\'', '\n', '\r', '\t');
+        if (!Settings.StartScript.EndsWith("main.py") && !string.IsNullOrWhiteSpace(Settings.StartScript))
         {
-            AddLoadStatus($"Start script '{settings.StartScript}' looks wrong");
-            Logs.Warning($"ComfyUI start script is '{settings.StartScript}', which looks wrong - did you forget to append 'main.py' on the end?");
+            AddLoadStatus($"Start script '{Settings.StartScript}' looks wrong");
+            Logs.Warning($"ComfyUI start script is '{Settings.StartScript}', which looks wrong - did you forget to append 'main.py' on the end?");
         }
         AddLoadStatus("Will track node repo load task...");
-        List<Task> tasks = [Task.Run(EnsureNodeRepos)];
-        string autoUpd = settings.AutoUpdate.ToLowerFast();
-        if ((autoUpd == "true" || autoUpd == "aggressive") && !string.IsNullOrWhiteSpace(settings.StartScript))
+        string autoUpd = Settings.AutoUpdate.ToLowerFast();
+        if ((autoUpd == "true" || autoUpd == "aggressive") && !string.IsNullOrWhiteSpace(Settings.StartScript))
         {
+            List<Task> tasks = [Task.Run(EnsureNodeRepos)];
             AddLoadStatus("Will track comfy git pull auto-update task...");
             tasks.Add(Task.Run(async () =>
             {
                 try
                 {
-                    string path = Path.GetFullPath(settings.StartScript).Replace('\\', '/').BeforeLast('/');
+                    string path = Path.GetFullPath(Settings.StartScript).Replace('\\', '/').BeforeLast('/');
                     AddLoadStatus("Running git pull in comfy folder...");
                     string response = await Utilities.RunGitProcess(autoUpd == "aggressive" ? "pull --autostash" : "pull", path);
                     AddLoadStatus($"Comfy git pull response: {response.Trim()}");
@@ -325,7 +321,14 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
                         if (response.Contains("There is no tracking information for the current branch") && checkoutResponse.Contains("Already on 'master'"))
                         {
                             string fixStatus = await Utilities.RunGitProcess("branch --set-upstream-to=origin/master master", path);
-                            AddLoadStatus($"Comfy git fix response: {fixStatus.Trim()}");
+                            AddLoadStatus($"Comfy git fix (untracked curse) response: {fixStatus.Trim()}");
+                            string repullResponse = await Utilities.RunGitProcess("pull --autostash", path);
+                            AddLoadStatus($"Comfy git re-pull response: {repullResponse.Trim()}");
+                        }
+                        else if (checkoutResponse.Contains("and can be fast-forwarded") && checkoutResponse.Contains("Already on 'master'"))
+                        {
+                            string fixStatus = await Utilities.RunGitProcess("reset --hard HEAD", path);
+                            AddLoadStatus($"Comfy git fix (fast-forward curse) response: {fixStatus.Trim()}");
                             string repullResponse = await Utilities.RunGitProcess("pull --autostash", path);
                             AddLoadStatus($"Comfy git re-pull response: {repullResponse.Trim()}");
                         }
@@ -341,11 +344,11 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
                     Logs.Error($"Failed to auto-update comfy backend: {ex.ReadableString()}");
                 }
             }));
+            AddLoadStatus($"Waiting on git tasks to complete...");
+            await Task.WhenAll(tasks);
+            AddLoadStatus($"All tasks done.");
         }
-        AddLoadStatus($"Waiting on git tasks to complete...");
-        await Task.WhenAll(tasks);
-        AddLoadStatus($"All tasks done.");
-        string lib = NetworkBackendUtils.GetProbableLibFolderFor(settings.StartScript);
+        string lib = NetworkBackendUtils.GetProbableLibFolderFor(Settings.StartScript);
         if (lib is not null)
         {
             AddLoadStatus($"Will validate required libs...");
@@ -381,6 +384,10 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
                     return null;
                 }
                 return dir[prefix.Length..].Before(".dist-info");
+            }
+            if (!libs.Contains("pip"))
+            {
+                Logs.Warning($"Python lib folder at '{lib}' appears to not contain pip. Python operations will likely fail. Please make sure your system has a valid python3-pip install.");
             }
             foreach ((string libFolder, string pipName) in RequiredPythonPackages)
             {
@@ -421,7 +428,7 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
             AddLoadStatus("Done validating required libs.");
         }
         AddLoadStatus("Starting self-start ComfyUI process...");
-        await NetworkBackendUtils.DoSelfStart(settings.StartScript, this, $"ComfyUI-{BackendData.ID}", $"backend-{BackendData.ID}", settings.GPU_ID, settings.ExtraArgs.Trim() + " --port {PORT}" + addedArgs, InitInternal, (p, r) => { Port = p; RunningProcess = r; }, settings.AutoRestart);
+        await NetworkBackendUtils.DoSelfStart(Settings.StartScript, this, $"ComfyUI-{BackendData.ID}", $"backend-{BackendData.ID}", Settings.GPU_ID, Settings.ExtraArgs.Trim() + " --port {PORT}" + addedArgs, InitInternal, (p, r) => { Port = p; RunningProcess = r; }, Settings.AutoRestart);
     }
 
     /// <summary>
@@ -437,6 +444,8 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
         ("kornia", "kornia"),
         ("sentencepiece", "sentencepiece"),
         ("spandrel", "spandrel"),
+        ("av", "av"),
+        ("comfyui_frontend_package", "comfyui_frontend_package"),
         // Other added dependencies
         ("rembg", "rembg"),
         ("onnxruntime", "onnxruntime"), // subdependency of rembg but inexplicably not autoinstalled anymore?

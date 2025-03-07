@@ -84,6 +84,16 @@ function clickImageInBatch(div) {
     setCurrentImage(div.dataset.src, div.dataset.metadata, div.dataset.batch_id ?? '', imgElem && imgElem.dataset.previewGrow == 'true', false, true, div.dataset.is_placeholder == 'true');
 }
 
+function rightClickImageInBatch(e, div) {
+    if (e.shiftKey || e.ctrlKey) {
+        return;
+    }
+    let popover = new AdvancedPopover('image_batch_context_menu', [ { key: 'Remove', action: () => div.remove() } ], false, mouseX, mouseY, document.body, null);
+    e.preventDefault();
+    e.stopPropagation();
+    return false;
+}
+
 /** "Reuse Parameters" button impl. */
 function copy_current_image_params() {
     if (!currentMetadataVal) {
@@ -708,28 +718,38 @@ function setCurrentImage(src, metadata = '', batchId = '', previewGrow = false, 
     includeButton('Use As Init', () => {
         let initImageParam = document.getElementById('input_initimage');
         if (initImageParam) {
-            let tmpImg = new Image();
-            tmpImg.crossOrigin = 'Anonymous';
-            tmpImg.onload = () => {
-                let canvas = document.createElement('canvas');
-                canvas.width = tmpImg.naturalWidth;
-                canvas.height = tmpImg.naturalHeight;
-                let ctx = canvas.getContext('2d');
-                ctx.drawImage(tmpImg, 0, 0);
-                canvas.toBlob(blob => {
-                    let type = img.src.substring(img.src.lastIndexOf('.') + 1);
-                    let file = new File([blob], imagePathClean, { type: `image/${type.length > 0 && type.length < 20 ? type : 'png'}` });
-                    let container = new DataTransfer(); 
-                    container.items.add(file);
-                    initImageParam.files = container.files;
-                    triggerChangeFor(initImageParam);
-                    toggleGroupOpen(initImageParam, true);
-                    let toggler = getRequiredElementById('input_group_content_initimage_toggle');
-                    toggler.checked = true;
-                    triggerChangeFor(toggler);
-                });
+            let type = img.src.substring(img.src.lastIndexOf('.') + 1);
+            let set = (blob) => {
+                let file = new File([blob], imagePathClean, { type: `image/${type.length > 0 && type.length < 20 ? type : 'png'}` });
+                let container = new DataTransfer();
+                container.items.add(file);
+                initImageParam.files = container.files;
+                triggerChangeFor(initImageParam);
+                toggleGroupOpen(initImageParam, true);
+                let toggler = getRequiredElementById('input_group_content_initimage_toggle');
+                toggler.checked = true;
+                triggerChangeFor(toggler);
             };
-            tmpImg.src = img.src;
+            if (img.dataset.src && (img.dataset.src.startsWith('data:') || img.dataset.src.startsWith('/') || img.dataset.src.startsWith('View/'))) {
+                fetch(img.dataset.src).then(response => response.blob()).then(blob => {
+                    set(blob);
+                });
+            }
+            else {
+                let tmpImg = new Image();
+                tmpImg.crossOrigin = 'Anonymous';
+                tmpImg.onload = () => {
+                    let canvas = document.createElement('canvas');
+                    canvas.width = tmpImg.naturalWidth;
+                    canvas.height = tmpImg.naturalHeight;
+                    let ctx = canvas.getContext('2d');
+                    ctx.drawImage(tmpImg, 0, 0);
+                    canvas.toBlob(blob => {
+                        set(blob);
+                    });
+                };
+                tmpImg.src = img.src;
+            }
         }
     }, '', 'Sets this image as the Init Image parameter input');
     includeButton('Use As Image Prompt', () => {
@@ -941,6 +961,7 @@ function gotImageResult(image, metadata, batchId) {
     let fname = src && src.includes('/') ? src.substring(src.lastIndexOf('/') + 1) : src;
     let batch_div = appendImage('current_image_batch', src, batchId, fname, metadata, 'batch');
     batch_div.addEventListener('click', () => clickImageInBatch(batch_div));
+    batch_div.addEventListener('contextmenu', (e) => rightClickImageInBatch(e, batch_div));
     if (!document.getElementById('current_image_img') || autoLoadImagesElem.checked) {
         setCurrentImage(src, metadata, batchId, false, true);
         if (getUserSetting('AutoSwapImagesIncludesFullView') && imageFullView.isOpen()) {
@@ -957,6 +978,7 @@ function gotImagePreview(image, metadata, batchId) {
     let batch_div = appendImage('current_image_batch', src, batchId, fname, metadata, 'batch', true);
     batch_div.querySelector('img').dataset.previewGrow = 'true';
     batch_div.addEventListener('click', () => clickImageInBatch(batch_div));
+    batch_div.addEventListener('contextmenu', (e) => rightClickImageInBatch(e, batch_div));
     if (showLoadSpinnersElem.checked) {
         let spinnerDiv = createDiv(null, "loading-spinner-parent", `<div class="loading-spinner"><div class="loadspin1"></div><div class="loadspin2"></div><div class="loadspin3"></div></div>`);
         batch_div.appendChild(spinnerDiv);
@@ -1446,7 +1468,7 @@ function reviseBackendFeatureSet() {
     doCompatFeature('stable-cascade-v1', 'cascade');
     doAnyArchFeature(['Flux.1-dev', 'hunyuan-video'], 'flux-dev');
     doCompatFeature('stable-diffusion-xl-v1', 'sdxl');
-    doAnyCompatFeature(['genmo-mochi-1', 'lightricks-ltx-video', 'hunyuan-video', 'nvidia-cosmos-1'], 'text2video');
+    doAnyCompatFeature(['genmo-mochi-1', 'lightricks-ltx-video', 'hunyuan-video', 'nvidia-cosmos-1', `wan-21`], 'text2video');
     for (let changer of featureSetChangers) {
         let [add, remove] = changer();
         addMe.push(...add);
@@ -1694,7 +1716,7 @@ function doFeatureInstaller(name, button_div_id, alt_confirm, callback = null, d
     if (!confirm(alt_confirm)) {
         return;
     }
-    let buttonDiv = document.getElementById(button_div_id);
+    let buttonDiv = button_div_id ? document.getElementById(button_div_id) : null;
     if (buttonDiv) {
         buttonDiv.querySelector('button').disabled = true;
         buttonDiv.appendChild(createDiv('', null, 'Installing...'));
@@ -1873,7 +1895,7 @@ function upvertAutoWebuiMetadataToSwarm(metadata) {
     // just a mishmash of text, and there's no way to necessarily predict newlines/colons/etc,
     // so just make best effort to import based on some easy examples
     if (metadata.includes("\nNegative prompt: ")) {
-        let parts = metadata.split("\nNegative prompt: ", 2);
+        let parts = splitWithTail(metadata, "\nNegative prompt: ", 2);
         realData['prompt'] = parts[0];
         let subSplit = parts[1].split("\n", 2);
         realData['negativeprompt'] = subSplit[0];

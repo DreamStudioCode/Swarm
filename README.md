@@ -4,7 +4,7 @@
 
 Formerly known as StableSwarmUI.
 
-A Modular AI Image Generation Web-User-Interface, with an emphasis on making powertools easily accessible, high performance, and extensibility. Supports Stable Diffusion, Flux, etc. AI image models, and AI video models (LTX-V, Hunyuan Video, Cosmos, etc.), with plans to support eg audio and more in the future.
+A Modular AI Image Generation Web-User-Interface, with an emphasis on making powertools easily accessible, high performance, and extensibility. Supports AI image models (Stable Diffusion, Flux, etc.), and AI video models (LTX-V, Hunyuan Video, Cosmos, Wan, etc.), with plans to support eg audio and more in the future.
 
 ![ui-screenshot](.github/images/swarmui.jpg)
 
@@ -28,7 +28,7 @@ Key feature targets not yet implemented:
 - LLM-assisted prompting (there's an extension for it, but LLM control should be natively supported)
 - convenient direct-distribution of Swarm as a program ([Tauri](https://tauri.app/), [Blazor Desktop](https://learn.microsoft.com/en-us/training/modules/build-blazor-hybrid/), or an Electron app?)
 
-# Try It On Google Colab or Runpod
+# Try It On Google Colab
 
 ### Google Colab
 
@@ -36,9 +36,15 @@ Key feature targets not yet implemented:
 
 Colab link if you want to try Swarm: https://colab.research.google.com/github/mcmonkeyprojects/SwarmUI/blob/master/colab/colab-notebook.ipynb
 
+# Run it on a Cloud GPU Provider
+
 ### Runpod
 
 Runpod template (note: maintained by third party contributor [nerdylive123](https://github.com/nerdylive123)): https://runpod.io/console/deploy?template=u7mlkrmxq3&ref=c6jd6jj0
+
+### Vast.ai
+
+Vast.ai template ([readme](https://cloud.vast.ai/template/readme/8e5e6ab1fceb9db3f813e815907b3390)): https://cloud.vast.ai?template_id=21b140f47ee8d4ebb2ce836afe2f9ad9
 
 Note it may take several minutes to start up the first time. Check the container logs to see setup progress. Check the template `?` info for hints on how to use.
 
@@ -46,7 +52,7 @@ Note it may take several minutes to start up the first time. Check the container
 
 Note: if you're on Windows 10, you may need to manually install [git](https://git-scm.com/download/win) and [DotNET 8 SDK](https://dotnet.microsoft.com/en-us/download/dotnet/8.0) first. (Windows 11 this is automated).
 
-- Download [The Install-Windows.bat file](https://github.com/mcmonkeyprojects/SwarmUI/releases/download/0.6.5-Beta/install-windows.bat), store it somewhere you want to install at (not `Program Files`), and run it.
+- Download [The Install-Windows.bat file](https://github.com/mcmonkeyprojects/SwarmUI/releases/download/0.9.5-Beta/install-windows.bat), store it somewhere you want to install at (not `Program Files`), and run it.
     - It should open a command prompt and install itself.
     - If it closes without going further, try running it again, it sometimes needs to run twice. (TODO: Fix that)
     - It will place an icon on your desktop that you can use to re-launch the server at any time.
@@ -108,10 +114,7 @@ Note: if you're on Windows 10, you may need to manually install [git](https://gi
 - Change the directory (`cd`) to the folder where you want to install SwarmUI.
 - Clone the SwarmUI GitHub repository: `git clone https://github.com/mcmonkeyprojects/SwarmUI`.
 - `cd SwarmUI` and run the installation script: `./launch-macos.sh`.
-
-The installation starts now and downloads the Stable Diffusion models from the internet. Depending on your internet connection, this may take several minutes. Wait for your web browser to open the SwarmUI window.
-
-> During the SwarmUI installation, you are prompted for the type of backend you want to use. For Mac computers with M1 or M2, you can safely choose the ComfyUI backend and choose the Stable Diffusion XL Base and Refiner models in the Download Models screen.
+- Wait for the web browser to open, and follow the install instructions on-page.
 
 # Installing With Docker
 

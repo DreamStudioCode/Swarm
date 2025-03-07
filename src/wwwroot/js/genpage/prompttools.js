@@ -48,6 +48,9 @@ class PromptTabCompleteClass {
         this.registerPrefix('object', 'Select a sub-region inside the image and inpaint over it with a different prompt', (prefix) => {
             return ['\nx,y,width,height eg "0.25,0.25,0.5,0.5"', '\nor x,y,width,height,strength,strength2 eg "0,0,1,1,0.5,0.4"', '\nwhere strength is how strongly to apply the prompt to the region (vs global prompt) on the general pass, and strength2 is how strongly to inpaint (ie InitImageCreativity).'];
         });
+        this.registerPrefix('extend', 'Use an Image2Video model to extend a video repeatedly', (prefix) => {
+            return ['\nInput is a frame count, also follow this tag with a prompt for the section.\nFor example, "<extend:81> the cat runs" to add an 81 frame clip of your cat running.\nSee also the "Video Extend" parameter group.'];
+        });
         this.registerPrefix('segment', 'Automatically segment an area by CLIP matcher and inpaint it (optionally with a unique prompt)', (prefix) => {
             let prefixLow = prefix.toLowerCase();
             if (prefixLow.startsWith('yolo-')) {
@@ -57,7 +60,7 @@ class PromptTabCompleteClass {
                     return this.getOrderedMatches(yolomodels.map(m => `yolo-${m}`), prefixLow);
                 }
             }
-            return ['\nSpecify before the ">" some text to match against in the image, like "<segment:face>".', '\nCan also do "<segment:text,creativity,threshold>" eg "face,0.6,0.5" where creativity is InitImageCreativity, and threshold is mask matching threshold for CLIP-Seg.', '\nYou can use a negative threshold value like "<segment:face,0.6,-0.5>" to invert the mask.', '\nYou may use the "yolo-" prefix to use a YOLOv8 seg model,', '\nor format "yolo-<model>-1" to get specifically the first result from a YOLOv8 match list.'];
+            return ['\nSpecify before the ">" some text to match against in the image, like "<segment:face>".', '\nCan also do "<segment:text,creativity,threshold>" eg "face,0.6,0.5" where creativity is InitImageCreativity, and threshold is mask matching threshold for CLIP-Seg.', '\nYou can use a negative threshold value like "<segment:face,0.6,-0.5>" to invert the mask.', '\nYou may use the "yolo-" prefix to use a YOLOv8 seg model,', '\nor format "yolo-<model>-1" to get specifically the first result from a YOLOv8 match list.', '\n Additionally, you can apply a class filter by appending "yolo-<model>:<class_ids>:" where <class_ids> is a comma-separated list of class IDs or names to filter the detection results.'];
         });
         this.registerPrefix('setvar[var_name]', 'Store text for reference later in the prompt', (prefix) => { 
             return ['\nSave the content of the tag into the named variable. eg "<setvar[colors]: red and blue>", then use like "<var:colors>"', '\nVariables can include the results of other tags. eg "<setvar[expression]: <random: smiling|frowning|crying>>"', '\nReference stored values later in the prompt with the <var:> tag'];
@@ -334,6 +337,8 @@ class PromptPlusButton {
             + makeTextInput(null, 'text_prompt_segment_textmatch', '', 'Text Match', '', '', 'normal', '', false, false, true)
             + makeGenericPopover('text_prompt_segment_yoloid', 'Prompt Syntax: Segment YOLO ID', 'Number', 'The ID of the match within the YOLO result to use.\nDefault of 0 means all matches.\nIf you set to 1, it will use the first match it finds (eg the first face in a group of faces).', '')
             + makeNumberInput(null, 'text_prompt_segment_yoloid', '', 'YOLO ID', '', 0, 0, 100, 1, 'big', false, true)
+            + makeGenericPopover('text_prompt_segment_classids', 'Prompt Syntax: Segment Class IDs', 'Text', "If using a YOLO model with multiple classes, optionally specify a comma-separated list of class IDs.\nClass IDs can be numeric (eg 0, 1, 2) or text labels.", '')
+            + makeTextInput(null, 'text_prompt_segment_classids', '', 'Class IDs', '', '', 'normal', 'Optional class IDs here...', false, false, true)
             + makeGenericPopover('text_prompt_segment_creativity', 'Prompt Syntax: Segment Creativity', 'Number', 'How creative the model should be when rebuilding this segment.\nAlso known as denoising strength.\n0 makes no changes, 1 completely replaces the area.', '')
             + makeSliderInput(null, 'text_prompt_segment_creativity', '', 'Creativity', '', 0.6, 0, 1, 0, 1, 0.05, false, false, true)
             + makeGenericPopover('text_prompt_segment_threshold', 'Prompt Syntax: Segment Threshold', 'Number', 'The limit that defines that "minimum match quality" for the model to consider this segment matched.\nAt 0 this will include too much, at 1 this will include too little or nothing.', '')
@@ -345,6 +350,7 @@ class PromptPlusButton {
         this.segmentModalModelSelect = getRequiredElementById('text_prompt_segment_model');
         this.segmentModalModelSelect.addEventListener('change', () => this.segmentModalProcessChanges());
         this.segmentModalTextMatch = getRequiredElementById('text_prompt_segment_textmatch');
+        this.segmentModalClassIds = getRequiredElementById('text_prompt_segment_classids');
         this.segmentModalYoloId = getRequiredElementById('text_prompt_segment_yoloid');
         this.segmentModalCreativity = getRequiredElementById('text_prompt_segment_creativity');
         this.segmentModalThreshold = getRequiredElementById('text_prompt_segment_threshold');
@@ -447,6 +453,8 @@ class PromptPlusButton {
         this.segmentModalCreativity.value = 0.6;
         this.segmentModalThreshold.value = 0.5;
         this.segmentModalTextMatch.value = '';
+        this.segmentModalYoloId.value = 0;
+        this.segmentModalClassIds.value = '';
         this.segmentModalInvertMask.checked = false;
         triggerChangeFor(this.segmentModalCreativity);
         triggerChangeFor(this.segmentModalThreshold);
@@ -456,6 +464,7 @@ class PromptPlusButton {
         if (this.segmentModalModelSelect.value == 'CLIP-Seg') {
             findParentOfClass(this.segmentModalTextMatch, 'auto-input').style.display = '';
             findParentOfClass(this.segmentModalYoloId, 'auto-input').style.display = 'none';
+            findParentOfClass(this.segmentModalClassIds, 'auto-input').style.display = 'none';
             let text = translate("Text to match against in the image");
             this.segmentModalTextMatch.placeholder = text;
             this.segmentModalTextMatch.title = text;
@@ -463,6 +472,7 @@ class PromptPlusButton {
         else {
             findParentOfClass(this.segmentModalTextMatch, 'auto-input').style.display = 'none';
             findParentOfClass(this.segmentModalYoloId, 'auto-input').style.display = '';
+            findParentOfClass(this.segmentModalClassIds, 'auto-input').style.display = '';
         }
     }
 
@@ -471,8 +481,14 @@ class PromptPlusButton {
         if (modelText == "CLIP-Seg") {
             modelText = this.segmentModalTextMatch.value.trim();
         }
-        else if (parseInt(this.segmentModalYoloId.value) > 0) {
-            modelText += `-${this.segmentModalYoloId.value}`;
+        else { // YOLO
+            if (parseInt(this.segmentModalYoloId.value) > 0) {
+                modelText += `-${this.segmentModalYoloId.value}`;
+            }
+            let classIds = this.segmentModalClassIds.value.trim();
+            if (classIds) {
+                modelText += `:${classIds}:`;
+            }
         }
         $('#text_prompt_segment_modal').modal('hide');
         this.applyNewSyntax(`<segment:${modelText},${this.segmentModalCreativity.value},${this.segmentModalInvertMask.checked ? '-' : ''}${this.segmentModalThreshold.value}> ${this.segmentModalMainText.value.trim()}`);

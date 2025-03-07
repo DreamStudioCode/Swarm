@@ -77,7 +77,7 @@ public class T2IParamInput
         input =>
         {
             // Special patch: if model is in a preset in the prompt, we want to apply that as early as possible to ensure the model router knows how to route correctly.
-            if (input.TryGet(T2IParamTypes.Prompt, out string prompt) && prompt.Contains("<preset:"))
+            if (!input.EarlyLoadDone && input.TryGet(T2IParamTypes.Prompt, out string prompt) && prompt.Contains("<preset:"))
             {
                 StringConversionHelper.QuickSimpleTagFiller(prompt, "<", ">", tag =>
                 {
@@ -483,6 +483,7 @@ public class T2IParamInput
                 return null;
             }
             preset.ApplyTo(context.Input);
+            context.Input.ApplySpecialLogic();
             if (preset.ParamMap.TryGetValue(param, out string prompt))
             {
                 return "\0preset:" + prompt;
@@ -608,6 +609,7 @@ public class T2IParamInput
         };
         PromptTagPostProcessors["object"] = PromptTagPostProcessors["segment"];
         PromptTagPostProcessors["region"] = PromptTagPostProcessors["segment"];
+        PromptTagPostProcessors["extend"] = PromptTagPostProcessors["segment"];
         PromptTagBasicProcessors["break"] = (data, context) =>
         {
             return "<break>";
@@ -711,6 +713,9 @@ public class T2IParamInput
 
     /// <summary>Dense local time with incrementer.</summary>
     public int RequestRefTime;
+    
+    /// <summary>If true, special early load has already ran.</summary>
+    public bool EarlyLoadDone = false;
 
     /// <summary>Arbitrary incrementer for sub-minute unique IDs.</summary>
     public static int UIDIncrementer = 0;
@@ -976,8 +981,10 @@ public class T2IParamInput
     /// <summary>Special utility to process prompt inputs before the request is executed (to parse wildcards, embeddings, etc).</summary>
     public void PreparsePromptLikes()
     {
-        ValuesInput["prompt"] = ProcessPromptLike(T2IParamTypes.Prompt);
-        ValuesInput["negativeprompt"] = ProcessPromptLike(T2IParamTypes.NegativePrompt);
+        PromptTagContext posContext = new() { Input = this, Param = T2IParamTypes.Prompt.Type.ID };
+        ValuesInput["prompt"] = ProcessPromptLike(T2IParamTypes.Prompt, posContext);
+        PromptTagContext negContext = new() { Input = this, Param = T2IParamTypes.Prompt.Type.ID, Variables = posContext.Variables };
+        ValuesInput["negativeprompt"] = ProcessPromptLike(T2IParamTypes.NegativePrompt, negContext);
     }
 
     /// <summary>Formats embeddings in a prompt string and returns the cleaned string.</summary>
@@ -1042,7 +1049,7 @@ public class T2IParamInput
     }
 
     /// <summary>Special utility to process prompt inputs before the request is executed (to parse wildcards, embeddings, etc).</summary>
-    public string ProcessPromptLike(T2IRegisteredParam<string> param)
+    public string ProcessPromptLike(T2IRegisteredParam<string> param, PromptTagContext context = null)
     {
         string val = Get(param);
         if (val is null)
@@ -1050,7 +1057,7 @@ public class T2IParamInput
             return "";
         }
         string fixedVal = val.Replace('\0', '\a').Replace("\a", "");
-        PromptTagContext context = new() { Input = this, Param = param.Type.ID };
+        context ??= new() { Input = this, Param = param.Type.ID };
         fixedVal = ProcessPromptLike(fixedVal, context, true);
         if (fixedVal != val && !ExtraMeta.ContainsKey($"original_{param.Type.ID}"))
         {
@@ -1094,9 +1101,9 @@ public class T2IParamInput
                                 cleanResult = cleanResult["preset:".Length..];
                                 if (cleanResult.Contains("{value}"))
                                 {
-                                    addBefore += cleanResult.Before("{value}");
+                                    addBefore += ProcessPromptLike(cleanResult.Before("{value}"), context, isMain);
                                 }
-                                addAfter += cleanResult.After("{value}");
+                                addAfter += ProcessPromptLike(cleanResult.After("{value}"), context, isMain);
                                 return "";
                             }
                         }
@@ -1254,14 +1261,22 @@ public class T2IParamInput
             ValuesInput.Remove(param.ID);
             return;
         }
+        Image imageFor(string val)
+        {
+            if (val.StartsWithFast("data:"))
+            {
+                return Image.FromDataString(val);
+            }
+            return new Image(val, Image.ImageType.IMAGE, "png");
+        }
         object obj = param.Type switch
         {
             T2IParamDataType.INTEGER => param.SharpType == typeof(long) ? long.Parse(val) : int.Parse(val),
             T2IParamDataType.DECIMAL => param.SharpType == typeof(double) ? double.Parse(val) : float.Parse(val),
             T2IParamDataType.BOOLEAN => bool.Parse(val),
             T2IParamDataType.TEXT or T2IParamDataType.DROPDOWN => val,
-            T2IParamDataType.IMAGE => new Image(val, Image.ImageType.IMAGE, "png"),
-            T2IParamDataType.IMAGE_LIST => val.Split('|').Select(v => new Image(v, Image.ImageType.IMAGE, "png")).ToList(),
+            T2IParamDataType.IMAGE => imageFor(val),
+            T2IParamDataType.IMAGE_LIST => val.Split('|').Select(v => imageFor(v)).ToList(),
             T2IParamDataType.MODEL => getModel(val),
             T2IParamDataType.LIST => val.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList(),
             _ => throw new NotImplementedException()
@@ -1286,7 +1301,7 @@ public class T2IParamInput
         ValuesInput[param.ID] = obj;
         if (param.FeatureFlag is not null)
         {
-            RequiredFlags.Add(param.FeatureFlag);
+            RequiredFlags.UnionWith(param.FeatureFlag.SplitFast(','));
         }
     }
 
@@ -1306,7 +1321,7 @@ public class T2IParamInput
         ValuesInput[param.Type.ID] = val;
         if (param.Type.FeatureFlag is not null)
         {
-            RequiredFlags.Add(param.Type.FeatureFlag);
+            RequiredFlags.UnionWith(param.Type.FeatureFlag.SplitFast(','));
         }
     }
     
@@ -1323,6 +1338,7 @@ public class T2IParamInput
         {
             handler(this);
         }
+        EarlyLoadDone = true;
     }
 
     /// <summary>Returns a simple text representation of the input data.</summary>

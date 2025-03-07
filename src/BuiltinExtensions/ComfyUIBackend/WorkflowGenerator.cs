@@ -34,13 +34,13 @@ public class WorkflowGenerator
     public HashSet<string> Features = [];
 
     /// <summary>Helper tracker for CLIP Models that are loaded (to skip a datadrive read from being reused every time).</summary>
-    public static HashSet<string> ClipModelsValid = [];
+    public static ConcurrentDictionary<string, string> ClipModelsValid = [];
 
     /// <summary>Helper tracker for Vision Models that are loaded (to skip a datadrive read from being reused every time).</summary>
-    public static HashSet<string> VisionModelsValid = [];
+    public static ConcurrentDictionary<string, string> VisionModelsValid = [];
 
     /// <summary>Helper tracker for IP Adapter Models that are loaded (to skip a datadrive read from being reused every time).</summary>
-    public static HashSet<string> IPAdapterModelsValid = [];
+    public static ConcurrentDictionary<string, string> IPAdapterModelsValid = [];
 
     /// <summary>Register a new step to the workflow generator.</summary>
     public static void AddStep(Action<WorkflowGenerator> step, double priority)
@@ -188,11 +188,32 @@ public class WorkflowGenerator
         return clazz is not null && clazz == "nvidia-sana-1600";
     }
 
+    /// <summary>Returns true if the current model is Alpha-VLLM's Lumina 2.</summary>
+    public bool IsLumina()
+    {
+        string clazz = CurrentCompatClass();
+        return clazz is not null && clazz == "lumina-2";
+    }
+
     /// <summary>Returns true if the current model is Hunyuan Video.</summary>
     public bool IsHunyuanVideo()
     {
         string clazz = CurrentCompatClass();
         return clazz is not null && clazz == "hunyuan-video";
+    }
+
+    /// <summary>Returns true if the current model is Hunyuan Video Image2Video.</summary>
+    public bool IsHunyuanVideoI2V()
+    {
+        string clazz = CurrentModelClass()?.ID;
+        return clazz is not null && clazz == "hunyuan-video-i2v";
+    }
+
+    /// <summary>Returns true if the current model is Hunyuan Video - Skyreels.</summary>
+    public bool IsHunyuanVideoSkyreels()
+    {
+        string clazz = CurrentModelClass()?.ID;
+        return clazz is not null && (clazz == "hunyuan-video-skyreels" || clazz == "hunyuan-video-skyreels-i2v");
     }
 
     /// <summary>Returns true if the current model is Hunyuan Video.</summary>
@@ -202,10 +223,17 @@ public class WorkflowGenerator
         return clazz is not null && clazz == "nvidia-cosmos-1";
     }
 
+    /// <summary>Returns true if the current model is any Wan-2.1 variant.</summary>
+    public bool IsWanVideo()
+    {
+        string clazz = CurrentCompatClass();
+        return clazz is not null && clazz.StartsWith("wan-21");
+    }
+
     /// <summary>Returns true if the current main text input model model is a Video model (as opposed to image).</summary>
     public bool IsVideoModel()
     {
-        return IsLTXV() || IsMochi() || IsHunyuanVideo() || IsNvidiaCosmos();
+        return IsLTXV() || IsMochi() || IsHunyuanVideo() || IsNvidiaCosmos() || IsWanVideo();
     }
 
     /// <summary>Gets a dynamic ID within a semi-stable registration set.</summary>
@@ -233,7 +261,14 @@ public class WorkflowGenerator
     /// <summary>Creates a new node with the given class type and input data, and optional manual ID.</summary>
     public string CreateNode(string classType, JObject input, string id = null)
     {
-        return CreateNode(classType, (_, n) => n["inputs"] = input, id);
+        string lookup = $"__generic_node__{classType}___{input}";
+        if (id is null && NodeHelpers.TryGetValue(lookup, out string existingNode))
+        {
+            return existingNode;
+        }
+        string result = CreateNode(classType, (_, n) => n["inputs"] = input, id);
+        NodeHelpers[lookup] = result;
+        return result;
     }
 
     /// <summary>Helper to download a core model file required by the workflow.</summary>
@@ -343,10 +378,31 @@ public class WorkflowGenerator
         string result;
         if (Features.Contains("comfy_loadimage_b64") && !RestrictCustomNodes)
         {
-            result = CreateNode("SwarmLoadImageB64", new JObject()
+            if (img.Type == Image.ImageType.IMAGE)
             {
-                ["image_base64"] = (resize ? img.Resize(UserInput.GetImageWidth(), UserInput.GetImageHeight()) : img).AsBase64
-            }, nodeId);
+                result = CreateNode("SwarmLoadImageB64", new JObject()
+                {
+                    ["image_base64"] = (resize ? img.Resize(UserInput.GetImageWidth(), UserInput.GetImageHeight()) : img).AsBase64
+                }, nodeId);
+            }
+            else
+            {
+                result = CreateNode("SwarmLoadImageB64", new JObject()
+                {
+                    ["image_base64"] = img.AsBase64
+                }, resize ? null : nodeId);
+                if (resize)
+                {
+                    result = CreateNode("ImageScale", new JObject()
+                    {
+                        ["image"] = new JArray() { result, 0 },
+                        ["width"] = UserInput.GetImageWidth(),
+                        ["height"] = UserInput.GetImageHeight(),
+                        ["upscale_method"] = "bilinear",
+                        ["crop"] = "disabled"
+                    }, nodeId);
+                }
+            }
         }
         else
         {
@@ -427,14 +483,14 @@ public class WorkflowGenerator
             });
             mask = [thresholded, 0];
         }
-        string composited = CreateNode("ImageCompositeMasked", new JObject()
+        string composited = CreateNode("SwarmImageCompositeMaskedColorCorrecting", new JObject()
         {
             ["destination"] = baseImage,
             ["source"] = newImage,
             ["mask"] = mask,
             ["x"] = 0,
             ["y"] = 0,
-            ["resize_source"] = false
+            ["correction_method"] = UserInput.Get(T2IParamTypes.ColorCorrectionBehavior, "None")
         });
         return [composited, 0];
     }
@@ -459,14 +515,14 @@ public class WorkflowGenerator
             });
             croppedMask = [thresholded, 0];
         }
-        string composited = CreateNode("ImageCompositeMasked", new JObject()
+        string composited = CreateNode("SwarmImageCompositeMaskedColorCorrecting", new JObject()
         {
             ["destination"] = firstImage,
             ["source"] = new JArray() { scaledBack, 0 },
             ["mask"] = croppedMask,
             ["x"] = new JArray() { boundsNode, 0 },
             ["y"] = new JArray() { boundsNode, 1 },
-            ["resize_source"] = false
+            ["correction_method"] = UserInput.Get(T2IParamTypes.ColorCorrectionBehavior, "None")
         });
         return [composited, 0];
     }
@@ -492,6 +548,22 @@ public class WorkflowGenerator
         return Workflow.ContainsKey(id);
     }
 
+    public int T2VFPSOverride = -1;
+
+    public int Text2VideoFPS()
+    {
+        if (T2VFPSOverride > 0)
+        {
+            return T2VFPSOverride;
+        }
+        int fpsDefault = 24;
+        if (IsWanVideo())
+        {
+            fpsDefault = 16;
+        }
+        return UserInput.Get(T2IParamTypes.Text2VideoFPS, fpsDefault);
+    }
+
     /// <summary>Creates a node to save an image output.</summary>
     public string CreateImageSaveNode(JArray image, string id = null)
     {
@@ -508,7 +580,7 @@ public class WorkflowGenerator
             return CreateNode("SwarmSaveAnimationWS", new JObject()
             {
                 ["images"] = image,
-                ["fps"] = UserInput.Get(T2IParamTypes.Text2VideoFPS, 24),
+                ["fps"] = Text2VideoFPS(),
                 ["lossless"] = false,
                 ["quality"] = 95,
                 ["method"] = "default",
@@ -545,33 +617,37 @@ public class WorkflowGenerator
             LoadingVAE = parts[4].Length == 0 ? null : [parts[4], int.Parse(parts[5])];
             return (model, LoadingModel, LoadingClip, LoadingVAE);
         }
-        void requireClipModel(string name, string url, string hash)
+        string requireClipModel(string name, string url, string hash, T2IRegisteredParam<T2IModel> param)
         {
-            if (ClipModelsValid.Contains(name))
+            if (param is not null && UserInput.TryGet(param, out T2IModel model))
             {
-                return;
+                return model.Name;
+            }
+            if (ClipModelsValid.ContainsKey(name))
+            {
+                return name;
+            }
+            if (Program.T2IModelSets["Clip"].Models.ContainsKey(name))
+            {
+                ClipModelsValid.TryAdd(name, name);
+                return name;
             }
             string filePath = Utilities.CombinePathWithAbsolute(Program.ServerSettings.Paths.ActualModelRoot, Program.ServerSettings.Paths.SDClipFolder.Split(';')[0], name);
             DownloadModel(name, filePath, url, hash);
-            ClipModelsValid.Add(name);
+            ClipModelsValid.TryAdd(name, name);
+            return name;
         }
         string getT5XXLModel()
         {
-            if (UserInput.TryGet(T2IParamTypes.T5XXLModel, out T2IModel model))
-            {
-                return model.Name;
-            }
-            requireClipModel("t5xxl_enconly.safetensors", "https://huggingface.co/mcmonkey/google_t5-v1_1-xxl_encoderonly/resolve/main/t5xxl_fp8_e4m3fn.safetensors", "7d330da4816157540d6bb7838bf63a0f02f573fc48ca4d8de34bb0cbfd514f09");
-            return "t5xxl_enconly.safetensors";
+            return requireClipModel("t5xxl_enconly.safetensors", "https://huggingface.co/mcmonkey/google_t5-v1_1-xxl_encoderonly/resolve/main/t5xxl_fp8_e4m3fn.safetensors", "7d330da4816157540d6bb7838bf63a0f02f573fc48ca4d8de34bb0cbfd514f09", T2IParamTypes.T5XXLModel);
         }
         string getOldT5XXLModel()
         {
-            if (UserInput.TryGet(T2IParamTypes.T5XXLModel, out T2IModel model))
-            {
-                return model.Name;
-            }
-            requireClipModel("old_t5xxl_cosmos.safetensors", "https://huggingface.co/comfyanonymous/cosmos_1.0_text_encoder_and_VAE_ComfyUI/resolve/main/text_encoders/oldt5_xxl_fp8_e4m3fn_scaled.safetensors", "1d0dd711ec9866173d4b39e86db3f45e1614a4e3f84919556f854f773352ea81");
-            return "old_t5xxl_cosmos.safetensors";
+            return requireClipModel("old_t5xxl_cosmos.safetensors", "https://huggingface.co/comfyanonymous/cosmos_1.0_text_encoder_and_VAE_ComfyUI/resolve/main/text_encoders/oldt5_xxl_fp8_e4m3fn_scaled.safetensors", "1d0dd711ec9866173d4b39e86db3f45e1614a4e3f84919556f854f773352ea81", T2IParamTypes.T5XXLModel);
+        }
+        string getUniMaxT5XXLModel()
+        {
+            return requireClipModel("umt5_xxl_fp8_e4m3fn_scaled.safetensors", "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors", "c3355d30191f1f066b26d93fba017ae9809dce6c627dda5f6a66eaa651204f68", T2IParamTypes.T5XXLModel);
         }
         string getClipLModel()
         {
@@ -583,8 +659,7 @@ public class WorkflowGenerator
             {
                 return "clip_l_sdxl_base.safetensors";
             }
-            requireClipModel("clip_l.safetensors", "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/text_encoder/model.fp16.safetensors", "660c6f5b1abae9dc498ac2d21e1347d2abdb0cf6c0c0c8576cd796491d9a6cdd");
-            return "clip_l.safetensors";
+            return requireClipModel("clip_l.safetensors", "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/text_encoder/model.fp16.safetensors", "660c6f5b1abae9dc498ac2d21e1347d2abdb0cf6c0c0c8576cd796491d9a6cdd", T2IParamTypes.ClipLModel);
         }
         string getClipGModel()
         {
@@ -596,22 +671,16 @@ public class WorkflowGenerator
             {
                 return "clip_g_sdxl_base.safetensors";
             }
-            requireClipModel("clip_g.safetensors", "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/text_encoder_2/model.fp16.safetensors", "ec310df2af79c318e24d20511b601a591ca8cd4f1fce1d8dff822a356bcdb1f4");
-            return "clip_g.safetensors";
+            return requireClipModel("clip_g.safetensors", "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/text_encoder_2/model.fp16.safetensors", "ec310df2af79c318e24d20511b601a591ca8cd4f1fce1d8dff822a356bcdb1f4", T2IParamTypes.ClipGModel);
         }
         string getLlava3Model()
         {
-            if (UserInput.TryGet(T2IParamTypes.LLaVAModel, out T2IModel model))
-            {
-                return model.Name;
-            }
-            if (Program.T2IModelSets["Clip"].Models.ContainsKey("llava_llama3_fp8_scaled.safetensors"))
-            {
-                return "llava_llama3_fp8_scaled.safetensors";
-            }
-            // TODO: is a selector param needed?
-            requireClipModel("llava_llama3_fp8_scaled.safetensors", "https://huggingface.co/Comfy-Org/HunyuanVideo_repackaged/resolve/main/split_files/text_encoders/llava_llama3_fp8_scaled.safetensors", "2f0c3ad255c282cead3f078753af37d19099cafcfc8265bbbd511f133e7af250");
-            return "llava_llama3_fp8_scaled.safetensors";
+            return requireClipModel("llava_llama3_fp8_scaled.safetensors", "https://huggingface.co/Comfy-Org/HunyuanVideo_repackaged/resolve/main/split_files/text_encoders/llava_llama3_fp8_scaled.safetensors", "2f0c3ad255c282cead3f078753af37d19099cafcfc8265bbbd511f133e7af250", T2IParamTypes.LLaVAModel);
+        }
+        string getGemma2Model()
+        {
+            // TODO: Selector param?
+            return requireClipModel("gemma_2_2b_fp16.safetensors", "https://huggingface.co/Comfy-Org/Lumina_Image_2.0_Repackaged/resolve/main/split_files/text_encoders/gemma_2_2b_fp16.safetensors", "29761442862f8d064d3f854bb6fabf4379dcff511a7f6ba9405a00bd0f7e2dbd", null);
         }
         IsDifferentialDiffusion = false;
         LoadingModelType = type;
@@ -638,9 +707,12 @@ public class WorkflowGenerator
                 {
                     throw new SwarmUserErrorException("No default VAE for this model found, please download its VAE and set it as default in User Settings");
                 }
-                CommonModels.Known[knownName].DownloadNow().Wait();
-                Program.RefreshAllModelSets();
                 vaeFile = CommonModels.Known[knownName].FileName;
+                if (!Program.T2IModelSets["VAE"].Models.ContainsKey(vaeFile))
+                {
+                    CommonModels.Known[knownName].DownloadNow().Wait();
+                    Program.RefreshAllModelSets();
+                }
             }
             LoadingVAE = CreateVAELoader(vaeFile, nodeId);
         }
@@ -715,7 +787,7 @@ public class WorkflowGenerator
                     if (!RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
                     {
                         dtype = "fp8_e4m3fn";
-                        if (Utilities.PresumeNVidia40xx && Program.ServerSettings.Performance.AllowGpuSpecificOptimizations)
+                        if (Utilities.PresumeNVidia30xx && Program.ServerSettings.Performance.AllowGpuSpecificOptimizations)
                         {
                             dtype = "fp8_e4m3fn_fast";
                         }
@@ -779,6 +851,11 @@ public class WorkflowGenerator
             LoadingModel = [modelNode, 0];
             LoadingClip = [modelNode, 1];
             LoadingVAE = [modelNode, 2];
+            if (IsFlux() && (model.Metadata?.TextEncoders ?? "") == "")
+            {
+                LoadingClip = null;
+                LoadingVAE = null;
+            }
         }
         string predType = model.Metadata?.PredictionType;
         if (IsSD3())
@@ -926,6 +1003,16 @@ public class WorkflowGenerator
             LoadingClip = [clipLoader, 0];
             doVaeLoader(null, "nvidia-cosmos-1", "cosmos-vae");
         }
+        else if (IsWanVideo())
+        {
+            string clipLoader = CreateNode("CLIPLoader", new JObject()
+            {
+                ["clip_name"] = getUniMaxT5XXLModel(),
+                ["type"] = "wan"
+            });
+            LoadingClip = [clipLoader, 0];
+            doVaeLoader(null, "wan-21", "wan21-vae");
+        }
         else if (CurrentCompatClass() == "auraflow-v1")
         {
             string auraNode = CreateNode("ModelSamplingAuraFlow", new JObject()
@@ -934,6 +1021,28 @@ public class WorkflowGenerator
                 ["shift"] = UserInput.Get(T2IParamTypes.SigmaShift, 1.73)
             });
             LoadingModel = [auraNode, 0];
+        }
+        else if (IsLumina())
+        {
+            string samplingNode = CreateNode("ModelSamplingAuraFlow", new JObject()
+            {
+                ["model"] = LoadingModel,
+                ["shift"] = UserInput.Get(T2IParamTypes.SigmaShift, 6)
+            });
+            LoadingModel = [samplingNode, 0];
+            if (LoadingClip is null)
+            {
+                string dualClipLoader = CreateNode("CLIPLoader", new JObject()
+                {
+                    ["clip_name"] = getGemma2Model(),
+                    ["type"] = "lumina2"
+                });
+                LoadingClip = [dualClipLoader, 0];
+            }
+            if (LoadingVAE is null)
+            {
+                doVaeLoader(UserInput.SourceSession?.User?.Settings?.VAEs?.DefaultFluxVAE, "flux-1", "flux-ae");
+            }
         }
         else if (!string.IsNullOrWhiteSpace(predType))
         {
@@ -949,7 +1058,7 @@ public class WorkflowGenerator
         {
             if (IsFlux())
             {
-                string fluxNode = CreateNode("ModelSamplingFlux", new JObject()
+                string samplingNode = CreateNode("ModelSamplingFlux", new JObject()
                 {
                     ["model"] = LoadingModel,
                     ["width"] = UserInput.GetImageWidth(),
@@ -957,16 +1066,16 @@ public class WorkflowGenerator
                     ["max_shift"] = shiftVal,
                     ["base_shift"] = 0.5 // TODO: Does this need an input?
                 });
-                LoadingModel = [fluxNode, 0];
+                LoadingModel = [samplingNode, 0];
             }
-            else if (IsHunyuanVideo())
+            else if (IsHunyuanVideo() || IsWanVideo())
             {
-                string fluxNode = CreateNode("ModelSamplingSD3", new JObject()
+                string samplingNode = CreateNode("ModelSamplingSD3", new JObject()
                 {
                     ["model"] = LoadingModel,
                     ["shift"] = shiftVal
                 });
-                LoadingModel = [fluxNode, 0];
+                LoadingModel = [samplingNode, 0];
             }
         }
         foreach (WorkflowGenStep step in ModelGenSteps)
@@ -1010,7 +1119,7 @@ public class WorkflowGenerator
                 ["vae_name"] = vaeFixed
             }, id);
         }
-        NodeHelpers[$"vaeloader-{vae}"] = vaeLoader;
+        NodeHelpers[$"vaeloader-{vaeFixed}"] = vaeLoader;
         return [vaeLoader, 0];
     }
 
@@ -1062,7 +1171,7 @@ public class WorkflowGenerator
     {
         if (IsVideoModel())
         {
-            previews ??= UserInput.Get(ComfyUIBackendExtension.Text2VideoPreviewType, "animate");
+            previews ??= UserInput.Get(ComfyUIBackendExtension.VideoPreviewType, "animate");
         }
         if (IsLTXV())
         {
@@ -1079,7 +1188,7 @@ public class WorkflowGenerator
             }
             defscheduler ??= "ltxv";
         }
-        if (IsNvidiaCosmos())
+        else if (IsNvidiaCosmos())
         {
             if (!hadSpecialCond)
             {
@@ -1094,6 +1203,10 @@ public class WorkflowGenerator
             }
             defsampler ??= "res_multistep";
             defscheduler ??= "karras";
+        }
+        else if (IsWanVideo())
+        {
+            defscheduler ??= "simple";
         }
         bool willCascadeFix = false;
         JArray cascadeModel = null;
@@ -1414,13 +1527,17 @@ public class WorkflowGenerator
                 ["width"] = width
             }, id);
         }
-        else if (IsHunyuanVideo())
+        else if (IsHunyuanVideo() || IsWanVideo())
         {
-
+            int frames = 73;
+            if (IsWanVideo())
+            {
+                frames = 81;
+            }
             return CreateNode("EmptyHunyuanLatentVideo", new JObject()
             {
                 ["batch_size"] = batchSize,
-                ["length"] = UserInput.Get(T2IParamTypes.Text2VideoFrames, 73),
+                ["length"] = UserInput.Get(T2IParamTypes.Text2VideoFrames, frames),
                 ["height"] = height,
                 ["width"] = width
             }, id);
@@ -1491,6 +1608,353 @@ public class WorkflowGenerator
         });
         FinalModel = [diffNode, 0];
     }
+    public void RequireVisionModel(string name, string url, string hash)
+    {
+        if (VisionModelsValid.ContainsKey(name))
+        {
+            return;
+        }
+        string filePath = Utilities.CombinePathWithAbsolute(Program.ServerSettings.Paths.ActualModelRoot, Program.ServerSettings.Paths.SDClipVisionFolder.Split(';')[0], name);
+        DownloadModel(name, filePath, url, hash);
+        VisionModelsValid.TryAdd(name, name);
+    }
+
+    /// <summary>Do a video frame interpolation.</summary>
+    public JArray DoInterpolation(JArray imageIn, string method, double mult)
+    {
+        if (method == "RIFE")
+        {
+            string rife = CreateNode("RIFE VFI", new JObject()
+            {
+                ["frames"] = imageIn,
+                ["multiplier"] = mult,
+                ["ckpt_name"] = "rife47.pth",
+                ["clear_cache_after_n_frames"] = 10,
+                ["fast_mode"] = true,
+                ["ensemble"] = true,
+                ["scale_factor"] = 1
+            });
+            return [rife, 0];
+        }
+        else if (method == "FILM")
+        {
+            string film = CreateNode("FILM VFI", new JObject()
+            {
+                ["frames"] = imageIn,
+                ["multiplier"] = mult,
+                ["ckpt_name"] = "film_net_fp32.pt",
+                ["clear_cache_after_n_frames"] = 10
+            });
+            return [film, 0];
+        }
+        else if (method == "GIMM-VFI")
+        {
+            string modelLoader = CreateNode("DownloadAndLoadGIMMVFIModel", new JObject()
+            {
+                ["model"] = "gimmvfi_f_arb_lpips_fp32.safetensors"
+            });
+            string gimm = CreateNode("GIMMVFI_interpolate", new JObject()
+            {
+                ["gimmvfi_model"] = new JArray() { modelLoader, 0 },
+                ["images"] = imageIn,
+                ["multiplier"] = mult,
+                ["ds_factor"] = 1,
+                ["interpolation_factor"] = mult,
+                ["seed"] = 1
+            });
+            return [gimm, 0];
+        }
+        return imageIn;
+    }
+
+    /// <summary>Creates the execution logic for an Image-To-Video model.</summary>
+    public void CreateImageToVideo(T2IModel vidModel, ref int? frames, double? videoCfg, ref int? videoFps, JToken width, JToken height, string prompt, string negPrompt, int steps, long seed, Func<JArray, JArray, (JArray, int)> altLatent = null, int batchInd = -1, int batchLen = -1)
+    {
+        bool hadSpecialCond = false;
+        string defSampler = null, defScheduler = null;
+        double defCfg = 7;
+        string scaled = CreateNode("ImageScale", new JObject()
+        {
+            ["image"] = FinalImageOut,
+            ["width"] = width,
+            ["height"] = height,
+            ["upscale_method"] = "bilinear",
+            ["crop"] = "disabled"
+        });
+        FinalImageOut = [scaled, 0];
+        JArray posCond, negCond, latent, model, vae;
+        if (vidModel.ModelClass?.CompatClass == "lightricks-ltx-video")
+        {
+            videoFps ??= 24;
+            frames ??= 97;
+            FinalLoadedModel = vidModel;
+            (vidModel, model, JArray clip, vae) = CreateStandardModelLoader(vidModel, "image2video", null, true);
+            posCond = CreateConditioning(prompt, clip, vidModel, true);
+            negCond = CreateConditioning(negPrompt, clip, vidModel, false);
+            string condNode = CreateNode("LTXVImgToVideo", new JObject()
+            {
+                ["positive"] = posCond,
+                ["negative"] = negCond,
+                ["vae"] = vae,
+                ["image"] = FinalImageOut,
+                ["width"] = width,
+                ["height"] = height,
+                ["length"] = frames,
+                ["batch_size"] = 1,
+                ["image_noise_scale"] = UserInput.Get(T2IParamTypes.VideoAugmentationLevel, 0.15)
+            });
+            defCfg = 3;
+            posCond = [condNode, 0];
+            negCond = [condNode, 1];
+            latent = [condNode, 2];
+            string ltxvcond = CreateNode("LTXVConditioning", new JObject()
+            {
+                ["positive"] = posCond,
+                ["negative"] = negCond,
+                ["frame_rate"] = videoFps
+            });
+            posCond = [ltxvcond, 0];
+            negCond = [ltxvcond, 1];
+            hadSpecialCond = true;
+            defSampler = "euler";
+            defScheduler = "ltxv-image";
+        }
+        else if (vidModel.ModelClass?.CompatClass == "nvidia-cosmos-1")
+        {
+            videoFps ??= 24;
+            frames ??= 121;
+            FinalLoadedModel = vidModel;
+            (vidModel, model, JArray clip, vae) = CreateStandardModelLoader(vidModel, "image2video", null, true);
+            posCond = CreateConditioning(prompt, clip, vidModel, true);
+            negCond = CreateConditioning(negPrompt, clip, vidModel, false);
+            string latentNode = CreateNode("CosmosImageToVideoLatent", new JObject()
+            {
+                ["vae"] = vae,
+                ["start_image"] = FinalImageOut,
+                ["width"] = width,
+                ["height"] = height,
+                ["length"] = frames,
+                ["batch_size"] = 1
+            });
+            string ltxvcond = CreateNode("LTXVConditioning", new JObject() // (Despite the name, this is just setting the framerate)
+            {
+                ["positive"] = posCond,
+                ["negative"] = negCond,
+                ["frame_rate"] = videoFps
+            });
+            posCond = [ltxvcond, 0];
+            negCond = [ltxvcond, 1];
+            defCfg = 7;
+            latent = [latentNode, 0];
+            defSampler = "res_multistep";
+            defScheduler = "karras";
+        }
+        else if (vidModel.ModelClass?.ID == "hunyuan-video-i2v")
+        {
+            videoFps ??= 24;
+            frames ??= 53;
+            FinalLoadedModel = vidModel;
+            (vidModel, model, JArray clip, vae) = CreateStandardModelLoader(vidModel, "image2video", null, true);
+            posCond = CreateConditioning($"<image:{FinalImageOut[0]},{FinalImageOut[1]}>{prompt}", clip, vidModel, true);
+            negCond = CreateConditioning(negPrompt, clip, vidModel, false);
+            string i2vnode = CreateNode("HunyuanImageToVideo", new JObject()
+            {
+                ["positive"] = posCond,
+                ["vae"] = vae,
+                ["width"] = width,
+                ["height"] = height,
+                ["length"] = frames,
+                ["batch_size"] = 1,
+                ["start_image"] = FinalImageOut
+            });
+            posCond = [i2vnode, 0];
+            defCfg = 1;
+            latent = [i2vnode, 1];
+            defSampler = "euler";
+            defScheduler = "simple";
+        }
+        else if (vidModel.ModelClass?.CompatClass == "hunyuan-video") // skyreels
+        {
+            videoFps ??= 24;
+            frames ??= 73;
+            FinalLoadedModel = vidModel;
+            (vidModel, model, JArray clip, vae) = CreateStandardModelLoader(vidModel, "image2video", null, true);
+            posCond = CreateConditioning(prompt, clip, vidModel, true);
+            negCond = CreateConditioning(negPrompt, clip, vidModel, false);
+            string latentNode = CreateNode("EmptyHunyuanLatentVideo", new JObject()
+            {
+                ["width"] = width,
+                ["height"] = height,
+                ["length"] = frames,
+                ["batch_size"] = 1
+            });
+            string ip2pNode = CreateNode("InstructPixToPixConditioning", new JObject()
+            {
+                ["positive"] = posCond,
+                ["negative"] = negCond,
+                ["vae"] = vae,
+                ["pixels"] = FinalImageOut
+            });
+            posCond = [ip2pNode, 0];
+            negCond = [ip2pNode, 1];
+            defCfg = 6;
+            latent = [latentNode, 0];
+            defSampler = "dpmpp_2m";
+            defScheduler = "beta";
+        }
+        else if (vidModel.ModelClass?.CompatClass == "wan-21-14b")
+        {
+            videoFps ??= 16;
+            frames ??= 81;
+            FinalLoadedModel = vidModel;
+            (vidModel, model, JArray clip, vae) = CreateStandardModelLoader(vidModel, "image2video", null, true);
+            posCond = CreateConditioning(prompt, clip, vidModel, true);
+            negCond = CreateConditioning(negPrompt, clip, vidModel, false);
+            string targetName = "clip_vision_h.safetensors";
+            RequireVisionModel(targetName, "https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/resolve/main/split_files/clip_vision/clip_vision_h.safetensors", "64a7ef761bfccbadbaa3da77366aac4185a6c58fa5de5f589b42a65bcc21f161");
+            string clipLoader = CreateNode("CLIPVisionLoader", new JObject()
+            {
+                ["clip_name"] = targetName
+            });
+            JArray imageIn = FinalImageOut;
+            if (batchInd != -1 && batchLen != -1)
+            {
+                string fromBatch = CreateNode("ImageFromBatch", new JObject()
+                {
+                    ["image"] = imageIn,
+                    ["batch_index"] = batchInd,
+                    ["length"] = batchLen
+                });
+                imageIn = [fromBatch, 0];
+            }
+            JArray encodeIn = imageIn;
+            if (batchLen > 1)
+            {
+                string fromBatch = CreateNode("ImageFromBatch", new JObject()
+                {
+                    ["image"] = imageIn,
+                    ["batch_index"] = batchInd,
+                    ["length"] = 1
+                });
+                encodeIn = [fromBatch, 0];
+            }
+            string encoded = CreateNode("CLIPVisionEncode", new JObject()
+            {
+                ["clip_vision"] = new JArray() { clipLoader, 0 },
+                ["image"] = encodeIn,
+                ["crop"] = "center"
+            });
+            string img2vidNode = CreateNode("WanImageToVideo", new JObject()
+            {
+                ["width"] = width,
+                ["height"] = height,
+                ["length"] = frames,
+                ["positive"] = posCond,
+                ["negative"] = negCond,
+                ["vae"] = vae,
+                ["start_image"] = imageIn,
+                ["clip_vision_output"] = new JArray() { encoded, 0 },
+                ["batch_size"] = 1
+            });
+            posCond = [img2vidNode, 0];
+            negCond = [img2vidNode, 1];
+            defCfg = 6;
+            latent = [img2vidNode, 2];
+            defSampler = "euler";
+            defScheduler = "simple";
+        }
+        else
+        {
+            videoFps ??= 6; // SVD
+            frames ??= 25;
+            defCfg = 2.5;
+            defSampler = "dpmpp_2m_sde_gpu";
+            defScheduler = "karras";
+            JArray clipVision;
+            if (vidModel.ModelClass?.ID.EndsWith("/tensorrt") ?? false)
+            {
+                string trtloader = CreateNode("TensorRTLoader", new JObject()
+                {
+                    ["unet_name"] = vidModel.ToString(ModelFolderFormat),
+                    ["model_type"] = "svd"
+                });
+                model = [trtloader, 0];
+                string fname = "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors";
+                RequireVisionModel(fname, "https://huggingface.co/h94/IP-Adapter/resolve/main/models/image_encoder/model.safetensors", "6ca9667da1ca9e0b0f75e46bb030f7e011f44f86cbfb8d5a36590fcd7507b030");
+                string cliploader = CreateNode("CLIPVisionLoader", new JObject()
+                {
+                    ["clip_name"] = fname
+                });
+                clipVision = [cliploader, 0];
+                string svdVae = UserInput.SourceSession?.User?.Settings?.VAEs?.DefaultSVDVAE;
+                if (string.IsNullOrWhiteSpace(svdVae))
+                {
+                    svdVae = Program.T2IModelSets["VAE"].Models.Keys.FirstOrDefault(m => m.ToLowerFast().Contains("sdxl"));
+                }
+                if (string.IsNullOrWhiteSpace(svdVae))
+                {
+                    throw new SwarmUserErrorException("No default SVD VAE found, please download an SVD VAE (any SDv1 VAE will do) and set it as default in User Settings");
+                }
+                vae = CreateVAELoader(svdVae, HasNode("11") ? null : "11");
+            }
+            else
+            {
+                string loader = CreateNode("ImageOnlyCheckpointLoader", new JObject()
+                {
+                    ["ckpt_name"] = vidModel.ToString()
+                });
+                model = [loader, 0];
+                clipVision = [loader, 1];
+                vae = [loader, 2];
+            }
+            double minCfg = UserInput.Get(T2IParamTypes.VideoMinCFG, 1);
+            if (minCfg >= 0)
+            {
+                string cfgGuided = CreateNode("VideoLinearCFGGuidance", new JObject()
+                {
+                    ["model"] = model,
+                    ["min_cfg"] = minCfg
+                });
+                model = [cfgGuided, 0];
+            }
+            string conditioning = CreateNode("SVD_img2vid_Conditioning", new JObject()
+            {
+                ["clip_vision"] = clipVision,
+                ["init_image"] = FinalImageOut,
+                ["vae"] = vae,
+                ["width"] = width,
+                ["height"] = height,
+                ["video_frames"] = frames,
+                ["motion_bucket_id"] = UserInput.Get(T2IParamTypes.VideoMotionBucket, 127),
+                ["fps"] = videoFps,
+                ["augmentation_level"] = UserInput.Get(T2IParamTypes.VideoAugmentationLevel, 0)
+            });
+            posCond = [conditioning, 0];
+            negCond = [conditioning, 1];
+            latent = [conditioning, 2];
+        }
+        int startStep = 0;
+        if (altLatent is not null)
+        {
+            (latent, startStep) = altLatent(vae, latent);
+        }
+        videoCfg ??= defCfg;
+        string previewType = UserInput.Get(ComfyUIBackendExtension.VideoPreviewType, "animate");
+        string samplered = CreateKSampler(model, posCond, negCond, latent, videoCfg.Value, steps, startStep, 10000, seed, false, true, sigmin: 0.002, sigmax: 1000, previews: previewType, defsampler: defSampler, defscheduler: defScheduler, hadSpecialCond: hadSpecialCond);
+        FinalLatentImage = [samplered, 0];
+        string decoded = CreateVAEDecode(vae, FinalLatentImage);
+        FinalImageOut = [decoded, 0];
+        if (UserInput.TryGet(T2IParamTypes.TrimVideoStartFrames, out _) || UserInput.TryGet(T2IParamTypes.TrimVideoEndFrames, out _))
+        {
+            string trimNode = CreateNode("SwarmTrimFrames", new JObject()
+            {
+                ["image"] = FinalImageOut,
+                ["trim_start"] = UserInput.Get(T2IParamTypes.TrimVideoStartFrames, 0),
+                ["trim_end"] = UserInput.Get(T2IParamTypes.TrimVideoEndFrames, 0)
+            });
+            FinalImageOut = [trimNode, 0];
+        }
+    }
 
     /// <summary>Creates an image preprocessor node.</summary>
     public JArray CreatePreprocessor(string preprocessor, JArray imageNode)
@@ -1498,7 +1962,7 @@ public class WorkflowGenerator
         JToken objectData = ComfyUIBackendExtension.ControlNetPreprocessors[preprocessor] ?? throw new SwarmUserErrorException($"ComfyUI backend does not have a preprocessor named '{preprocessor}'");
         if (objectData is JObject objObj && objObj.TryGetValue("swarm_custom", out JToken swarmCustomTok) && swarmCustomTok.Value<bool>())
         {
-            return  CreateNodesFromSpecialSyntax(objObj, [imageNode]);
+            return CreateNodesFromSpecialSyntax(objObj, [imageNode]);
         }
         string preProcNode = CreateNode(preprocessor, (_, n) =>
         {
@@ -1632,12 +2096,23 @@ public class WorkflowGenerator
     /// <summary>Creates a "CLIPTextEncode" or equivalent node for the given input.</summary>
     public JArray CreateConditioningDirect(string prompt, JArray clip, T2IModel model, bool isPositive, string id = null)
     {
+        string trackerId = $"__cond_direct____{clip[0]}_{clip[1]}_{isPositive}____{prompt}";
+        if (id is null && NodeHelpers.TryGetValue(trackerId, out string nodeId))
+        {
+            return [nodeId, 0];
+        }
         string node;
         double mult = isPositive ? 1.5 : 0.8;
         int width = UserInput.GetImageWidth();
         int height = UserInput.GetImageHeight();
         bool enhance = UserInput.Get(T2IParamTypes.ModelSpecificEnhancements, true);
         bool needsAdvancedEncode = (prompt.Contains('[') && prompt.Contains(']')) || prompt.Contains("<break>");
+        double defaultGuidance = -1;
+        if (IsHunyuanVideoSkyreels())
+        {
+            defaultGuidance = 1;
+        }
+        bool wantsSwarmCustom = Features.Contains("variation_seed") && (needsAdvancedEncode || (UserInput.TryGet(T2IParamTypes.FluxGuidanceScale, out _) && HasFluxGuidance()) || IsHunyuanVideoSkyreels());
         if (IsSana())
         {
             node = CreateNode("SanaTextEncode", new JObject()
@@ -1646,7 +2121,49 @@ public class WorkflowGenerator
                 ["text"] = prompt
             }, id);
         }
-        else if (Features.Contains("variation_seed") && needsAdvancedEncode || (UserInput.TryGet(T2IParamTypes.FluxGuidanceScale, out _) && HasFluxGuidance()))
+        else if (IsHunyuanVideoI2V() && prompt.StartsWith("<image:"))
+        {
+            (string prefix, string content) = prompt.BeforeAndAfter('>');
+            (string imgNodeId, string imgNodePart) = prefix.After(':').BeforeAndAfter(',');
+            string targetName = "llava_llama3_vision.safetensors";
+            RequireVisionModel(targetName, "https://huggingface.co/Comfy-Org/HunyuanVideo_repackaged/resolve/main/split_files/clip_vision/llava_llama3_vision.safetensors", "7d0f89bf7860815f3a994b9bdae8ebe3a29c161825d03ca9262cb13b0c973aa6");
+            string clipLoader = CreateNode("CLIPVisionLoader", new JObject()
+            {
+                ["clip_name"] = targetName
+            });
+            string encoded = CreateNode("CLIPVisionEncode", new JObject()
+            {
+                ["clip_vision"] = new JArray() { clipLoader, 0 },
+                ["image"] = new JArray() { imgNodeId, int.Parse(imgNodePart) },
+                ["crop"] = "center"
+            });
+            if (wantsSwarmCustom)
+            {
+                node = CreateNode("SwarmClipTextEncodeAdvanced", new JObject()
+                {
+                    ["clip"] = clip,
+                    ["steps"] = UserInput.Get(T2IParamTypes.Steps),
+                    ["prompt"] = content,
+                    ["width"] = enhance ? (int)Utilities.RoundToPrecision(width * mult, 64) : width,
+                    ["height"] = enhance ? (int)Utilities.RoundToPrecision(height * mult, 64) : height,
+                    ["target_width"] = width,
+                    ["target_height"] = height,
+                    ["guidance"] = UserInput.Get(T2IParamTypes.FluxGuidanceScale, defaultGuidance),
+                    ["clip_vision_output"] = new JArray() { encoded, 0 },
+                    ["llama_template"] = "hunyuan_image"
+                }, id);
+            }
+            else
+            {
+                node = CreateNode("TextEncodeHunyuanVideo_ImageToVideo", new JObject()
+                {
+                    ["clip"] = clip,
+                    ["clip_vision_output"] = new JArray() { encoded, 0 },
+                    ["prompt"] = content
+                }, id);
+            }
+        }
+        else if (wantsSwarmCustom)
         {
             node = CreateNode("SwarmClipTextEncodeAdvanced", new JObject()
             {
@@ -1657,7 +2174,7 @@ public class WorkflowGenerator
                 ["height"] = enhance ? (int)Utilities.RoundToPrecision(height * mult, 64) : height,
                 ["target_width"] = width,
                 ["target_height"] = height,
-                ["guidance"] = UserInput.Get(T2IParamTypes.FluxGuidanceScale, -1)
+                ["guidance"] = UserInput.Get(T2IParamTypes.FluxGuidanceScale, defaultGuidance)
             }, id);
         }
         else if (model is not null && model.ModelClass is not null && model.ModelClass.ID == "stable-diffusion-xl-v1-base")
@@ -1683,6 +2200,7 @@ public class WorkflowGenerator
                 ["text"] = prompt
             }, id);
         }
+        NodeHelpers[trackerId] = node;
         return [node, 0];
     }
 
@@ -1871,12 +2389,18 @@ public class WorkflowGenerator
         return new(finalCond, 0);
     }
 
+    /// <summary>Returns an array of all nodes currently in the workflow with a given class_type.</summary>
+    public JProperty[] NodesOfClass(string classType)
+    {
+        return Workflow.Properties().Where(p => $"{p.Value["class_type"]}" == classType).ToArray();
+    }
+
     /// <summary>Runs an action against all nodes of a given class_type.</summary>
     /// <param name="classType">The class_type to target.</param>
     /// <param name="action">The action(NodeID, JObject Data) to run against the node.</param>
     public void RunOnNodesOfClass(string classType, Action<string, JObject> action)
     {
-        foreach (JProperty property in Workflow.Properties().Where(p => $"{p.Value["class_type"]}" == classType).ToArray())
+        foreach (JProperty property in NodesOfClass(classType))
         {
             action(property.Name, property.Value as JObject);
         }
@@ -1897,5 +2421,40 @@ public class WorkflowGenerator
                 }
             }
         }
+    }
+
+    public HashSet<string> UsedInputs = null;
+
+    /// <summary>Returns true if the node is connected to anything, or false if it has no outbound connections.</summary>
+    public bool NodeIsConnectedAnywhere(string nodeId)
+    {
+        if (UsedInputs is null)
+        {
+            UsedInputs = [];
+            foreach (JObject node in Workflow.Values().Cast<JObject>())
+            {
+                JObject inputs = node["inputs"] as JObject;
+                foreach (JProperty property in inputs.Properties().ToArray())
+                {
+                    if (property.Value is JArray jarr && jarr.Count == 2)
+                    {
+                        UsedInputs.Add($"{jarr[0]}");
+                    }
+                }
+            }
+        }
+        return UsedInputs.Contains(nodeId);
+    }
+
+    /// <summary>Removes a class of nodes if they are not connected to anything.</summary>
+    public void RemoveClassIfUnused(string classType)
+    {
+        RunOnNodesOfClass(classType, (id, data) =>
+        {
+            if (!NodeIsConnectedAnywhere(id))
+            {
+                Workflow.Remove(id);
+            }
+        });
     }
 }

@@ -8,15 +8,14 @@
 [Stable Diffusion 3](#stable-diffusion-3) | MMDiT | 2024 | Stability AI | 2B | Outdated, prefer .5 |
 [Stable Diffusion 3.5 Large](#stable-diffusion-35-large) | MMDiT | 2024 | Stability AI | 8B | Modern, High Quality |
 [Stable Diffusion 3.5 Medium](#stable-diffusion-35-medium) | MMDiT | 2024 | Stability AI | 2B | Modern, High Quality |
-[SDXL Turbo and SD Turbo](#sdxl-turbo-and-sd-turbo) | unet | 2023 | Stability AI | 2B | Outdated |
-[Latent Consistency Models](#latency-consistency-models) | unet | 2023 | Tsinghua University | 1B/2B | Outdated |
-[Lightning Models](#lightning-models) | unet | 2024 | ByteDance | 1B/2B | Outdated |
+[SD1 and SDXL Turbo Variants](#sd1-and-sdxl-turbo-variants) | unet | 2023 | Stability AI and others | 2B | Outdated |
 [Segmind SSD 1B](#segmind-ssd-1b) | unet | 2023 | Segmind | 1B | Outdated |
 [Stable Cascade](#stable-cascade) | unet cascade | 2024 | Stability AI | 5B | Outdated |
 [PixArt Sigma](#pixart-sigma) | DiT | 2024 | PixArt | 1B | Outdated |
 [Nvidia Sana](#nvidia-sana) | DiT | 2024 | NVIDIA | 1.6B | Modern, Low Quality |
 [AuraFlow v0.1 and v0.2](#auraflow-v01) | MMDiT | 2024 | Fal.AI | 6B | Outdated |
 [Flux.1](#black-forest-labs-flux1-models) | MMDiT | 2024 | Black Forest Labs | 12B | Modern, High Quality |
+[Lumina 2.0](#lumina-2) | NextDiT | 2025 | Alpha-VLLM | 2.6B | Modern, Decent Quality |
 
 - Video models are in [Video Model Support](/docs/Video%20Model%20Support.md)
 
@@ -65,6 +64,17 @@ SDXL models work as normal, with the bonus that by default enhanced inference se
 
 Additional, SDXL-Refiner architecture models can be inferenced, both as refiner or even as a base (you must manually set res to 512x512 and it will generate weird results).
 
+## SD1 and SDXL Turbo Variants
+
+Turbo, LCM (Latent Consistency Models), Lightning, etc. models work the same as regular models, just set `CFG Scale` to `1` and:
+    - For Turbo, `Steps` to `1` Under the `Sampling` group set `Scheduler` to `Turbo`.
+    - For LCM, `Steps` to `4`. Under the `Sampling` group set `Sampler` to `lcm`.
+    - For lightning, (?)
+
+## SegMind SSD-1B
+
+SegMind SSD-1B models work the same as SD models.
+
 ## Stable Diffusion 3
 
 ![img](/docs/images/models/sd3m.jpg)
@@ -83,39 +93,21 @@ For upscaling with SD3, the `Refiner Do Tiling` parameter is highly recommended 
 
 ![img](/docs/images/models/sd35l.jpg)
 
-Stable Diffusion 3.5 Large is supported and works as normal, including both normal and Turbo variants.
-
-They behave approximately the same as the SD3 Medium models, including same settings and all, other than harsher resource requirements and better quality.
-
-You can also use [GGUF Versions](#gguf-quantized-models) of the models.
+- Stable Diffusion 3.5 Large is supported and works as normal, including both normal and Turbo variants.
+- The [TensorArt 3.5L TurboX](https://huggingface.co/tensorart/stable-diffusion-3.5-large-TurboX/tree/main) works too, just set `CFG Scale` to `1`, and `Steps` to `8`, and advanced `Sigma Shift` to `5`
+- They behave approximately the same as the SD3 Medium models, including same settings and all, other than harsher resource requirements and better quality.
+- You can also use [GGUF Versions](#gguf-quantized-models) of the models.
+    - SD3.5 Large <https://huggingface.co/city96/stable-diffusion-3.5-large-gguf/tree/main> or LargeTurbo <https://huggingface.co/city96/stable-diffusion-3.5-large-turbo-gguf/tree/main>
 
 ### Stable Diffusion 3.5 Medium
 
 ![img](/docs/images/models/sd35m.jpg)
 
-Stable Diffusion 3.5 Medium is supported and works as normal.
-
-They behave approximately the same as the SD3 Medium models, including same settings and all.
-
-You can also use [GGUF Versions](#gguf-quantized-models) of the models.
-
-SD 3.5 Medium support resolutions from 512x512 to 1440x1440, and the model metadata of the official model recommends 1440x1440. However, the official model is not good at this resolution. You will want to click the `☰` hamburger menu on a model, then `Edit Metadata`, then change the resolution to `1024x1024` for better results. You can of course set the `Aspect Ratio` parameter to `Custom` and the edit resolutions on the fly per-image.
-
-## SDXL Turbo and SD Turbo
-
-Turbo models work the same as regular models, just set `CFG Scale` to `1` and `Steps` to `1` as well. Under the `Sampling` group set `Scheduler` to `Turbo`.
-
-## Latency Consistency Models
-
-LCM models work the same as regular models, just set `CFG Scale` to `1` and `Steps` to `4`. Under the `Sampling` group set `Sampler` to `lcm`.
-
-## Lightning Models
-
-Lightning models work the same as regular models, just set `CFG Scale` to `1` and (TODO: Sampling specifics for lightning).
-
-## SegMind SSD-1B
-
-SegMind SSD-1B models work the same as SD models.
+- Stable Diffusion 3.5 Medium is supported and works as normal.
+- They behave approximately the same as the SD3 Medium models, including same settings and all.
+- You can also use [GGUF Versions](#gguf-quantized-models) of the models.
+    - SD3.5 Medium <https://huggingface.co/city96/stable-diffusion-3.5-medium-gguf/tree/main>
+- SD 3.5 Medium support resolutions from 512x512 to 1440x1440, and the model metadata of the official model recommends 1440x1440. However, the official model is not good at this resolution. You will want to click the `☰` hamburger menu on a model, then `Edit Metadata`, then change the resolution to `1024x1024` for better results. You can of course set the `Aspect Ratio` parameter to `Custom` and the edit resolutions on the fly per-image.
 
 ## Stable Cascade
 
@@ -184,31 +176,43 @@ Download the model, then click "`Edit Metadata`" and select `(Temporary) AuraFlo
 
 ![img](/docs/images/models/flux-schnell.jpg)
 
-### Info
+### Install
 
 - Black Forest Labs' Flux.1 model is fully supported in Swarm <https://blackforestlabs.ai/announcing-black-forest-labs/>
-    - **Recommended:** use the [GGUF Format Files](#gguf-quantized-models)
-    - **Alternate:** the simplified fp8 file:
+    - **Recommended:** use the [GGUF Format Files](#gguf-quantized-models) (best for most graphics cards)
+        - Flux Schnell <https://huggingface.co/city96/FLUX.1-schnell-gguf/tree/main>
+        - Flux Dev <https://huggingface.co/city96/FLUX.1-dev-gguf/tree/main>
+        - `Q6_K` is best accuracy on high VRAM, but `Q4_K_S` cuts VRAM requirements while still being very close to original quality, other variants shouldn't be used normally
+        - Goes in `(Swarm)/Models/diffusion_models`
+        - After adding the model, refresh the list, then you may need to click the `☰` hamburger menu on the model, then `Edit Metadata` and set the `Architecture` to `Flux Dev` or `Flux Schnell` as relevant, unless it detects correctly on its own.
+    - **Alternate:** the simplified fp8 file (best on 3090, 4090, or higher tier cards):
         - Dev <https://huggingface.co/Comfy-Org/flux1-dev/blob/main/flux1-dev-fp8.safetensors>
         - Schnell <https://huggingface.co/Comfy-Org/flux1-schnell/blob/main/flux1-schnell-fp8.safetensors>
         - goes in your regular `(Swarm)/Models/Stable-Diffusion` dir
     - **or, not recommended:** You can download BFL's original files:
         - Download "Schnell" (Turbo) from <https://huggingface.co/black-forest-labs/FLUX.1-schnell>
         - Or "Dev" (non-Turbo) from <https://huggingface.co/black-forest-labs/FLUX.1-dev>
-        - Put dev/schnell in `(Swarm)/Models/diffusion_models`
-        - Required VAE & TextEncoders will be autodownloaded if you do not already have them.
-    - For both models, use CFG=1 (negative prompt won't work). Sampling leave default (will use Euler + Simple)
-        - For the Dev model, there is also a `Flux Guidance Scale` parameter under `Sampling`, which is a distilled embedding value that the model was trained to use.
-        - Dev can use some slightly-higher CFG values (allowing for negative prompt), possibly higher if you reduce the Flux Guidance value and/or use Dynamic Thresholding.
-    - For Schnell use Steps=4 (or lower, it can even do 1 step), for Dev use Steps=20 or higher
-    - This is best on a very high end GPU (eg 4090) for now. It is a 12B model.
-        - Smaller GPUs can run it, but will be slow. This requires a lot of system RAM (32GiB+). It's been shown to work as low down as an RTX 2070 or 2060 (very slowly).
-    - On a 4090, schnell takes about 4/5 seconds to generate a 4-step image, very close to SDXL 20 steps in time, but much higher quality.
-    - By default swarm will use fp8_e4m3fn for Flux, if you have a very very big GPU and want to use fp16/bf16, under `Advanced Sampling` set `Preferred DType` to `Default (16 bit)`
-    - It natively supports any resolution up to 2 mp (1920x1088), and any aspect ratio thereof. By default will use 1MP 1024x1024 in Swarm. You can take it down to 256x256 and still get good results.
-        - You can mess with the resolution quite a lot and still get decent results. It's very flexible even past what it was trained on.
-    - You _can_ do a refiner upscale 2x and it will work but take a long time and might not have excellent quality. Refiner tiling may be better.
-    - You can also use [GGUF Versions](#gguf-quantized-models) of the models.
+        - Goes in `(Swarm)/Models/diffusion_models`
+    - Required VAE & TextEncoders will be autodownloaded if you do not already have them, you don't need to worry about those.
+
+### Parameters
+
+- **CFG Scale:** For both models, use `CFG Scale` = `1` (negative prompt won't work).
+    - For the Dev model, there is also a `Flux Guidance Scale` parameter under `Sampling`, which is a distilled embedding value that the model was trained to use.
+    - Dev can use some slightly-higher CFG values (allowing for negative prompt), possibly higher if you reduce the Flux Guidance value and/or use Dynamic Thresholding.
+- **Sampler:** Leave it at default (Euler + Simple)
+- **Steps:** For Schnell use Steps=4 (or lower, it can even do 1 step), for Dev use Steps=20 or higher
+- **Resolution:** It natively supports any resolution up to 2 mp (1920x1088), and any aspect ratio thereof. By default will use 1MP 1024x1024 in Swarm. You can take it down to 256x256 and still get good results.
+    - You can mess with the resolution quite a lot and still get decent results. It's very flexible even past what it was trained on.
+- You _can_ do a refiner upscale 2x and it will work but take a long time and might not have excellent quality.
+    - Enable `Refiner Do Tiling` for any upscale target resolution above 1536x1536.
+
+### Performance
+
+- Flux is best on a very high end GPU (eg 4090) for now. It is a 12B model.
+    - Smaller GPUs can run it, but will be slow. This requires a lot of system RAM (32GiB+). It's been shown to work as low down as an RTX 2070 or 2060 (very slowly).
+- On a 4090, schnell takes about 4/5 seconds to generate a 4-step image, very close to SDXL 20 steps in time, but much higher quality.
+- By default swarm will use fp8_e4m3fn for Flux, if you have a very very big GPU and want to use fp16/bf16, under `Advanced Sampling` set `Preferred DType` to `Default (16 bit)`
 
 ### Flux.1 Tools
 
@@ -246,6 +250,34 @@ Download the model, then click "`Edit Metadata`" and select `(Temporary) AuraFlo
     - Add a Mask, draw a dot anywhere in the empty area (this is just a trick to tell the editor to automask all the empty area to the side, you don't need to mask it manually)
     - Type your prompt, hit generate
 
+# Lumina 2
+
+![img](/docs/images/models/lumina-2.png)
+*(Generated with the `highest degree of image-text alignment` preprompt, CFG=4, SigmaShift=6, Steps=20)*
+
+- Lumina 2 is an image diffusion transformer model, similar in structure to SD3/Flux/etc. rectified flow DiTs, with an LLM (Gemma 2 2B) as its input handler.
+- It is a 2.6B model, similar size to SDXL or SD3.5M, much smaller than Flux or SD3.5L
+- You can download the Comfy Org repackaged version of the model for use in SwarmUI here: <https://huggingface.co/Comfy-Org/Lumina_Image_2.0_Repackaged/blob/main/all_in_one/lumina_2.safetensors>
+    - Or the `diffusion_models` variant <https://huggingface.co/Comfy-Org/Lumina_Image_2.0_Repackaged/blob/main/split_files/diffusion_models/lumina_2_model_bf16.safetensors> (this version will by default load in fp8, and run a bit faster on 40xx cards)
+- Because of the LLM input, you have to prompt it like an LLM.
+    - This means `a cat` yields terrible results, instead give it: `You are an assistant designed to generate superior images with the superior degree of image-text alignment based on textual prompts or user prompts. <Prompt Start> a cat` to get good results
+    - Lumina's published reference list of prompt prefixes from [source code](https://github.com/Alpha-VLLM/Lumina-Image-2.0/blob/main/sample.py#L246):
+        - `You are an assistant designed to generate high-quality images with the highest degree of image-text alignment based on textual prompts. <Prompt Start> `
+        - `You are an assistant designed to generate high-quality images based on user prompts. <Prompt Start> `
+        - `You are an assistant designed to generate high-quality images with highest degree of aesthetics based on user prompts. <Prompt Start> `
+        - `You are an assistant designed to generate superior images with the superior degree of image-text alignment based on textual prompts or user prompts. <Prompt Start> `
+        - `You are an assistant designed to generate four high-quality images with highest degree of aesthetics arranged in 2x2 grids based on user prompts. <Prompt Start> `
+        - You can absolutely make up your own though.
+        - For longer prompts the prefix becomes less needed.
+- The model uses the Flux.1 VAE
+- **Parameters:**
+    - **CFG**: 4 is their base recommendation
+    - **Sigma Shift:** The default is `6` per Lumina reference script, Comfy recommends `3` for use with lower step counts, so you can safely mess with this parameter if you want to. 6 seems to be generally better for structure, while 3 is better for fine details by sacrificing structure, but may have unwanted artifacts. Raising step count reduces some artifacts.
+    - **Steps:** The usual 20 steps is fine, but reference Lumina script uses 250(?!) by default (it has a weird sampler that is akin to Euler at 36 steps actually supposedly?)
+        - Quick initial testing shows that raising steps high doesn't work any particularly different on this model than others, but the model at SigmaShift=6 produces some noise artifacts at regular 20 steps, raising closer to 40 cuts those out.
+    - **Renorm CFG:** Lumina 2 reference code sets a new advanced parameter `Renorm CFG` to 1. This is available in Swarm under `Advanced Sampling`.
+        - The practical difference is subjective and hard to predict, but enabling it seems to tend towards more fine detail
+
 # Video Models
 
 Video models are documented in [Video Model Support](/docs/Video%20Model%20Support.md)
@@ -266,10 +298,6 @@ Video models are documented in [Video Model Support](/docs/Video%20Model%20Suppo
 ## GGUF Quantized Models
 
 - GGUF Quantized `diffusion_models` models are supported in SwarmUI automatically.
-    - Examples of GGUF core models include:
-        - Flux Schnell <https://huggingface.co/city96/FLUX.1-schnell-gguf/tree/main> or Flux Dev <https://huggingface.co/city96/FLUX.1-dev-gguf/tree/main>
-        - SD3.5 Large <https://huggingface.co/city96/stable-diffusion-3.5-large-gguf/tree/main> or LargeTurbo <https://huggingface.co/city96/stable-diffusion-3.5-large-turbo-gguf/tree/main>
-        - SD3.5 Medium <https://huggingface.co/city96/stable-diffusion-3.5-medium-gguf/tree/main>
     - The detection is based on file extension.
     - They go in `(Swarm)/Models/diffusion_models` and work similar to other `diffusion_models` format models
         - Required VAE & TextEncoders will be autodownloaded if you do not already have them.

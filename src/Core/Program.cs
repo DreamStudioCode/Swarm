@@ -12,6 +12,7 @@ using SwarmUI.Backends;
 using SwarmUI.Text2Image;
 using SwarmUI.Utils;
 using SwarmUI.WebAPI;
+using System.Collections;
 using System.Diagnostics;
 using System.IO;
 using System.Net;
@@ -137,6 +138,13 @@ public class Program
             }
             Logs.Init("Applying command line settings...");
             ApplyCommandLineSettings();
+            foreach (DictionaryEntry entry in Environment.GetEnvironmentVariables())
+            {
+                if ($"{entry.Key}".StartsWith("SWARM_"))
+                {
+                    Logs.Init($"EnvVar '{entry.Key}' set to '{entry.Value}'");
+                }
+            }
         }
         catch (SwarmReadableErrorException ex)
         {
@@ -203,6 +211,10 @@ public class Program
             {
                 Logs.Init($"CPU Cores: {Environment.ProcessorCount} | RAM: {new MemoryNum((long)memStatus.TotalPhysical)} total, {new MemoryNum((long)memStatus.AvailablePhysical)} available, {new MemoryNum((long)memStatus.TotalPageFile)} total page file, {new MemoryNum((long)memStatus.AvailablePageFile)} available page file");
             }
+            else if ((long)memStatus.TotalVirtual <= 0)
+            {
+                Logs.Init($"CPU Cores: {Environment.ProcessorCount} | RAM: {new MemoryNum((long)memStatus.TotalPhysical)} total, {new MemoryNum((long)memStatus.AvailablePhysical)} available, unknown virtual/swap");
+            }
             else
             {
                 Logs.Init($"CPU Cores: {Environment.ProcessorCount} | RAM: {new MemoryNum((long)memStatus.TotalPhysical)} total, {new MemoryNum((long)memStatus.AvailablePhysical)} available, {new MemoryNum((long)memStatus.TotalVirtual)} virtual, {new MemoryNum((long)memStatus.TotalVirtual - (long)memStatus.TotalPhysical)} swap");
@@ -214,10 +226,23 @@ public class Program
                 {
                     Logs.Init($"GPU {gpu.ID}: {gpu.GPUName} | Temp {gpu.Temperature}C | Util {gpu.UtilizationGPU}% GPU, {gpu.UtilizationMemory}% Memory | VRAM {gpu.TotalMemory} total, {gpu.FreeMemory} free, {gpu.UsedMemory} used");
                 }
-                if (gpuInfo.All(gpu => gpu.GPUName.Contains("NVIDIA GeForce RTX 40")))
+                if (gpuInfo.All(gpu => gpu.GPUName.Contains("NVIDIA GeForce RTX 50")))
+                {
+                    Utilities.PresumeNVidia50xx = true;
+                    Utilities.PresumeNVidia40xx = true;
+                    Utilities.PresumeNVidia30xx = true;
+                    Logs.Init($"Will use GPU accelerations specific to NVIDIA GeForce RTX 50xx series and newer.");
+                }
+                else if (gpuInfo.All(gpu => gpu.GPUName.Contains("NVIDIA GeForce RTX 40")))
                 {
                     Utilities.PresumeNVidia40xx = true;
-                    Logs.Init($"Will use GPU accelerations specific to NVIDIA GeForce RTX 40xx series.");
+                    Utilities.PresumeNVidia30xx = true;
+                    Logs.Init($"Will use GPU accelerations specific to NVIDIA GeForce RTX 40xx series and newer.");
+                }
+                else if (gpuInfo.All(gpu => gpu.GPUName.Contains("NVIDIA GeForce RTX 30")))
+                {
+                    Utilities.PresumeNVidia30xx = true;
+                    Logs.Init($"Will use GPU accelerations specific to NVIDIA GeForce RTX 30xx series and newer.");
                 }
             }
         }));
@@ -390,6 +415,9 @@ public class Program
     {
         DataDir = Utilities.CombinePathWithAbsolute(Environment.CurrentDirectory, GetCommandLineFlag("data_dir", ServerSettings.Paths.DataPath));
     }
+
+    /// <summary>Overlapping lock to prevent model set reads during a model list refresh.</summary>
+    public static ManyReadOneWriteLock RefreshLock = new(64);
 
     /// <summary>Refreshes all model sets from file source.</summary>
     public static void RefreshAllModelSets()
