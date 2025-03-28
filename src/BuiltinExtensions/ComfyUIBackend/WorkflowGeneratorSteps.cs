@@ -99,7 +99,12 @@ public class WorkflowGeneratorSteps
         }, -14);
         AddModelGenStep(g =>
         {
+            (g.LoadingModel, g.LoadingClip) = g.LoadLorasForConfinement(-1, g.LoadingModel, g.LoadingClip);
             (g.LoadingModel, g.LoadingClip) = g.LoadLorasForConfinement(0, g.LoadingModel, g.LoadingClip);
+            if (g.IsRefinerStage)
+            {
+                (g.LoadingModel, g.LoadingClip) = g.LoadLorasForConfinement(1, g.LoadingModel, g.LoadingClip);
+            }
         }, -10);
         AddModelGenStep(g =>
         {
@@ -125,41 +130,49 @@ public class WorkflowGeneratorSteps
         {
             if (g.UserInput.TryGet(ComfyUIBackendExtension.SelfAttentionGuidanceScale, out double sagScale))
             {
-                string guided = g.CreateNode("SelfAttentionGuidance", new JObject()
+                string patched = g.CreateNode("SelfAttentionGuidance", new JObject()
                 {
                     ["model"] = g.LoadingModel,
                     ["scale"] = sagScale,
                     ["blur_sigma"] = g.UserInput.Get(ComfyUIBackendExtension.SelfAttentionGuidanceSigmaBlur, 2.0)
                 });
-                g.LoadingModel = [guided, 0];
+                g.LoadingModel = [patched, 0];
             }
             if (g.UserInput.TryGet(ComfyUIBackendExtension.PerturbedAttentionGuidanceScale, out double pagScale))
             {
-                string guided = g.CreateNode("PerturbedAttentionGuidance", new JObject()
+                string patched = g.CreateNode("PerturbedAttentionGuidance", new JObject()
                 {
                     ["model"] = g.LoadingModel,
                     ["scale"] = pagScale
                 });
-                g.LoadingModel = [guided, 0];
+                g.LoadingModel = [patched, 0];
             }
             if (g.UserInput.TryGet(ComfyUIBackendExtension.RescaleCFGMultiplier, out double rescaleCfg))
             {
-                string guided = g.CreateNode("RescaleCFG", new JObject()
+                string patched = g.CreateNode("RescaleCFG", new JObject()
                 {
                     ["model"] = g.LoadingModel,
                     ["multiplier"] = rescaleCfg
                 });
-                g.LoadingModel = [guided, 0];
+                g.LoadingModel = [patched, 0];
             }
             if (g.UserInput.TryGet(ComfyUIBackendExtension.RenormCFG, out double renormCfg))
             {
-                string guided = g.CreateNode("RenormCFG", new JObject()
+                string patched = g.CreateNode("RenormCFG", new JObject()
                 {
                     ["model"] = g.LoadingModel,
                     ["cfg_trunc"] = 100, // This value is the weirdly named timestep where the renorm applies - less than this apply, above don't. 100 is default, not sure if it needs a customization param?
                     ["renorm_cfg"] = renormCfg
                 });
-                g.LoadingModel = [guided, 0];
+                g.LoadingModel = [patched, 0];
+            }
+            if (g.UserInput.Get(ComfyUIBackendExtension.UseCfgZeroStar, false))
+            {
+                string patched = g.CreateNode("CFGZeroStar", new JObject()
+                {
+                    ["model"] = g.LoadingModel
+                });
+                g.LoadingModel = [patched, 0];
             }
         }, -7);
         AddModelGenStep(g =>
@@ -208,11 +221,12 @@ public class WorkflowGeneratorSteps
                 {
                     if (teaCacheMode != "video only")
                     {
-                        string teaCacheNode = g.CreateNode("TeaCacheForImgGen", new JObject()
+                        string teaCacheNode = g.CreateNode(g.Features.Contains("teacache_oldvers") ? "TeaCacheForImgGen" : "TeaCache", new JObject()
                         {
                             ["model"] = g.LoadingModel,
                             ["model_type"] = "flux",
-                            ["rel_l1_thresh"] = teaCacheThreshold
+                            ["rel_l1_thresh"] = teaCacheThreshold,
+                            ["max_skip_steps"] = 3
                         });
                         g.LoadingModel = [teaCacheNode, 0];
                     }
@@ -251,11 +265,12 @@ public class WorkflowGeneratorSteps
                             }
                         }
                     }
-                    string teaCacheNode = g.CreateNode("TeaCacheForVidGen", new JObject()
+                    string teaCacheNode = g.CreateNode(g.Features.Contains("teacache_oldvers") ? "TeaCacheForVidGen" : "TeaCache", new JObject()
                     {
                         ["model"] = g.LoadingModel,
                         ["model_type"] = type,
-                        ["rel_l1_thresh"] = teaCacheThreshold
+                        ["rel_l1_thresh"] = teaCacheThreshold,
+                        ["max_skip_steps"] = 3
                     });
                     g.LoadingModel = [teaCacheNode, 0];
                 }
@@ -1116,18 +1131,22 @@ public class WorkflowGeneratorSteps
                 g.IsRefinerStage = true;
                 JArray origVae = g.FinalVae, prompt = g.FinalPrompt, negPrompt = g.FinalNegativePrompt;
                 bool modelMustReencode = false;
-                if (g.UserInput.TryGet(T2IParamTypes.RefinerModel, out T2IModel refineModel) && refineModel is not null)
+                T2IModel baseModel = g.UserInput.Get(T2IParamTypes.Model);
+                T2IModel refineModel = baseModel;
+                string loaderNodeId = null;
+                if (g.UserInput.TryGet(T2IParamTypes.RefinerModel, out T2IModel altRefineModel) && altRefineModel is not null)
                 {
-                    T2IModel baseModel = g.UserInput.Get(T2IParamTypes.Model);
+                    refineModel = altRefineModel;
                     modelMustReencode = refineModel.ModelClass?.CompatClass != "stable-diffusion-xl-v1-refiner" || baseModel.ModelClass?.CompatClass != "stable-diffusion-xl-v1";
-                    g.NoVAEOverride = refineModel.ModelClass?.CompatClass != baseModel.ModelClass?.CompatClass;
-                    g.FinalLoadedModel = refineModel;
-                    g.FinalLoadedModelList = [refineModel];
-                    (g.FinalLoadedModel, g.FinalModel, g.FinalClip, g.FinalVae) = g.CreateStandardModelLoader(refineModel, "Refiner", "20");
-                    prompt = g.CreateConditioning(g.UserInput.Get(T2IParamTypes.Prompt), g.FinalClip, refineModel, true);
-                    negPrompt = g.CreateConditioning(g.UserInput.Get(T2IParamTypes.NegativePrompt), g.FinalClip, refineModel, false);
-                    g.NoVAEOverride = false;
+                    loaderNodeId = "20";
                 }
+                g.NoVAEOverride = refineModel.ModelClass?.CompatClass != baseModel.ModelClass?.CompatClass;
+                g.FinalLoadedModel = refineModel;
+                g.FinalLoadedModelList = [refineModel];
+                (g.FinalLoadedModel, g.FinalModel, g.FinalClip, g.FinalVae) = g.CreateStandardModelLoader(refineModel, "Refiner", loaderNodeId);
+                g.NoVAEOverride = false;
+                prompt = g.CreateConditioning(g.UserInput.Get(T2IParamTypes.Prompt), g.FinalClip, g.FinalLoadedModel, true, isRefiner: true);
+                negPrompt = g.CreateConditioning(g.UserInput.Get(T2IParamTypes.NegativePrompt), g.FinalClip, g.FinalLoadedModel, false, isRefiner: true);
                 bool doSave = g.UserInput.Get(T2IParamTypes.SaveIntermediateImages, false);
                 bool doUspcale = g.UserInput.TryGet(T2IParamTypes.RefinerUpscale, out double refineUpscale) && refineUpscale != 1;
                 // TODO: Better same-VAE check
@@ -1174,7 +1193,7 @@ public class WorkflowGeneratorSteps
                                 ["image"] = new JArray() { "28", 0 },
                                 ["width"] = width,
                                 ["height"] = height,
-                                ["upscale_method"] = "bilinear",
+                                ["upscale_method"] = "lanczos",
                                 ["crop"] = "disabled"
                             }, "26");
                         }
@@ -1236,7 +1255,7 @@ public class WorkflowGeneratorSteps
         #region Segmentation Processing
         AddStep(g =>
         {
-            PromptRegion.Part[] parts = new PromptRegion(g.UserInput.Get(T2IParamTypes.Prompt, "")).Parts.Where(p => p.Type == PromptRegion.PartType.Segment).ToArray();
+            PromptRegion.Part[] parts = [.. new PromptRegion(g.UserInput.Get(T2IParamTypes.Prompt, "")).Parts.Where(p => p.Type == PromptRegion.PartType.Segment)];
             if (parts.Any())
             {
                 if (g.UserInput.Get(T2IParamTypes.SaveIntermediateImages, false))
@@ -1257,7 +1276,7 @@ public class WorkflowGeneratorSteps
                     g.FinalModel = model;
                 }
                 PromptRegion negativeRegion = new(g.UserInput.Get(T2IParamTypes.NegativePrompt, ""));
-                PromptRegion.Part[] negativeParts = negativeRegion.Parts.Where(p => p.Type == PromptRegion.PartType.Segment).ToArray();
+                PromptRegion.Part[] negativeParts = [.. negativeRegion.Parts.Where(p => p.Type == PromptRegion.PartType.Segment)];
                 for (int i = 0; i < parts.Length; i++)
                 {
                     PromptRegion.Part part = parts[i];
@@ -1333,7 +1352,10 @@ public class WorkflowGeneratorSteps
                     int oversize = g.UserInput.Get(T2IParamTypes.SegmentMaskOversize, 16);
                     (string boundsNode, string croppedMask, string masked, string scaledImage) = g.CreateImageMaskCrop([segmentNode, 0], g.FinalImageOut, oversize, vae, g.FinalLoadedModel, thresholdMax: g.UserInput.Get(T2IParamTypes.SegmentThresholdMax, 1));
                     g.EnableDifferential();
-                    (model, clip) = g.LoadLorasForConfinement(part.ContextID, g.FinalModel, clip);
+                    if (part.ContextID > 0)
+                    {
+                        (model, clip) = g.LoadLorasForConfinement(part.ContextID, g.FinalModel, clip);
+                    }
                     JArray prompt = g.CreateConditioning(part.Prompt, clip, t2iModel, true);
                     string neg = negativeParts.FirstOrDefault(p => p.DataText == part.DataText)?.Prompt ?? negativeRegion.GlobalPrompt;
                     JArray negPrompt = g.CreateConditioning(neg, clip, t2iModel, false);
@@ -1351,7 +1373,7 @@ public class WorkflowGeneratorSteps
         #region SaveImage
         AddStep(g =>
         {
-            PromptRegion.Part[] parts = new PromptRegion(g.UserInput.Get(T2IParamTypes.Prompt, "")).Parts.Where(p => p.Type == PromptRegion.PartType.ClearSegment).ToArray();
+            PromptRegion.Part[] parts = [.. new PromptRegion(g.UserInput.Get(T2IParamTypes.Prompt, "")).Parts.Where(p => p.Type == PromptRegion.PartType.ClearSegment)];
             foreach (PromptRegion.Part part in parts)
             {
                 if (g.UserInput.Get(T2IParamTypes.SaveIntermediateImages, false))
@@ -1423,7 +1445,9 @@ public class WorkflowGeneratorSteps
                         });
                         g.FinalImageOut = [trimNode, 0];
                     }
-                    if (g.UserInput.TryGet(ComfyUIBackendExtension.Text2VideoFrameInterpolationMethod, out string method) && g.UserInput.TryGet(ComfyUIBackendExtension.Text2VideoFrameInterpolationMultiplier, out int mult) && mult > 1)
+                    if (g.UserInput.TryGet(ComfyUIBackendExtension.Text2VideoFrameInterpolationMethod, out string method)
+                        && g.UserInput.TryGet(ComfyUIBackendExtension.Text2VideoFrameInterpolationMultiplier, out int mult) && mult > 1
+                        && g.UserInput.Get(T2IParamTypes.Text2VideoFrames, 99) > 1)
                     {
                         if (g.UserInput.Get(T2IParamTypes.SaveIntermediateImages, false))
                         {

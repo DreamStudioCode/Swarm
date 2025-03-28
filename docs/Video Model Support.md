@@ -3,10 +3,10 @@
 | Model | Year | Author | Scale | Type | Quality/Status |
 | ----  | ---- | ---- | ---- | ---- | ---- |
 [Stable Video Diffusion](#stable-video-diffusion) | 2023 | Stability AI | 1B Unet | Image2Video | Outdated |
-[Hunyuan Video](#hunyuan-video) | 2024 | Tencent | 12B MMDiT | Text2Video and Image2Video variants | Modern, High Quality |
-[Genmo Mochi 1](#genmo-mochi-1-text2video) | 2024 | Genmo | 10B DiT | Text2Video | Modern, Decent |
+[Hunyuan Video](#hunyuan-video) | 2024 | Tencent | 12B MMDiT | Text2Video and Image2Video variants | Modern, Decent Quality |
+[Genmo Mochi 1](#genmo-mochi-1-text2video) | 2024 | Genmo | 10B DiT | Text2Video | Outdated |
 [Lightricks LTX Video](#lightricks-ltx-video) | 2024 | Lightricks | 3B DiT | Text/Image 2Video | Modern, Fast but ugly |
-[Nvidia Cosmos](#nvidia-cosmos) | 2025 | NVIDIA | Various | Text/Image/Video 2Video | Modern, very slow, mixed quality |
+[Nvidia Cosmos](#nvidia-cosmos) | 2025 | NVIDIA | Various | Text/Image/Video 2Video | Modern, very slow, poor quality |
 [Wan 2.1](#wan-21) | 2025 | Alibaba - Wan-AI | 1.3B and 14B | Text/Image 2Video | Modern, Incredible Quality |
 
 **Unsupported:**
@@ -74,7 +74,7 @@
 - Or use the gguf models from city96 <https://huggingface.co/city96/HunyuanVideo-gguf/tree/main>
     - `Q6_K` is near identical to full precision and is recommended for 24 gig cards, `Q4_K_M` is recommended if you have low VRAM, results are still very close, other variants shouldn't be used normally
     - Save to the `diffusion_models` folder, then load up Swarm and click the `☰` hamburger menu on the model, then `Edit Metadata`, and set the `Architecture:` field to `Hunyuan Video` (this *might* autodetect but not guaranteed so double-check it)
-- The text encoders (T5-XXL, and LLaVA-LLaMA3) and VAE will be automatically downloaded.
+- The text encoders (CLIP-L, and LLaVA-LLaMA3) and VAE will be automatically downloaded.
 - When selected, the `Text To Video` parameter group will become visible
 
 ### Hunyuan Video Parameters
@@ -126,7 +126,8 @@
 
 - Hunyuan Image2Video is the official image-to-video model from Hunyuan's team, install info above.
 - Works like any other Image2Video model, with the same general parameter expectations as regular Hunyuan Video.
-- You will want to use the Advanced -> `Other Fixes` -> `Trim Video Start Frames` parameter with a value of `4`, as the model tends to corrupt the first few frames.
+- For I2V "v1", You will want to use the Advanced -> `Other Fixes` -> `Trim Video Start Frames` parameter with a value of `4`, as the model tends to corrupt the first few frames.
+- For I2V "v2" / "Fixed" version, you will need to click the `☰` hamburger menu on the model, then `Edit Metadata`, and set the `Architecture:` field to `Hunyuan Video - Image2Video V2 ('Fixed')`
 
 ### SkyReels Text2Video
 
@@ -259,9 +260,11 @@
 - [Wan 2.1](https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B), a video model series from Alibaba, is supported in SwarmUI.
     - Supports separate models for Text2Video or Image2Video.
 - Download the comfy-format Wan model from <https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/tree/main/split_files/diffusion_models>
-    - Use the `fp8` models, not `bf16`
+    - Or Kijai's versions <https://huggingface.co/Kijai/WanVideo_comfy/tree/main>
+    - For I2V 1.3B, use <https://huggingface.co/alibaba-pai/Wan2.1-Fun-1.3B-InP/blob/main/diffusion_pytorch_model.safetensors>  (rename the file when you save it to avoid confusion)
+    - Favor the `fp8_scaled` models as the main choice, or `fp16` for the 1.3B.
     - For Text2Video, pick either 1.3B (small) model, or 14B (large) model
-    - For Image2Video, pick either 480p (640x640 res) or 720p (960x960 res) model
+    - For Image2Video, pick either 480p (640x640 res) or 720p (960x960 res) model, OR the new "Fun-Inp" models (1.3B or 14B)
         - These are not autodetected separately, 480p is assumed.
         - For 720p variant, you will want to click the `☰` hamburger menu on the model, then `Edit Metadata`, and set the `Resolution` to `960x960`
         - The 720p model isn't bigger, it just supports higher resolutions. Subjective comments say the higher resolution isn't worth the performance loss.

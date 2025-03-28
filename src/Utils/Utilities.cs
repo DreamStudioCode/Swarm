@@ -35,6 +35,19 @@ public static class Utilities
         Program.TickNoGenerationsEvent += MemCleaner.TickNoGenerations;
         Program.TickEvent += SystemStatusMonitor.Tick;
         Program.SlowTickEvent += AutoRestartCheck;
+        int subticks = 0;
+        Program.SlowTickEvent += () =>
+        {
+            if (subticks++ > 20)
+            {
+                subticks = 0;
+                CleanRAM();
+            }
+            else
+            {
+                QuickGC();
+            }
+        };
         new Thread(TickLoop).Start();
     }
 
@@ -137,6 +150,11 @@ public static class Utilities
 
     public static HashSet<string> ReservedFilenames = ["con", "prn", "aux", "nul"];
 
+    /// <summary>Set of unicode control chars that can accidentally wind up in text that would be a (noncritical) nuisance if left in filename.</summary>
+    public static HashSet<char> RestrictedControlChars = ['\u180e', '\u200b', '\u200c', '\u200d', '\u200e', '\u200f', '\u202a',
+        '\u202b', '\u202c', '\u202d', '\u202e', '\u2060', '\u2061', '\u2062', '\u2063', '\u2064', '\u2066', '\u2067', '\u2068',
+        '\u2069', '\u206a', '\u206b', '\u206c', '\u206b', '\u206e', '\u206f', '\ufeff', '\ufff9', '\ufffa', '\ufffb'];
+
     static Utilities()
     {
         if (File.Exists("./.git/refs/heads/master"))
@@ -154,12 +172,17 @@ public static class Utilities
     /// <summary>Cleans a filename with strict filtering, including removal of forbidden characters, removal of the '.' symbol, but permitting '/'.</summary>
     public static string StrictFilenameClean(string name)
     {
+        // Cleanup ASCII character oddities
         name = FilePathForbidden.TrimToNonMatches(name.Replace('\\', '/')).Replace(".", "");
+        // Cleanup non-breaking but unwanted values
+        name = new string([.. name.Where(c => !RestrictedControlChars.Contains(c))]);
+        // Cleanup pathing format
         while (name.Contains("//"))
         {
             name = name.Replace("//", "/");
         }
         name = name.TrimStart('/').Trim();
+        // Prevent windows reserved filenames
         string[] parts = name.Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         for (int i = 0; i < parts.Length; i++)
         {
@@ -218,9 +241,9 @@ public static class Utilities
     {
         if (length % 2 == 1)
         {
-            return Convert.ToHexString(RandomNumberGenerator.GetBytes((length + 1) / 2))[0..^1];
+            return BytesToHex(RandomNumberGenerator.GetBytes((length + 1) / 2))[0..^1];
         }
-        return Convert.ToHexString(RandomNumberGenerator.GetBytes(length / 2));
+        return BytesToHex(RandomNumberGenerator.GetBytes(length / 2));
     }
 
     /// <summary>Gets a convenient cancel token that cancels itself after a given time OR the program itself is cancelled.</summary>
@@ -233,7 +256,7 @@ public static class Utilities
     public static async Task SendJson(this WebSocket socket, JObject obj, TimeSpan maxDuration)
     {
         using CancellationTokenSource cancel = TimedCancel(maxDuration);
-        await socket.SendAsync(obj.ToString(Formatting.None).EncodeUTF8(), WebSocketMessageType.Text, true, cancel.Token);
+        await socket.SendAsync(JsonToByteArray(obj), WebSocketMessageType.Text, true, cancel.Token);
     }
 
     /// <summary>Equivalent to <see cref="Task.WhenAny(IEnumerable{Task})"/> but doesn't break on an empty list.</summary>
@@ -358,6 +381,52 @@ public static class Utilities
         return JObject.FromObject(obj.Properties().OrderBy(p => sort(p.Name)).ToDictionary(p => p.Name, p => p.Value));
     }
 
+    /// <summary>(Experimental) aggressively simply low-mem ToString for JSON data. Dense, spaceless, unformatted.</summary>
+    public static void ToStringFast(this JToken jval, StringBuilder builder)
+    {
+        if (jval is JObject jobj)
+        {
+            builder.Append('{');
+            if (jobj.Count > 0)
+            {
+                foreach ((string key, JToken val) in jobj)
+                {
+                    builder.Append('"').Append(EscapeJsonString(key)).Append("\":");
+                    val.ToStringFast(builder);
+                    builder.Append(',');
+                }
+                builder.Length--;
+            }
+            builder.Append('}');
+        }
+        else if (jval is JArray jarr)
+        {
+            builder.Append('[');
+            if (jarr.Count > 0)
+            {
+                foreach (JToken val in jarr)
+                {
+                    val.ToStringFast(builder);
+                    builder.Append(',');
+                }
+                builder.Length--;
+            }
+            builder.Append(']');
+        }
+        else
+        {
+            builder.Append(jval.ToString(Formatting.None));
+        }
+    }
+
+    /// <summary>Converts a <see cref="JObject"/> to a UTF-8 string byte array.</summary>
+    public static byte[] JsonToByteArray(JObject jdata)
+    {
+        StringBuilder builder = new(1024);
+        jdata.ToStringFast(builder);
+        return builder.ToString().EncodeUTF8();
+    }
+
     /// <summary>Gives a clean standard 4-space serialize of this <see cref="JObject"/>.</summary>
     public static string SerializeClean(this JObject jobj)
     {
@@ -371,7 +440,6 @@ public static class Utilities
         serializer.Serialize(jw, jobj);
         jw.Flush();
         return sw.ToString() + Environment.NewLine;
-
     }
 
     public static async Task YieldJsonOutput(this HttpContext context, WebSocket socket, int status, JObject obj)
@@ -383,7 +451,7 @@ public static class Utilities
             await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, null, cancel.Token);
             return;
         }
-        byte[] resp = obj.ToString(Formatting.None).EncodeUTF8();
+        byte[] resp = JsonToByteArray(obj);
         context.Response.ContentType = "application/json";
         context.Response.StatusCode = status;
         context.Response.ContentLength = resp.Length;
@@ -399,7 +467,7 @@ public static class Utilities
 
     public static ByteArrayContent JSONContent(JObject jobj)
     {
-        ByteArrayContent content = new(jobj.ToString(Formatting.None).EncodeUTF8());
+        ByteArrayContent content = new(JsonToByteArray(jobj));
         content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
         return content;
     }
@@ -707,7 +775,7 @@ public static class Utilities
                             }
                             sha256.TransformFinalBlock([], 0, 0);
                             byte[] hash = sha256.Hash;
-                            string hashStr = Convert.ToHexString(hash).ToLowerFast();
+                            string hashStr = BytesToHex(hash).ToLowerFast();
                             Logs.Verbose($"Raw file hash for {altUrl} is {hashStr}");
                             if (verifyHash is not null && hashStr != verifyHash.ToLowerFast())
                             {
@@ -951,6 +1019,12 @@ public static class Utilities
         return null;
     }
 
+    /// <summary>Encourage the Garbage Collector to clean up memory.</summary>
+    public static void QuickGC()
+    {
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Optimized, false, false);
+    }
+
     /// <summary>Cause an immediate aggressive RAM cleanup.</summary>
     public static void CleanRAM()
     {
@@ -1150,6 +1224,15 @@ public static class Utilities
     /// <summary>Hashes a password for storage.</summary>
     public static string HashPassword(string username, string password)
     {
+        if (password.Length > 512) // Sanity cap
+        {
+            throw new SwarmReadableErrorException("Password is too long.");
+        }
+        if (password.StartsWith("__swarmdoprehash:"))
+        {
+            password = password["__swarmdoprehash:".Length..];
+            password = BytesToHex(SHA256.HashData(password.EncodeUTF8())).ToLowerFast();
+        }
         byte[] salt = RandomNumberGenerator.GetBytes(128 / 8);
         string borkedPw = $"*SwarmHashedPw:{username}:{password}*";
         // 10k is low enough that the swarm server won't thrash its CPU if it has to hash passwords often (eg somebody spamming bad auth requests), but high enough to at least be a bit of a barrier to somebody that yoinks the raw hashes

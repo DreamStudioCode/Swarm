@@ -171,7 +171,7 @@ public static class T2IAPI
             }
             if (obj.TryGetValue("discard_indices", out JToken discard))
             {
-                discards = discard.Values<int>().ToArray();
+                discards = [.. discard.Values<int>()];
             }
         }
         if (discards != null)
@@ -190,8 +190,8 @@ public static class T2IAPI
     public static T2IParamInput RequestToParams(Session session, JObject rawInput)
     {
         T2IParamInput user_input = new(session);
-        List<string> keys = rawInput.Properties().Select(p => p.Name).ToList();
-        keys = keys.Where(AlwaysTopKeys.Contains).Concat(keys.Where(k => !AlwaysTopKeys.Contains(k))).ToList();
+        List<string> keys = [.. rawInput.Properties().Select(p => p.Name)];
+        keys = [.. keys.Where(AlwaysTopKeys.Contains), .. keys.Where(k => !AlwaysTopKeys.Contains(k))];
         foreach (string key in keys)
         {
             if (key == "session_id" || key == "presets")
@@ -362,10 +362,10 @@ public static class T2IAPI
             removeDoneTasks();
         }
         long finalTime = Environment.TickCount64;
-        T2IEngine.ImageOutput[] griddables = imageSet.Where(i => i.IsReal).ToArray();
+        T2IEngine.ImageOutput[] griddables = [.. imageSet.Where(i => i.IsReal)];
         if (griddables.Length < session.User.Settings.MaxImagesInMiniGrid && griddables.Length > 1 && griddables.All(i => i.Img.Type == Image.ImageType.IMAGE))
         {
-            ISImage[] imgs = griddables.Select(i => i.Img.ToIS).ToArray();
+            ISImage[] imgs = [.. griddables.Select(i => i.Img.ToIS)];
             int columns = (int)Math.Ceiling(Math.Sqrt(imgs.Length));
             int rows = columns;
             if (griddables.Length <= columns * (columns - 1))
@@ -537,7 +537,7 @@ public static class T2IAPI
                     return;
                 }
                 string prefix = folder == "" ? "" : folder + "/";
-                List<string> subFiles = Directory.EnumerateFiles($"{path}/{prefix}").Take(localLimit).ToList();
+                List<string> subFiles = [.. Directory.EnumerateFiles($"{path}/{prefix}").Take(localLimit)];
                 IEnumerable<string> newFileNames = subFiles.Where(isAllowed).Where(f => extensions.Contains(f.AfterLast('.')) && !f.EndsWith(".swarmpreview.jpg") && !f.EndsWith(".swarmpreview.webp")).Select(f => f.Replace('\\', '/'));
                 List<ImageHistoryHelper> localFiles = [.. newFileNames.Select(f => new ImageHistoryHelper(prefix + f.AfterLast('/'), ImageMetadataTracker.GetMetadataFor(f, root, starNoFolders))).Where(f => f.Metadata is not null)];
                 int leftOver = Interlocked.Add(ref remaining, -localFiles.Count);
@@ -731,6 +731,8 @@ public static class T2IAPI
 
     public static SemaphoreSlim RefreshSemaphore = new(1, 1);
 
+    public static long LastRefreshed = Environment.TickCount64;
+
     [API.APIDescription("Trigger a refresh of the server's data, returning parameter data. Requires permission 'control_model_refresh' to actually take effect, otherwise just pulls latest data.",
         """
             // see `ListT2IParams` for details
@@ -744,6 +746,11 @@ public static class T2IAPI
     {
         Logs.Verbose($"User {session.User.UserID} triggered a {(strong ? "strong" : "weak")} data refresh");
         bool botherToRun = strong && RefreshSemaphore.CurrentCount > 0; // no need to run twice at once
+        if (Environment.TickCount64 - LastRefreshed < 10000)
+        {
+            Logs.Debug($"User {session.User.UserID} requested weak refresh within 10 seconds of last refresh, ignoring as redundant.");
+            botherToRun = false;
+        }
         if (!session.User.HasPermission(Permissions.ControlModelRefresh))
         {
             Logs.Debug($"User {session.User.UserID} requested refresh, but will not perform actual refresh as they lack permission.");
@@ -756,6 +763,7 @@ public static class T2IAPI
             {
                 using ManyReadOneWriteLock.WriteClaim claim = Program.RefreshLock.LockWrite();
                 Program.ModelRefreshEvent?.Invoke();
+                LastRefreshed = Environment.TickCount64;
             }
         }
         finally

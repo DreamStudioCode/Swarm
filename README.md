@@ -2,15 +2,16 @@
 
 **SwarmUI v0.9.5 Beta**.
 
-Formerly known as StableSwarmUI.
+*Formerly known as StableSwarmUI.*
 
-A Modular AI Image Generation Web-User-Interface, with an emphasis on making powertools easily accessible, high performance, and extensibility. Supports AI image models (Stable Diffusion, Flux, etc.), and AI video models (LTX-V, Hunyuan Video, Cosmos, Wan, etc.), with plans to support eg audio and more in the future.
+A Modular AI Image Generation Web-User-Interface, with an emphasis on making powertools easily accessible, high performance, and extensibility. Supports AI image models (*Stable Diffusion, Flux, etc.*), and AI video models (*LTX-V, Hunyuan Video, Cosmos, Wan, etc.*), with plans to support eg audio and more in the future.
 
 ![ui-screenshot](.github/images/swarmui.jpg)
 
-Join the [Discord](https://discord.gg/q2y38cqjNw) to discuss the project, get support, see announcements, etc.
-
-Follow the [Feature Announcements Thread](https://github.com/mcmonkeyprojects/SwarmUI/discussions/1) for updates on new features.
+- **Discord Community**: Join the [Discord](https://discord.gg/q2y38cqjNw) to discuss the project, get support, see announcements, etc.
+- **Announcements**: Follow the [Feature Announcements Thread](https://github.com/mcmonkeyprojects/SwarmUI/discussions/1) for updates on new features.
+- **General documentation**: [/docs folder](https://github.com/mcmonkeyprojects/SwarmUI/blob/master/docs/README.md)
+- **Website**: [SwarmUI.net](https://swarmui.net/)
 
 ----
 
@@ -44,7 +45,7 @@ Runpod template (note: maintained by third party contributor [nerdylive123](http
 
 ### Vast.ai
 
-Vast.ai template ([readme](https://cloud.vast.ai/template/readme/8e5e6ab1fceb9db3f813e815907b3390)): https://cloud.vast.ai?template_id=21b140f47ee8d4ebb2ce836afe2f9ad9
+Vast.ai template ([readme](https://cloud.vast.ai/template/readme/8e5e6ab1fceb9db3f813e815907b3390)): https://cloud.vast.ai/?ref_id=62897&creator_id=62897&name=SwarmUI
 
 Note it may take several minutes to start up the first time. Check the container logs to see setup progress. Check the template `?` info for hints on how to use.
 

@@ -1,8 +1,11 @@
 ﻿@page
 @{
-    ViewData["Title"] = "Image Generation";
+    ViewData["Title"] = "Page is loading...";
     string alwaysRefreshOnLoad = Program.ServerSettings.Backends.AlwaysRefreshOnLoad ? "true" : "false";
     string experimentalHide = Program.ServerSettings.ShowExperimentalFeatures ? "" : "secretexperimental";
+    string instanceTitle = Program.ServerSettings.UserAuthorization.InstanceTitle;
+    bool isLoginEnabled = Program.ServerSettings.UserAuthorization.AuthorizationRequired;
+    User user = isLoginEnabled ? WebUtil.GetValidLogin(HttpContext) : null;
 }
 @section Header {
     <link rel="stylesheet" href="css/genpage.css?vary=@Utilities.VaryID" />
@@ -15,8 +18,16 @@
     </script>
     return;
 }
+@if (isLoginEnabled && user is null)
+{
+    <script>
+        window.location.href = "Login";
+    </script>
+    return;
+}
 <script>
     window.alwaysRefreshOnLoad = @alwaysRefreshOnLoad;
+    window.instanceTitle = "@instanceTitle";
     window.comfy_features = {};
     @foreach (InstallableFeatures.ComfyInstallableFeature feature in InstallableFeatures.ComfyFeatures.Values)
     {
@@ -33,7 +44,7 @@
 </script>
 
 <ul class="nav nav-tabs" role="tablist" id="toptablist">
-    <li class="nav-item" role="presentation">
+    <li class="nav-item" role="presentation" data-requiredpermission="comfy_dynamic_custom_workflows">
         <a class="nav-link translate" data-bs-toggle="tab" href="#Simple" id="simpletabbutton" aria-selected="false" tabindex="-1" role="tab">Simple</a>
     </li>
     <li class="nav-item" role="presentation">
@@ -822,15 +833,30 @@
         </ul>
         <div class="tab-content">
             <div class="tab-pane show active translate" id="user-info" role="tabpanel">
-                (TODO: info n stuff here)
-                <br>
-                <br><button class="basic-button translate" id="change_password_button" onclick="$('#change_password_modal').modal('show')">Change Password</button>
+                <div class="card border-secondary mb-3 card-center-container">
+                    <div class="card-header translate">User Account</div>
+                    <div class="card-body">
+                        @if (!isLoginEnabled)
+                        {
+                            <p class="translate">User accounts are not enabled. You are the local default user. You can enable multi-user accounts in the <a href="#Settings-Server" onclick="getRequiredElementById('servertabbutton').click();getRequiredElementById('serverconfigtabbutton').click()">Server Configuration</a> tab.</p>
+                        }
+                        else
+                        {
+                            <span class="translate">You are logged in as:</span> <b>@user.UserID</b>
+                            <br>
+                            <br>
+                            <button class="basic-button translate" id="logout_button" onclick="doUserLogout()">Logout</button>
+                            // TODO: Other user stuff here. List of tokens/sessions, etc.
+                            <button class="basic-button translate" id="change_password_button" onclick="$('#change_password_modal').modal('show')">Change Password</button>
+                        }
+                    </div>
+                </div>
                 @WebUtil.ModalHeader("change_password_modal", "Change Password")
                     <div class="modal-body">
                         <p class="translate">This form lets you change your user password. If you never had a password before, leave the old password blank.</p>
-                        <br>Old/Current Password: <input type="text" class="auto-text auto-text-block password" translate translate-no-text" id="change_password_old_password" placeholder="Enter old/current password..." autocomplete="off" value="" />
-                        <br>New Password: <input type="text" class="auto-text auto-text-block password" translate translate-no-text" id="change_password_new_password" placeholder="Enter new password..." autocomplete="off" value="" />
-                        <br>Confirm New Password: <input type="text" class="auto-text auto-text-block password" translate translate-no-text" id="change_password_new_password2" placeholder="Confirm new password..." autocomplete="off" value="" />
+                        <br>Old/Current Password: <input type="text" class="auto-text auto-text-block password translate translate-no-text" id="change_password_old_password" placeholder="Enter old/current password..." autocomplete="off" value="" />
+                        <br>New Password: <input type="text" class="auto-text auto-text-block password translate translate-no-text" id="change_password_new_password" placeholder="Enter new password..." autocomplete="off" value="" />
+                        <br>Confirm New Password: <input type="text" class="auto-text auto-text-block password translate translate-no-text" id="change_password_new_password2" placeholder="Confirm new password..." autocomplete="off" value="" />
                         <div id="change_password_result_area"></div>
                     </div>
                     <div class="modal-footer">
@@ -937,7 +963,7 @@
             <li class="nav-item" role="presentation" data-requiredpermission="read_server_settings">
                 <a class="nav-link translate" data-bs-toggle="tab" href="#Settings-Server" id="serverconfigtabbutton" aria-selected="false" tabindex="-1" role="tab">Server Configuration</a>
             </li>
-            <li class="nav-item @experimentalHide" role="presentation" data-requiredpermission="manage_users">
+            <li class="nav-item" role="presentation" data-requiredpermission="manage_users">
                 <a class="nav-link translate" data-bs-toggle="tab" href="#Server-ManageUsers" id="manageusersbutton" aria-selected="false" tabindex="-1" role="tab">Users</a>
             </li>
             <li class="nav-item" role="presentation" data-requiredpermission="manage_extensions">
@@ -1213,6 +1239,18 @@
                     <div class="modal-footer">
                         <button type="button" class="btn btn-primary basic-button translate" onclick="userAdminManager.addRoleMenuSubmit()">Add</button>
                         <button type="button" class="btn btn-secondary basic-button translate" onclick="$('#server_add_role_menu').modal('hide')">Cancel</button>
+                    </div>
+                @WebUtil.ModalFooter()
+                @WebUtil.ModalHeader("server_change_user_password_modal", "Change User Password")
+                    <div class="modal-body">
+                        <p class="translate">This form lets you change another user's password. Be sure to tell them what their new password is, and that they should change their password themself after.</p>
+                        <br>New Password: <input type="text" class="auto-text auto-text-block password translate translate-no-text" id="server_change_user_password_new_password" placeholder="Enter new password..." autocomplete="off" value="" />
+                        <br>Confirm New Password: <input type="text" class="auto-text auto-text-block password translate translate-no-text" id="server_change_user_password_new_password2" placeholder="Confirm new password..." autocomplete="off" value="" />
+                        <div id="server_change_user_password_result_area"></div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-primary basic-button translate" id="server_change_user_password_submit_button" onclick="userAdminManager.changeUserPwSubmit()">Submit</button>
+                        <button type="button" class="btn btn-secondary basic-button translate" id="server_change_user_password_cancel_button" onclick="$('#server_change_user_password_modal').modal('hide')">Cancel</button>
                     </div>
                 @WebUtil.ModalFooter()
                 <div class="manage-users-left" id="manage_users_leftbox">

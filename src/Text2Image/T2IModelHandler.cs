@@ -34,7 +34,10 @@ public class T2IModelHandler
     public string ModelType;
 
     /// <summary>The full folder path for relevant models.</summary>
-    public string[] FolderPaths;
+    public string[] FolderPaths = [];
+
+    /// <summary>The full folder path to download models to.</summary>
+    public string DownloadFolderPath;
 
     /// <summary>Quick internal tracker for unauthorized access errors, to aggregate the warning.</summary>
     public ConcurrentQueue<string> UnathorizedAccessSet = new();
@@ -173,12 +176,12 @@ public class T2IModelHandler
         {
             return [.. Models.Values];
         }
-        return Models.Values.Where(m => session.User.IsAllowedModel(m.Name)).ToList();
+        return [.. Models.Values.Where(m => session.User.IsAllowedModel(m.Name))];
     }
 
     public List<string> ListModelNamesFor(Session session)
     {
-        HashSet<string> list = ListModelsFor(session).Select(m => m.Name).ToHashSet();
+        HashSet<string> list = [.. ListModelsFor(session).Select(m => m.Name)];
         list.UnionWith(ModelsAPI.InternalExtraModels(ModelType).Keys);
         List<string> result = new(list.Count + 2) { "(None)" };
         result.AddRange(list);
@@ -399,7 +402,7 @@ public class T2IModelHandler
                 {
                     metaHeader = headerData["__metadata__"] as JObject ?? [];
                     textEncs = "";
-                    string[] keys = headerData.Properties().Select(p => p.Name).Where(k => k.StartsWith("text_encoders.")).ToArray();
+                    string[] keys = [.. headerData.Properties().Select(p => p.Name).Where(k => k.StartsWith("text_encoders."))];
                     if (keys.Any(k => k.StartsWith("text_encoders.clip_g."))) { textEncs += "clip_g,"; }
                     if (keys.Any(k => k.StartsWith("text_encoders.clip_l."))) { textEncs += "clip_l,"; }
                     if (keys.Any(k => k.StartsWith("text_encoders.t5xxl."))) { textEncs += "t5xxl,"; }

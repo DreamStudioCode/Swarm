@@ -27,6 +27,20 @@ let autoCompletionsOptimize = false;
 
 let mainGenHandler = new GenerateHandler();
 
+let pageTitleSuffix = document.title.split(' - ')[1];
+let curAutoTitle = "Page is loading...";
+
+function setPageTitle(newTitle) {
+    document.title = `${newTitle} - ${pageTitleSuffix}`;
+}
+
+function autoTitle() {
+    let tabList = getRequiredElementById('toptablist');
+    let activeTopTab = tabList.querySelector('.active');
+    curAutoTitle = activeTopTab.textContent;
+    setPageTitle(curAutoTitle);
+}
+
 function updateOtherInfoSpan() {
     let span = getRequiredElementById('other_info_span');
     span.innerHTML = otherInfoSpanContent.join(' ');
@@ -990,8 +1004,6 @@ function gotImagePreview(image, metadata, batchId) {
     return batch_div;
 }
 
-let originalPageTitle = document.title;
-
 let generatingPreviewsText = translatable('Generating live previews...');
 let waitingOnModelLoadText = translatable('waiting on model load');
 let generatingText = translatable('generating');
@@ -1027,7 +1039,7 @@ function updateCurrentStatusDirect(data) {
     }
     elem.innerHTML = total == 0 ? (isGeneratingPreviews ? translatableText.get() : '') : `${autoBlock(num_current_gens, 'current generation%')}${autoBlock(num_live_gens, 'running')}${autoBlock(num_backends_waiting, 'queued')}${autoBlock(num_models_loading, waitingOnModelLoadText.get())} ${timeEstimate}...`;
     let max = Math.max(num_current_gens, num_models_loading, num_live_gens, num_backends_waiting);
-    document.title = total == 0 ? originalPageTitle : `(${max} ${generatingText.get()}) ${originalPageTitle}`;
+    setPageTitle(total == 0 ? curAutoTitle : `(${max} ${generatingText.get()}) ${curAutoTitle}`);
 }
 
 let doesHaveGenCountUpdateQueued = false;
@@ -1769,11 +1781,15 @@ function installTensorRT() {
     });
 }
 
-function hideRevisionInputs() {
+function clearPromptImages() {
     let promptImageArea = getRequiredElementById('alt_prompt_image_area');
     promptImageArea.innerHTML = '';
     let clearButton = getRequiredElementById('alt_prompt_image_clear_button');
     clearButton.style.display = 'none';
+    autoRevealRevision();
+}
+
+function hideRevisionInputs() {
     let revisionGroup = document.getElementById('input_group_imageprompting');
     let revisionToggler = document.getElementById('input_group_content_imageprompting_toggle');
     if (revisionGroup) {
@@ -1798,9 +1814,11 @@ function showRevisionInputs(toggleOn = false) {
     }
 }
 
+revisionRevealerSources = [];
+
 function autoRevealRevision() {
     let promptImageArea = getRequiredElementById('alt_prompt_image_area');
-    if (promptImageArea.children.length > 0) {
+    if (promptImageArea.children.length > 0 || revisionRevealerSources.some(x => x())) {
         showRevisionInputs();
     }
     else {
@@ -1845,7 +1863,7 @@ function imagePromptInputHandler() {
     });
     let clearButton = getRequiredElementById('alt_prompt_image_clear_button');
     clearButton.addEventListener('click', () => {
-        hideRevisionInputs();
+        clearPromptImages();
     });
     dragArea.addEventListener('drop', (e) => {
         if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
@@ -2105,6 +2123,7 @@ function updateHash() {
         }
     }
     history.pushState(null, null, hash);
+    autoTitle();
 }
 
 function loadHashHelper() {
@@ -2137,6 +2156,7 @@ function loadHashHelper() {
             let target = decodeURIComponent(split[2]);
             simpleTab.mustSelectTarget = target;
         }
+        autoTitle();
     }
     for (let tab of tabs) {
         tab.addEventListener('click', (e) => {
@@ -2230,7 +2250,6 @@ function genpageLoad() {
         console.log('First session loaded - prepping page.');
         imageHistoryBrowser.navigate('');
         initialModelListLoad();
-        loadBackendTypesMenu();
         genericRequest('ListT2IParams', {}, data => {
             updateAllModels(data.models);
             allWildcards = data.wildcards;
@@ -2239,6 +2258,8 @@ function genpageLoad() {
             paramConfig.preInit();
             paramConfig.applyParamEdits(data.param_edits);
             paramConfig.loadUserParamConfigTab();
+            autoRepersistParams();
+            setInterval(autoRepersistParams, 60 * 60 * 1000); // Re-persist again hourly if UI left over
             genInputs();
             genToolsList();
             reviseStatusBar();
@@ -2246,12 +2267,16 @@ function genpageLoad() {
             toggle_advanced();
             setCurrentModel();
             loadUserData(() => {
+                if (permissions.hasPermission('view_backends_list')) {
+                    loadBackendTypesMenu();
+                }
                 selectInitialPresetList();
             });
             for (let callback of sessionReadyCallbacks) {
                 callback();
             }
             automaticWelcomeMessage();
+            autoTitle();
         });
         reviseStatusInterval = setInterval(reviseStatusBar, 2000);
         window.resLoopInterval = setInterval(serverResourceLoop, 1000);

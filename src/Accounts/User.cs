@@ -8,6 +8,7 @@ using SwarmUI.Text2Image;
 using FreneticUtilities.FreneticExtensions;
 using System.Security.Cryptography;
 using SwarmUI.Backends;
+using Microsoft.AspNetCore.Cryptography.KeyDerivation;
 
 namespace SwarmUI.Accounts;
 
@@ -31,6 +32,12 @@ public class User
 
         /// <summary>Hashed blob of the user password, or empty if unset.</summary>
         public string PasswordHashed { get; set; } = "";
+
+        /// <summary>True if password was set by an admin, false if password was set by the user.</summary>
+        public bool IsPasswordSetByAdmin { get; set; } = true;
+
+        /// <summary>IDs of the user's current login sessions.</summary>
+        public List<string> LoginSessions { get; set; } = [];
     }
 
     public void BuildRoles()
@@ -50,6 +57,7 @@ public class User
     {
         SessionHandlerSource = sessions;
         Data = data;
+        Data.LoginSessions ??= [];
         Settings.Load(Program.ServerSettings.DefaultUser.Save(false));
         foreach (string field in Settings.InternalData.SharedData.Fields.Keys)
         {
@@ -102,7 +110,7 @@ public class User
     /// <summary>Returns a list of all generic-data IDs this user has saved.</summary>
     public List<string> ListAllGenericData(string dataname)
     {
-        return GetAllGenericData(dataname).Select(d => d.ID.After("///").After("///")).ToList();
+        return [.. GetAllGenericData(dataname).Select(d => d.ID.After("///").After("///"))];
     }
 
     /// <summary>Returns a list of all generic-data this user has saved.</summary>
@@ -113,7 +121,7 @@ public class User
             string id = $"{UserID}///${dataname}///";
             try
             {
-                return SessionHandlerSource.GenericData.Find(b => b.ID.StartsWith(id)).ToList();
+                return [.. SessionHandlerSource.GenericData.Find(b => b.ID.StartsWith(id))];
             }
             catch (Exception ex)
             {
@@ -162,10 +170,10 @@ public class User
         {
             try
             {
-                List<T2IPreset> presets = Data.Presets.Select(p => SessionHandlerSource.T2IPresets.FindById(p)).ToList();
+                List<T2IPreset> presets = [.. Data.Presets.Select(p => SessionHandlerSource.T2IPresets.FindById(p))];
                 if (presets.Any(p => p is null))
                 {
-                    List<string> bad = Data.Presets.Where(p => SessionHandlerSource.T2IPresets.FindById(p) is null).ToList();
+                    List<string> bad = [.. Data.Presets.Where(p => SessionHandlerSource.T2IPresets.FindById(p) is null)];
                     Logs.Error($"User {UserID} has presets that don't exist (database error?): {string.Join(", ", bad)}");
                     presets.RemoveAll(p => p is null);
                     Data.Presets.RemoveAll(bad.Contains);
@@ -441,5 +449,35 @@ public class User
             }
         }
         return false;
+    }
+
+    public (SessionHandler.LoginSession, string) CreateLoginSession(string ip, string userAgent)
+    {
+        string id = Utilities.SecureRandomHex(32);
+        string validationText = Utilities.SecureRandomHex(32);
+        byte[] salt = RandomNumberGenerator.GetBytes(128 / 8);
+        byte[] hashedText = KeyDerivation.Pbkdf2(password: validationText, salt: salt, prf: KeyDerivationPrf.HMACSHA256, iterationCount: 10, numBytesRequested: 256 / 8);
+        string validationHashed = Utilities.BytesToHex(salt) + ":" + Utilities.BytesToHex(hashedText);
+        SessionHandler.LoginSession session = new()
+        {
+            ID = id,
+            UserID = UserID,
+            OriginAddress = ip,
+            OriginUserAgent = userAgent,
+            LastActiveUnixTime = DateTimeOffset.Now.ToUnixTimeSeconds(),
+            ValidationHash = validationHashed
+        };
+        lock (SessionHandlerSource.DBLock)
+        {
+            if (!MayCreateSessions)
+            {
+                return (null, null);
+            }
+            Data.LoginSessions.Add(id);
+            Save();
+            SessionHandlerSource.LoginSessions.Upsert(id, session);
+        }
+        string userIdHex = Utilities.BytesToHex(Encoding.UTF8.GetBytes(UserID));
+        return (session, $"{userIdHex}.{id}.{validationText}");
     }
 }

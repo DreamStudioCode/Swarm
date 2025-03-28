@@ -15,6 +15,8 @@ namespace SwarmUI.WebAPI;
 [API.APIClass("API routes related to handling models (including loras, wildcards, etc).")]
 public static class ModelsAPI
 {
+    public static long ModelEditID = 0;
+
     public static void Register()
     {
         API.RegisterAPICall(ListModels, false, Permissions.FundamentalModelAccess);
@@ -35,7 +37,7 @@ public static class ModelsAPI
 
     public static Dictionary<string, JObject> InternalExtraModels(string subtype)
     {
-        SwarmSwarmBackend[] backends = Program.Backends.RunningBackendsOfType<SwarmSwarmBackend>().Where(b => b.RemoteModels is not null).ToArray();
+        SwarmSwarmBackend[] backends = [.. Program.Backends.RunningBackendsOfType<SwarmSwarmBackend>().Where(b => b.RemoteModels is not null)];
         IEnumerable<Dictionary<string, JObject>> sets = backends.Select(b => b.RemoteModels.GetValueOrDefault(subtype)).Where(b => b is not null);
         if (sets.IsEmpty())
         {
@@ -198,7 +200,7 @@ public static class ModelsAPI
                 if (tryMatch(file))
                 {
                     WildcardsHelper.Wildcard card = WildcardsHelper.GetWildcard(file);
-                    files.Add(new(card.Name, card.Name.AfterLast('/'), card.TimeCreated, card.TimeModified, card.GetNetObject()));
+                    files.Add(new(card.Name, card.Name.AfterLast('/'), card.TimeCreated, card.TimeModified, card.GetNetObject(false)));
                     if (files.Count > sanityCap)
                     {
                         break;
@@ -212,7 +214,7 @@ public static class ModelsAPI
             {
                 if (tryMatch(possible.Name))
                 {
-                    files.Add(new(possible.Name, possible.Title, possible.Metadata?.TimeCreated ?? long.MaxValue, possible.Metadata?.TimeModified ?? long.MaxValue, possible.ToNetObject()));
+                    files.Add(new(possible.Name, possible.Title, possible.Metadata?.TimeCreated ?? long.MaxValue, possible.Metadata?.TimeModified ?? long.MaxValue, possible.ToNetObject(dataImgs: false)));
                     if (files.Count > sanityCap)
                     {
                         break;
@@ -226,7 +228,13 @@ public static class ModelsAPI
             {
                 if (tryMatch(name))
                 {
-                    files.Add(new(name, name.AfterLast('/'), long.MaxValue, long.MaxValue, possible));
+                    JObject toAdd = possible;
+                    if (toAdd.TryGetValue("preview_image", out JToken previewImg) && previewImg.ToString().StartsWith("data:"))
+                    {
+                        toAdd = toAdd.DeepClone() as JObject;
+                        toAdd["preview_image"] = $"/ViewSpecial/{subtype}/{name}";
+                    }
+                    files.Add(new(name, name.AfterLast('/'), long.MaxValue, long.MaxValue, toAdd));
                     if (files.Count > sanityCap)
                     {
                         break;
@@ -254,6 +262,7 @@ public static class ModelsAPI
         {
             files.Reverse();
         }
+        Utilities.QuickGC(); // (Could potentially be quite large data, so encourage GC to not slam RAM from listing out model data)
         return new JObject()
         {
             ["folders"] = JArray.FromObject(folders.ToList()),
@@ -275,7 +284,7 @@ public static class ModelsAPI
     public static async Task<JObject> ListLoadedModels(Session session)
     {
         using ManyReadOneWriteLock.ReadClaim claim = Program.RefreshLock.LockRead();
-        List<T2IModel> matches = Program.MainSDModels.Models.Values.Where(m => m.AnyBackendsHaveLoaded && session.User.IsAllowedModel(m.Name)).ToList();
+        List<T2IModel> matches = [.. Program.MainSDModels.Models.Values.Where(m => m.AnyBackendsHaveLoaded && session.User.IsAllowedModel(m.Name))];
         return new JObject()
         {
             ["models"] = JArray.FromObject(matches.Select(m => m.ToNetObject()).ToList())
@@ -402,6 +411,7 @@ public static class ModelsAPI
             File.WriteAllBytes($"{WildcardsHelper.Folder}/{card}.jpg", img.ImageData);
             WildcardsHelper.WildcardFiles[card] = new WildcardsHelper.Wildcard() { Name = card };
         }
+        Interlocked.Increment(ref ModelEditID);
         return new JObject() { ["success"] = true };
     }
 
@@ -472,6 +482,7 @@ public static class ModelsAPI
         }
         handler.ResetMetadataFrom(actualModel);
         _ = Utilities.RunCheckedTask(() => actualModel.ResaveModel());
+        Interlocked.Increment(ref ModelEditID);
         return new JObject() { ["success"] = true };
     }
 
@@ -515,13 +526,13 @@ public static class ModelsAPI
         }
         try
         {
-            string outPath = $"{handler.FolderPaths[0]}/{name}.safetensors";
+            string outPath = $"{handler.DownloadFolderPath}/{name}.safetensors";
             if (File.Exists(outPath))
             {
                 await ws.SendJson(new JObject() { ["error"] = "Model at that save path already exists." }, API.WebsocketTimeout);
                 return null;
             }
-            string tempPath = $"{handler.FolderPaths[0]}/{name}.download.tmp";
+            string tempPath = $"{handler.DownloadFolderPath}/{name}.download.tmp";
             if (File.Exists(tempPath))
             {
                 File.Delete(tempPath);
@@ -569,7 +580,7 @@ public static class ModelsAPI
             File.Move(tempPath, outPath);
             if (!string.IsNullOrWhiteSpace(metadata))
             {
-                File.WriteAllText($"{handler.FolderPaths[0]}/{name}.swarm.json", metadata);
+                File.WriteAllText($"{handler.DownloadFolderPath}/{name}.swarm.json", metadata);
             }
             if (Program.ServerSettings.Paths.DownloaderAlwaysResave)
             {
@@ -803,6 +814,7 @@ public static class ModelsAPI
                 doMoveNow(altPath);
             }
         }
+        Interlocked.Increment(ref ModelEditID);
         return new JObject() { ["success"] = true };
     }
 }

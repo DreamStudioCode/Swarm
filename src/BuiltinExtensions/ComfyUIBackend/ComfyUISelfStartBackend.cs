@@ -28,6 +28,10 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
         [ManualSettingsOptions(Impl = null, Vals = ["true", "aggressive", "false"], ManualNames = ["Always Update", "Always Aggressively Update (Force-Update)", "Don't Update"])]
         public string AutoUpdate = "true";
 
+        [ConfigComment("Whether the Comfy backend should automatically update nodes within Swarm's managed nodes folder.\nYou can update every launch, never update automatically, or force-update (bypasses some common git issues).")]
+        [ManualSettingsOptions(Impl = null, Vals = ["true", "aggressive", "false"], ManualNames = ["Always Update", "Always Aggressively Update (Force-Update)", "Don't Update"])]
+        public string UpdateManagedNodes = "true";
+
         [ConfigComment("Which version of the ComfyUI frontend to enable.\n'Latest' uses the latest version available (including dev commits).\n'None' uses whatever is baked into ComfyUI itself.\n'Latest Swarm Validated' uses the latest version that Swarm has been tested and confirmed to work with.\n'Legacy' uses the pre-September-2024 legacy UI.")]
         [ManualSettingsOptions(Impl = null, Vals = ["Latest", "None", "LatestSwarmValidated", "Legacy"], ManualNames = ["Latest", "None", "Latest Swarm Validated", "Legacy (Pre Sept 2024)"])]
         public string FrontendVersion = "LatestSwarmValidated";
@@ -116,6 +120,12 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
         return null;
     }
 
+    /// <summary>Mapping of node folder names to exact git commits to maintain.</summary>
+    public static ConcurrentDictionary<string, string> ComfyNodeGitPins = new()
+    {
+        ["ComfyUI-TeaCache"] = "b3429ef3dea426d2f167e348b44cd2f5a3674e7d"
+    };
+
     public async Task EnsureNodeRepos()
     {
         try
@@ -133,7 +143,7 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
                 await Task.WhenAll(tasks);
             }
             tasks.Clear();
-            string autoUpd = Settings.AutoUpdate.ToLowerFast();
+            string autoUpd = Settings.UpdateManagedNodes.ToLowerFast();
             foreach (string node in Directory.EnumerateDirectories(nodePath))
             {
                 await Task.Delay(TimeSpan.FromSeconds(0.05));
@@ -143,9 +153,24 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
                     string pathSimple = toUse.Replace('\\', '/').AfterLast('/');
                     tasks.Add(Task.Run(async () =>
                     {
-                        AddLoadStatus($"Ensure node repos - Will git pull for {pathSimple}...");
-                        string response = await Utilities.RunGitProcess(autoUpd == "aggressive" ? "pull --autostash" : "pull", toUse);
-                        AddLoadStatus($"Node pull response for {pathSimple}: {response.Trim()}");
+                        if (ComfyNodeGitPins.TryGetValue(pathSimple, out string hash))
+                        {
+                            string localHash = (await Utilities.RunGitProcess("rev-parse HEAD", toUse)).Trim();
+                            if (localHash.ToLowerFast() != hash.ToLowerFast())
+                            {
+                                AddLoadStatus($"Ensure node repos - Will git pull for {pathSimple} to explicit pinned commend {hash}...");
+                                string response = await Utilities.RunGitProcess(autoUpd == "aggressive" ? "pull --autostash" : "pull", toUse);
+                                AddLoadStatus($"Node pull response for {pathSimple}: {response.Trim()}");
+                                string response2 = await Utilities.RunGitProcess($"reset --hard {hash}", toUse);
+                                AddLoadStatus($"Node reset to {hash} response for {pathSimple}: {response2.Trim()}");
+                            }
+                        }
+                        else
+                        {
+                            AddLoadStatus($"Ensure node repos - Will git pull for {pathSimple}...");
+                            string response = await Utilities.RunGitProcess(autoUpd == "aggressive" ? "pull --autostash" : "pull", toUse);
+                            AddLoadStatus($"Node pull response for {pathSimple}: {response.Trim()}");
+                        }
                     }));
                 }
             }
@@ -256,6 +281,8 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
         return Process.Start(start);
     }
 
+    public static string SwarmValidatedFrontendVersion = "1.11.8";
+
     public override async Task Init()
     {
         AddLoadStatus("Starting init...");
@@ -283,7 +310,7 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
             }
             else if (Settings.FrontendVersion == "LatestSwarmValidated")
             {
-                addedArgs += " --front-end-version Comfy-Org/ComfyUI_frontend@v1.9.18";
+                addedArgs += $" --front-end-version Comfy-Org/ComfyUI_frontend@v{SwarmValidatedFrontendVersion}";
             }
             else if (Settings.FrontendVersion == "Legacy")
             {
@@ -298,11 +325,17 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
             AddLoadStatus($"Start script '{Settings.StartScript}' looks wrong");
             Logs.Warning($"ComfyUI start script is '{Settings.StartScript}', which looks wrong - did you forget to append 'main.py' on the end?");
         }
-        AddLoadStatus("Will track node repo load task...");
+        Directory.CreateDirectory(Path.GetFullPath(ComfyUIBackendExtension.Folder + "/DLNodes"));
+        string autoUpdNodes = Settings.UpdateManagedNodes.ToLowerFast();
+        List<Task> tasks = [];
+        if ((autoUpdNodes == "true" || autoUpdNodes == "aggressive") && !string.IsNullOrWhiteSpace(Settings.StartScript))
+        {
+            AddLoadStatus("Will track node repo load task...");
+            tasks.Add(Task.Run(EnsureNodeRepos));
+        }
         string autoUpd = Settings.AutoUpdate.ToLowerFast();
         if ((autoUpd == "true" || autoUpd == "aggressive") && !string.IsNullOrWhiteSpace(Settings.StartScript))
         {
-            List<Task> tasks = [Task.Run(EnsureNodeRepos)];
             AddLoadStatus("Will track comfy git pull auto-update task...");
             tasks.Add(Task.Run(async () =>
             {
@@ -344,17 +377,24 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
                     Logs.Error($"Failed to auto-update comfy backend: {ex.ReadableString()}");
                 }
             }));
+        }
+        if (tasks.Any())
+        {
             AddLoadStatus($"Waiting on git tasks to complete...");
             await Task.WhenAll(tasks);
             AddLoadStatus($"All tasks done.");
         }
         string lib = NetworkBackendUtils.GetProbableLibFolderFor(Settings.StartScript);
-        if (lib is not null)
+        if (lib is null)
+        {
+            AddLoadStatus($"Skip lib validation, can't find folder.");
+        }
+        else
         {
             AddLoadStatus($"Will validate required libs...");
-            string[] dirs = [.. Directory.GetDirectories($"{lib}/site-packages/").Select(f => f.Replace('\\', '/').AfterLast('/'))];
+            string[] dirs = [.. Directory.GetDirectories($"{lib}").Select(f => f.Replace('\\', '/').AfterLast('/'))];
             string[] distinfos = [.. dirs.Where(d => d.EndsWith(".dist-info"))];
-            HashSet<string> libs = dirs.Select(d => d.Before('-')).ToHashSet();
+            HashSet<string> libs = [.. dirs.Select(d => d.Before('-'))];
             async Task install(string libFolder, string pipName)
             {
                 if (libs.Contains(libFolder))
@@ -398,6 +438,11 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
             {
                 await update("numpy", "numpy>=1.25.0");
             }
+            string frontendVersion = getVers("comfyui_frontend_package");
+            if (frontendVersion is not null && frontendVersion != SwarmValidatedFrontendVersion)
+            {
+                await update("comfyui_frontend_package", $"comfyui_frontend_package=={SwarmValidatedFrontendVersion}");
+            }
             string ultralyticsVers = getVers("ultralytics");
             if (ultralyticsVers is not null && Version.Parse(ultralyticsVers) < Version.Parse(UltralyticsVersion))
             {
@@ -407,16 +452,16 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
             {
                 // FaceID IPAdapter models need these, really inconvenient to make dependencies conditional, so...
                 await install("Cython", "cython");
-                if (File.Exists($"{lib}/../python311.dll"))
+                if (File.Exists($"{lib}/../../python311.dll"))
                 {
                     // TODO: This is deeply cursed. This is published by the comfyui-ReActor-node developer so at least it's not a complete rando, but, jeesh. Insightface please fix your pip package.
                     await install("insightface", "https://github.com/Gourieff/Assets/raw/main/Insightface/insightface-0.7.3-cp311-cp311-win_amd64.whl");
                 }
-                else if (File.Exists($"{lib}/../python312.dll"))
+                else if (File.Exists($"{lib}/../../python312.dll"))
                 {
                     await install("insightface", "https://github.com/Gourieff/Assets/raw/main/Insightface/insightface-0.7.3-cp312-cp312-win_amd64.whl");
                 }
-                else if (File.Exists($"{lib}/../python310.dll"))
+                else if (File.Exists($"{lib}/../../python310.dll"))
                 {
                     await install("insightface", "https://github.com/Gourieff/Assets/raw/main/Insightface/insightface-0.7.3-cp310-cp310-win_amd64.whl");
                 }
@@ -445,7 +490,7 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
         ("sentencepiece", "sentencepiece"),
         ("spandrel", "spandrel"),
         ("av", "av"),
-        ("comfyui_frontend_package", "comfyui_frontend_package"),
+        ("comfyui_frontend_package", $"comfyui_frontend_package=={SwarmValidatedFrontendVersion}"),
         // Other added dependencies
         ("rembg", "rembg"),
         ("onnxruntime", "onnxruntime"), // subdependency of rembg but inexplicably not autoinstalled anymore?
@@ -453,7 +498,8 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
         ("opencv_python_headless", "opencv-python-headless"),
         ("imageio_ffmpeg", "imageio-ffmpeg"),
         ("dill", "dill"),
-        ("ultralytics", $"ultralytics=={UltralyticsVersion}")
+        ("ultralytics", $"ultralytics=={UltralyticsVersion}"),
+        ("omegaconf", "omegaconf") // some yolo models require this but ultralytics itself doesn't? wut?
     ];
 
     public override async Task Shutdown()

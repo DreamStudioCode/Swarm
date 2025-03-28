@@ -7,7 +7,7 @@
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 cd "$SCRIPT_DIR/.."
 
-docker build -f launchtools/OpenDockerfile.docker -t swarmui .
+docker build --build-arg UID=$UID -f launchtools/OpenDockerfile.docker -t swarmui .
 
 # add "--network=host" if you want to access other services on the host network (eg a separated comfy instance)
 docker run -it \
@@ -15,4 +15,8 @@ docker run -it \
     --user $UID:$(id -g) --cap-drop=ALL \
     --name swarmui \
     -v "$PWD:/SwarmUI" \
-    --gpus=all -p 7801:7801 swarmui $@
+    --gpus=all -p 7801:7801 swarmui --forward_restart $@
+
+if [ $? == 42 ]; then
+    exec "$SCRIPT_DIR/launch-open-docker.sh" $@
+fi

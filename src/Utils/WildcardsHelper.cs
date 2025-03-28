@@ -2,6 +2,7 @@
 using FreneticUtilities.FreneticToolkit;
 using Newtonsoft.Json.Linq;
 using SwarmUI.Core;
+using SwarmUI.WebAPI;
 using System.IO;
 
 namespace SwarmUI.Utils;
@@ -23,14 +24,19 @@ public class WildcardsHelper
 
         public long TimeCreated;
 
-        public JObject GetNetObject()
+        public JObject GetNetObject(bool dataImgs = true)
         {
+            string previewImg = Image ?? "imgs/model_placeholder.jpg";
+            if (!dataImgs && previewImg is not null && previewImg.StartsWithFast("data:"))
+            {
+                previewImg = $"/ViewSpecial/Wildcards/{Name}?editid={ModelsAPI.ModelEditID}";
+            }
             return new()
             {
                 ["name"] = Name,
                 ["options"] = JArray.FromObject(Options),
                 ["raw"] = Raw,
-                ["image"] = Image ?? "imgs/model_placeholder.jpg"
+                ["image"] = previewImg
             };
         }
     }
@@ -84,7 +90,7 @@ public class WildcardsHelper
             wildcard.TimeModified = new DateTimeOffset(File.GetLastWriteTimeUtc(fname)).ToUnixTimeMilliseconds();
             string rawText = StringConversionHelper.UTF8Encoding.GetString(File.ReadAllBytes(fname)).Replace("\r\n", "\n").Replace("\r", "");
             wildcard.Raw = rawText;
-            wildcard.Options = rawText.Split('\n').Select(card => card.Before('#').Trim()).Where(card => !string.IsNullOrWhiteSpace(card)).ToArray();
+            wildcard.Options = [.. rawText.Split('\n').Select(card => card.Before('#').Trim()).Where(card => !string.IsNullOrWhiteSpace(card))];
             if (wildcard.Image is null && File.Exists($"{Folder}/{name}.jpg"))
             {
                 wildcard.Image = new Image(File.ReadAllBytes($"{Folder}/{name}.jpg"), Image.ImageType.IMAGE, "jpg").AsDataString();

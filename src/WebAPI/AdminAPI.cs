@@ -35,9 +35,13 @@ public static class AdminAPI
         API.RegisterAPICall(UninstallExtension, true, Permissions.ManageExtensions);
         API.RegisterAPICall(AdminListUsers, false, Permissions.ManageUsers);
         API.RegisterAPICall(AdminAddUser, true, Permissions.ManageUsers);
+        API.RegisterAPICall(AdminSetUserPassword, true, Permissions.ManageUsers);
+        API.RegisterAPICall(AdminChangeUserSettings, true, Permissions.ManageUsers);
         API.RegisterAPICall(AdminDeleteUser, true, Permissions.ManageUsers);
+        API.RegisterAPICall(AdminGetUserInfo, false, Permissions.ManageUsers);
         API.RegisterAPICall(AdminListRoles, false, Permissions.ConfigureRoles);
         API.RegisterAPICall(AdminAddRole, true, Permissions.ConfigureRoles);
+        API.RegisterAPICall(AdminEditRole, true, Permissions.ConfigureRoles);
         API.RegisterAPICall(AdminDeleteRole, true, Permissions.ConfigureRoles);
         API.RegisterAPICall(AdminListPermissions, false, Permissions.ConfigureRoles);
     }
@@ -231,13 +235,13 @@ public static class AdminAPI
             }
         """)]
     public static async Task<JObject> ListRecentLogMessages(Session session,
-        [API.APIParameter("Optionally input `\"last_sequence_ids\": { \"info\": 123 }` to set the start point.")] JObject raw)
+        [API.APIParameter("Use eg `\"types\": [\"info\"]` to specify what log types to include.\nOptionally input `\"last_sequence_ids\": { \"info\": 123 }` to set the start point.")] JObject raw)
     {
         JObject result = await ListLogTypes(session);
         long lastSeq = Interlocked.Read(ref Logs.LogTracker.LastSequenceID);
         result["last_sequence_id"] = lastSeq;
         JObject messageData = [];
-        List<string> types = raw["types"].Select(v => $"{v}").ToList();
+        List<string> types = [.. raw["types"].Select(v => $"{v}")];
         foreach (string type in types)
         {
             Logs.LogTracker tracker;
@@ -414,7 +418,7 @@ public static class AdminAPI
     public static async Task<JObject> DebugLanguageAdd(Session session,
         [API.APIParameter("\"set\": [ \"word\", ... ]")] JObject raw)
     {
-        LanguagesHelper.TrackSet(raw["set"].ToArray().Select(v => $"{v}").ToArray());
+        LanguagesHelper.TrackSet([.. raw["set"].ToArray().Select(v => $"{v}")]);
         return new JObject() { ["success"] = true };
     }
 
@@ -453,13 +457,13 @@ public static class AdminAPI
             }
             return result;
         }
-        JArray list = new(Program.Sessions.Users.Values.Where(u => u.TimeSinceLastPresent.TotalMinutes < 3 && !u.UserID.StartsWith("__")).OrderBy(u => u.UserID).Select(u => new JObject()
+        JArray list = [.. Program.Sessions.Users.Values.Where(u => u.TimeSinceLastPresent.TotalMinutes < 3 && !u.UserID.StartsWith("__")).OrderBy(u => u.UserID).Select(u => new JObject()
         {
             ["id"] = u.UserID,
             ["last_active_seconds"] = u.TimeSinceLastUsed.TotalSeconds,
             ["active_sessions"] = sessWrangle(u.CurrentSessions.Values.Where(s => s.TimeSinceLastUsed.TotalMinutes < 3).Select(s => s.OriginAddress)),
             ["last_active"] = $"{u.TimeSinceLastUsed.SimpleFormat(false, false)} ago"
-        }).ToArray());
+        }).ToArray()];
         return new JObject() { ["users"] = list };
     }
 
@@ -605,9 +609,11 @@ public static class AdminAPI
         """)]
     public static async Task<JObject> AdminListUsers(Session session)
     {
-        List<string> users = Program.Sessions.UserDatabase.FindAll().Select(u => u.ID).ToList();
+        List<string> users = [.. Program.Sessions.UserDatabase.FindAll().Select(u => u.ID)];
         return new JObject() { ["users"] = JArray.FromObject(users) };
     }
+
+    public static AsciiMatcher UsernameValidator = new(AsciiMatcher.BothCaseLetters + AsciiMatcher.Digits + "_");
 
     [API.APIDescription("Admin route to create a new user account.",
         """
@@ -618,7 +624,19 @@ public static class AdminAPI
         [API.APIParameter("Initial password for the new user.")] string password,
         [API.APIParameter("Initial role for the new user.")] string role)
     {
-        string cleaned = Utilities.StrictFilenameClean(name).ToLowerFast().Replace('/', '_');
+        string cleaned = UsernameValidator.TrimToMatches(name).ToLowerFast();
+        if (cleaned.Length < 3)
+        {
+            return new JObject() { ["error"] = "Username must be at least 3 characters long, A-Z 0-9 only." };
+        }
+        if (password.Length < 8)
+        {
+            return new JObject() { ["error"] = "Password must be at least 8 characters long." };
+        }
+        if (cleaned.Length > 70 || password.Length > 500)
+        {
+            return new JObject() { ["error"] = "Username or password too long." };
+        }
         lock (Program.Sessions.DBLock)
         {
             User existing = Program.Sessions.GetUser(cleaned, false);
@@ -629,10 +647,81 @@ public static class AdminAPI
             User.DatabaseEntry userData = new() { ID = cleaned, RawSettings = "\n" };
             User user = new(Program.Sessions, userData);
             user.Settings.Roles = [role];
+            user.Settings.TrySetFieldModified(nameof(User.Settings.Roles), true);
             user.Data.PasswordHashed = Utilities.HashPassword(cleaned, password);
-            Program.Sessions.Users.TryAdd(cleaned, user);
+            user.Data.IsPasswordSetByAdmin = true;
+            user.BuildRoles();
             user.Save();
+            Program.Sessions.Users.TryAdd(cleaned, user);
         }
+        return new JObject() { ["success"] = true };
+    }
+
+    [API.APIDescription("Admin route to force-set a user's password.",
+        """
+            "success": true
+        """)]
+    public static async Task<JObject> AdminSetUserPassword(Session session,
+        [API.APIParameter("The name of the user.")] string name,
+        [API.APIParameter("New password for the user.")] string password)
+    {
+        User user = Program.Sessions.GetUser(name, false);
+        if (user is null)
+        {
+            return new JObject() { ["error"] = "No user by that name exists." };
+        }
+        if (string.IsNullOrWhiteSpace(password))
+        {
+            user.Data.PasswordHashed = "";
+        }
+        else
+        {
+            if (password.Length < 8)
+            {
+                return new JObject() { ["error"] = "Password must be at least 8 characters long." };
+            }
+            if (password.Length > 500)
+            {
+                return new JObject() { ["error"] = "Password too long." };
+            }
+            user.Data.PasswordHashed = Utilities.HashPassword(user.UserID, password);
+        }
+        user.Data.IsPasswordSetByAdmin = true;
+        user.Save();
+        return new JObject() { ["success"] = true };
+    }
+
+    [API.APIDescription("Admin route to forcibly change user settings data for a user.",
+        """
+            "success": true
+        """)]
+    public static async Task<JObject> AdminChangeUserSettings(Session session,
+        [API.APIParameter("The name of the user.")] string name,
+        [API.APIParameter("Simple object map of key as setting ID to new setting value to apply, under 'settings'.")] JObject rawData)
+    {
+        User user = Program.Sessions.GetUser(name, false);
+        if (user is null)
+        {
+            return new JObject() { ["error"] = "No user by that name exists." };
+        }
+        JObject settings = (JObject)rawData["settings"];
+        foreach ((string key, JToken val) in settings)
+        {
+            AutoConfiguration.Internal.SingleFieldData field = user.Settings.TryGetFieldInternalData(key, out _);
+            if (field is null)
+            {
+                Logs.Error($"User '{session.User.UserID}' tried to admin-set unknown setting '{key}' to '{val}'.");
+                continue;
+            }
+            object obj = DataToType(val, field.Field.FieldType);
+            if (obj is null)
+            {
+                Logs.Error($"User '{session.User.UserID}' tried to admin-set setting '{key}' of type '{field.Field.FieldType.Name}' to '{val}', but type-conversion failed.");
+                continue;
+            }
+            user.Settings.TrySetFieldValue(key, obj);
+        }
+        user.Save();
         return new JObject() { ["success"] = true };
     }
 
@@ -657,6 +746,30 @@ public static class AdminAPI
             Program.Sessions.RemoveUser(user);
         }
         return new JObject() { ["success"] = true };
+    }
+
+    [API.APIDescription("Admin route to get info about a user.",
+        """
+            "user_id": "useridhere",
+            "password_set_by_admin": true, // false if set by user
+            "settings": { ... }, // User settings, same format as GetUserSettings
+            "max_t2i": 32 // actual value of max t2i simultaneous, calculated from current roles and available backends
+        """)]
+    public static async Task<JObject> AdminGetUserInfo(Session session,
+        [API.APIParameter("The name of the user to get info for.")] string name)
+    {
+        User user = Program.Sessions.GetUser(name, false);
+        if (user is null)
+        {
+            return new JObject() { ["error"] = "No user by that name exists." };
+        }
+        return new JObject()
+        {
+            ["user_id"] = user.UserID,
+            ["password_set_by_admin"] = user.Data.IsPasswordSetByAdmin,
+            ["settings"] = AutoConfigToParamData(user.Settings, false),
+            ["max_t2i"] = user.CalcMaxT2ISimultaneous
+        };
     }
 
     [API.APIDescription("Admin route to get a list of all available roles.",
@@ -703,7 +816,11 @@ public static class AdminAPI
     public static async Task<JObject> AdminAddRole(Session session,
         [API.APIParameter("The name of the new role.")] string name)
     {
-        string cleaned = Utilities.StrictFilenameClean(name).ToLowerFast().Replace('/', '_');
+        string cleaned = UsernameValidator.TrimToMatches(name).ToLowerFast();
+        if (cleaned.Length < 3)
+        {
+            return new JObject() { ["error"] = "Role name must be at least 3 characters long, A-Z 0-9 only." };
+        }
         lock (Program.Sessions.DBLock)
         {
             Role newRole = new(name);
@@ -712,6 +829,38 @@ public static class AdminAPI
             {
                 return new JObject() { ["error"] = "A role by that name already exists." };
             }
+            Program.Sessions.Save();
+        }
+        return new JObject() { ["success"] = true };
+    }
+
+    [API.APIDescription("Admin route to edit a permission role.",
+        """
+            "success": true
+        """)]
+    public static async Task<JObject> AdminEditRole(Session session,
+        [API.APIParameter("The name of the role.")] string name,
+        [API.APIParameter("The description text for the role.")] string description,
+        [API.APIParameter("The maximum outpath depth allowed for the role.")] int max_outpath_depth,
+        [API.APIParameter("The maximum number of simultaneous T2I allowed for the role.")] int max_t2i_simultaneous,
+        [API.APIParameter("Whether to allow unsafe outpaths for the role.")] bool allow_unsafe_outpaths,
+        [API.APIParameter("Comma-separated list of model names to whitelist for the role.")] string model_whitelist,
+        [API.APIParameter("Comma-separated list of model names to blacklist for the role.")] string model_blacklist,
+        [API.APIParameter("Comma-separated list of enabled permission nodes.")] string permissions)
+    {
+        lock (Program.Sessions.DBLock)
+        {
+            if (!Program.Sessions.Roles.TryGetValue(name, out Role role))
+            {
+                return new JObject() { ["error"] = "No role by that name exists." };
+            }
+            role.Data.Description = description;
+            role.Data.MaxOutPathDepth = max_outpath_depth;
+            role.Data.MaxT2ISimultaneous = max_t2i_simultaneous;
+            role.Data.AllowUnsafeOutpaths = allow_unsafe_outpaths;
+            role.Data.ModelWhitelist = [.. model_whitelist.Split(',').Select(s => s.Trim()).Where(s => !string.IsNullOrWhiteSpace(s))];
+            role.Data.ModelBlacklist = [.. model_blacklist.Split(',').Select(s => s.Trim()).Where(s => !string.IsNullOrWhiteSpace(s))];
+            role.Data.PermissionFlags = [.. permissions.Split(',').Select(s => s.Trim()).Where(s => !string.IsNullOrWhiteSpace(s))];
             Program.Sessions.Save();
         }
         return new JObject() { ["success"] = true };

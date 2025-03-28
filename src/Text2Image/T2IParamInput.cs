@@ -359,6 +359,14 @@ public class T2IParamInput
         PromptTagLengthEstimators["fromto"] = PromptTagLengthEstimators["random"];
         PromptTagProcessors["wildcard"] = (data, context) =>
         {
+            data = context.Parse(data);
+            string[] dataParts = data.SplitFast(',', 1);
+            data = dataParts[0];
+            HashSet<string> exclude = [];
+            if (dataParts.Length > 1 && dataParts[1].StartsWithFast("not="))
+            {
+                exclude.UnionWith(SplitSmart(dataParts[1].After('=')));
+            }
             (int count, string partSeparator) = InterpretPredataForRandom("random", context.PreData, data, context);
             if (partSeparator is null)
             {
@@ -373,8 +381,17 @@ public class T2IParamInput
             WildcardsHelper.Wildcard wildcard = WildcardsHelper.GetWildcard(card);
             List<string> usedWildcards = context.Input.ExtraMeta.GetOrCreate("used_wildcards", () => new List<string>()) as List<string>;
             usedWildcards.Add(card);
+            string[] options = wildcard.Options;
+            if (exclude.Count > 0)
+            {
+                options = [.. options.Except(exclude)];
+            }
+            if (options.Length == 0)
+            {
+                return "";
+            }
+            List<string> vals = [.. options];
             string result = "";
-            List<string> vals = [.. wildcard.Options];
             for (int i = 0; i < count; i++)
             {
                 int index;
@@ -390,7 +407,7 @@ public class T2IParamInput
                 result += context.Parse(choice).Trim() + partSeparator;
                 if (vals.Count == 1)
                 {
-                    vals = [.. wildcard.Options];
+                    vals = [.. options];
                 }
                 else
                 {
@@ -402,7 +419,7 @@ public class T2IParamInput
         PromptTagProcessors["wc"] = PromptTagProcessors["wildcard"];
         PromptTagLengthEstimators["wildcard"] = (data, context) =>
         {
-            string card = T2IParamTypes.GetBestInList(data, WildcardsHelper.ListFiles);
+            string card = T2IParamTypes.GetBestInList(data.Before(','), WildcardsHelper.ListFiles);
             if (card is null)
             {
                 return "";
@@ -601,15 +618,29 @@ public class T2IParamInput
             context.Input.Set(T2IParamTypes.LoraSectionConfinement, confinements);
             return "";
         };
-        PromptTagPostProcessors["segment"] = (data, context) =>
+        PromptTagPostProcessors["refiner"] = (data, context) =>
         {
+            context.SectionID = 1;
+            return "<refiner//cid=1>";
+        };
+        PromptTagLengthEstimators["refiner"] = (data, context) =>
+        {
+            return "<refiner>";
+        };
+        string autoConfine(string data, PromptTagContext context)
+        {
+            if (context.SectionID < 10)
+            {
+                context.SectionID = 10;
+            }
             context.SectionID++;
             string raw = context.RawCurrentTag.Before("//cid=");
             return $"<{raw}//cid={context.SectionID}>";
-        };
-        PromptTagPostProcessors["object"] = PromptTagPostProcessors["segment"];
-        PromptTagPostProcessors["region"] = PromptTagPostProcessors["segment"];
-        PromptTagPostProcessors["extend"] = PromptTagPostProcessors["segment"];
+        }
+        PromptTagPostProcessors["segment"] = autoConfine;
+        PromptTagPostProcessors["object"] = autoConfine;
+        PromptTagPostProcessors["region"] = autoConfine;
+        PromptTagPostProcessors["extend"] = autoConfine;
         PromptTagBasicProcessors["break"] = (data, context) =>
         {
             return "<break>";
@@ -782,7 +813,7 @@ public class T2IParamInput
             toret.ValuesInput[key] = useVal;
         }
         toret.ExtraMeta = new Dictionary<string, object>(ExtraMeta);
-        toret.RequiredFlags = new HashSet<string>(RequiredFlags);
+        toret.RequiredFlags = [.. RequiredFlags];
         return toret;
     }
 
@@ -1074,7 +1105,7 @@ public class T2IParamInput
             return null;
         }
         string addBefore = "", addAfter = "";
-        void processSet(Dictionary<string, Func<string, PromptTagContext, string>> set, bool requireData)
+        void processSet(Dictionary<string, Func<string, PromptTagContext, string>> set)
         {
             val = StringConversionHelper.QuickSimpleTagFiller(val, "<", ">", tag =>
             {
@@ -1087,10 +1118,15 @@ public class T2IParamInput
                 prefix = prefix.ToLowerFast();
                 context.RawCurrentTag = tag;
                 context.PreData = preData;
-                Logs.Verbose($"[Prompt Parsing] Found tag {val}, will fill... prefix = '{prefix}', data = '{data}', predata = '{preData}'");
-                if ((!string.IsNullOrWhiteSpace(data) || !requireData) && set.TryGetValue(prefix, out Func<string, PromptTagContext, string> proc))
+                int sectionId = context.SectionID;
+                Logs.Verbose($"[Prompt Parsing] Found tag {val}, will fill... prefix = '{prefix}', data = '{data}', predata = '{preData}', section = '{sectionId}'");
+                if (set.TryGetValue(prefix, out Func<string, PromptTagContext, string> proc))
                 {
                     string result = proc(data, context);
+                    if (sectionId != context.SectionID)
+                    {
+                        Logs.Verbose($"[Prompt Parsing] Section ID changed from {sectionId} to {context.SectionID}");
+                    }
                     if (result is not null)
                     {
                         if (result.StartsWithNull()) // Special case for preset tag modifying the current value
@@ -1113,9 +1149,9 @@ public class T2IParamInput
                 return $"<{tag}>";
             }, false, 0);
         }
-        processSet(PromptTagBasicProcessors, false);
-        processSet(PromptTagProcessors, true);
-        processSet(PromptTagPostProcessors, true);
+        processSet(PromptTagBasicProcessors);
+        processSet(PromptTagProcessors);
+        processSet(PromptTagPostProcessors);
         if (isMain)
         {
             string triggerPhrase = context.TriggerPhraseExtra;

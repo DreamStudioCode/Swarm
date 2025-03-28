@@ -569,7 +569,7 @@ function makeSliderInput(featureid, id, paramid, name, description, value, min, 
         <input class="auto-slider-number" type="number" id="${id}" data-param_id="${paramid}" value="${value}" min="${min}" max="${max}" step="${step}" data-ispot="${isPot}" autocomplete="off" onchange="autoNumberWidth(this)">
         <br>
         <div class="auto-slider-range-wrapper" style="${getRangeStyle(rangeVal, view_min, view_max)}">
-            <input class="auto-slider-range" type="range" id="${id}_rangeslider" value="${rangeVal}" min="${view_min}" max="${view_max}" step="${step}" data-ispot="${isPot}" autocomplete="off" oninput="updateRangeStyle(arguments[0])" onchange="updateRangeStyle(arguments[0])">
+            <input class="auto-slider-range" type="range" id="${id}_rangeslider" value="${rangeVal}" min="${view_min}" max="${view_max}" step="${step}" data-ispot="${isPot}" autocomplete="off" oninput="updateRangeStyle(this)" onchange="updateRangeStyle(this)">
         </div>
     </div>`;
 }
@@ -887,5 +887,25 @@ function playCompletionAudio() {
         let audio = new Audio(`/Audio/${audioFile}`);
         audio.volume = parseFloat(getUserSetting('audio.volume', '0.5'));
         audio.play();
+    }
+}
+
+async function doPasswordClientPrehash(userId, pw) {
+    if (!userId) {
+        throw new Error('Password handling failed, no userId set?');
+    }
+    // The server does the real hash, but the client prehash is because dumb users tend to reuse passwords across sites, so we'd rather not let the Swarm instance owner know the raw password.
+    // This is not particularly secure, but it doesn't hurt to do, and decreases the odds of a malicious owner (or hacker) to grab passwords.
+    // (They could also just swap the JS or something so an intentional attacker wouldn't really be stopped here)
+    let str = `swarmclientpw:${userId}:${pw}`;
+    try {
+        let hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+        return toHexString(new Uint8Array(hash)).toLowerCase();
+    }
+    catch (e) {
+        // SHA-256 is restricted in some contexts (eg no https) because I guess web standards devs hate you? So if you don't have network security, transmit extra-raw passwords.
+        // Prefixed to ensure server will do the prehash (so that https and non-https have equivalent values)
+        console.warn(`Crypto.Subtle is invalid in your browser context, passwords won't be prehashed`);
+        return `__swarmdoprehash:${str}`;
     }
 }

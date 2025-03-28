@@ -222,18 +222,18 @@ public static class NetworkBackendUtils
         return port;
     }
 
-    /// <summary>Tries to identify the lib folder that will be used for a given start script.</summary>
+    /// <summary>Tries to identify the lib/site-packages/ folder that will be used for a given start script.</summary>
     public static string GetProbableLibFolderFor(string script)
     {
         string path = script.Replace('\\', '/');
         string dir = Path.GetDirectoryName(path);
         if (File.Exists($"{dir}/venv/Scripts/python.exe"))
         {
-            return Path.GetFullPath($"{dir}/venv/Lib");
+            return Path.GetFullPath($"{dir}/venv/Lib/site-packages/");
         }
         if (File.Exists($"{dir}/../python_embeded/python.exe"))
         {
-            return Path.GetFullPath($"{dir}/../python_embeded/Lib");
+            return Path.GetFullPath($"{dir}/../python_embeded/Lib/site-packages/");
         }
         if (File.Exists($"{dir}/venv/bin/python3"))
         {
@@ -244,9 +244,34 @@ public static class NetworkBackendUtils
             {
                 if (subDir.AfterLast('/').StartsWith("python"))
                 {
-                    return Path.GetFullPath(subDir);
+                    return Path.GetFullPath($"{subDir}/site-packages/");
                 }
             }
+        }
+        try
+        {
+            ProcessStartInfo start = new()
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                WorkingDirectory = dir
+            };
+            ConfigurePythonExeFor(script, "folder-finder", start, out _, out string forcePrior);
+            start.Arguments = $"{forcePrior} -s -c \"import sysconfig; print(sysconfig.get_path('purelib'))\"".Trim();
+            Process process = Process.Start(start);
+            process.WaitForExitAsync(Program.GlobalProgramCancel).Wait();
+            string output = process.StandardOutput.ReadToEnd().Trim();
+            string errOut = process.StandardError.ReadToEnd().Trim();
+            Logs.Debug($"Ran python fallback folder-finder '{start.FileName}' '{start.Arguments}', result is: {output}, errOut is {errOut}");
+            if (Directory.Exists(output))
+            {
+                return output;
+            }
+            Logs.Debug($"Output is not a valid folder.");
+        }
+        catch (Exception ex)
+        {
+            Logs.Debug($"Failed to find lib folder for {script}: {ex.ReadableString()}");
         }
         return null;
     }
@@ -543,65 +568,72 @@ public static class NetworkBackendUtils
         new Thread(MonitorLoop) { Name = $"SelfStart{nameSimple.Replace(' ', '_')}_Monitor" }.Start();
         async void MonitorErrLoop()
         {
-            StringBuilder errorLog = new();
-            string line;
-            bool keepShowing = false;
-            while ((line = process.StandardError.ReadLine()) != null)
+            try
             {
-                string lineLow = line.ToLowerFast();
-                if (lineLow.StartsWith("traceback (") || lineLow.Contains("error: "))
+                StringBuilder errorLog = new();
+                string line;
+                bool keepShowing = false;
+                while ((line = process.StandardError.ReadLine()) != null)
                 {
-                    keepShowing = true;
-                    Logs.Warning($"[{nameSimple}/STDERR] {line}");
+                    string lineLow = line.ToLowerFast();
+                    if (lineLow.StartsWith("traceback (") || lineLow.Contains("error: "))
+                    {
+                        keepShowing = true;
+                        Logs.Warning($"[{nameSimple}/STDERR] {line}");
+                    }
+                    else if (keepShowing)
+                    {
+                        Logs.Warning($"[{nameSimple}/STDERR] {line}");
+                        keepShowing = shouldContinueErrorLine(line);
+                    }
+                    else
+                    {
+                        Logs.Debug($"[{nameSimple}/STDERR] {line}");
+                    }
+                    errorLog.AppendLine($"[{nameSimple}/STDERR] {line}");
+                    logTracker.Track($"[STDERR] {line}");
+                    if (errorLog.Length > 1024 * 50)
+                    {
+                        errorLog = new StringBuilder(errorLog.ToString()[(1024 * 10)..]);
+                    }
                 }
-                else if (keepShowing)
+                if (getStatus() == BackendStatus.DISABLED)
                 {
-                    Logs.Warning($"[{nameSimple}/STDERR] {line}");
-                    keepShowing = shouldContinueErrorLine(line);
+                    Logs.Info($"Self-Start {nameSimple} exited properly from disabling.");
+                }
+                else if (Volatile.Read(ref isShuttingDown))
+                {
+                    int loops = 0;
+                    while (!process.HasExited && loops++ < 20 && !Program.GlobalProgramCancel.IsCancellationRequested)
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(1));
+                    }
+                    if (!process.HasExited)
+                    {
+                        Logs.Info($"Self-Start {nameSimple} closed output stream without exiting - something went wrong.");
+                    }
+                    else if (process.ExitCode == 0)
+                    {
+                        Logs.Info($"Self-Start {nameSimple} exited properly.");
+                    }
+                    else
+                    {
+                        Logs.Info($"Self-Start {nameSimple} exited expectedly but with unexpected exit code {process.ExitCode}");
+                    }
                 }
                 else
                 {
-                    Logs.Debug($"[{nameSimple}/STDERR] {line}");
-                }
-                errorLog.AppendLine($"[{nameSimple}/STDERR] {line}");
-                logTracker.Track($"[STDERR] {line}");
-                if (errorLog.Length > 1024 * 50)
-                {
-                    errorLog = new StringBuilder(errorLog.ToString()[(1024 * 10)..]);
-                }
-            }
-            if (getStatus() == BackendStatus.DISABLED)
-            {
-                Logs.Info($"Self-Start {nameSimple} exited properly from disabling.");
-            }
-            else if (Volatile.Read(ref isShuttingDown))
-            {
-                int loops = 0;
-                while (!process.HasExited && loops++ < 20 && !Program.GlobalProgramCancel.IsCancellationRequested)
-                {
-                    await Task.Delay(TimeSpan.FromSeconds(1));
-                }
-                if (!process.HasExited)
-                {
-                    Logs.Info($"Self-Start {nameSimple} closed output stream without exiting - something went wrong.");
-                }
-                else if (process.ExitCode == 0)
-                {
-                    Logs.Info($"Self-Start {nameSimple} exited properly.");
-                }
-                else
-                {
-                    Logs.Info($"Self-Start {nameSimple} exited expectedly but with unexpected exit code {process.ExitCode}");
+                    Logs.Info($"Self-Start {nameSimple} unexpectedly exited (if something failed, change setting `LogLevel` to `Debug` to see why!)");
+                    if (errorLog.Length > 0)
+                    {
+                        Logs.Info($"Self-Start {nameSimple} had errors before shutdown:\n{errorLog}");
+                    }
+                    onFail?.Invoke();
                 }
             }
-            else
+            catch (Exception ex)
             {
-                Logs.Info($"Self-Start {nameSimple} unexpectedly exited (if something failed, change setting `LogLevel` to `Debug` to see why!)");
-                if (errorLog.Length > 0)
-                {
-                    Logs.Info($"Self-Start {nameSimple} had errors before shutdown:\n{errorLog}");
-                }
-                onFail?.Invoke();
+                Logs.Error($"Error in {nameSimple} error monitor loop: {ex.ReadableString()}");
             }
         }
         new Thread(MonitorErrLoop) { Name = $"SelfStart{nameSimple.Replace(' ', '_')}_MonitorErr" }.Start();

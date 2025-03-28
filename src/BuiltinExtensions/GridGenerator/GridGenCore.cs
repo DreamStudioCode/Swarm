@@ -376,7 +376,7 @@ public partial class GridGenCore
             lock (Grid.LastUpdatLock)
             {
                 DateTimeOffset tNow = DateTimeOffset.Now;
-                Grid.LastUpdates = Grid.LastUpdates.Where(x => (tNow - x.Item2).TotalSeconds < 20).ToList();
+                Grid.LastUpdates = [.. Grid.LastUpdates.Where(x => (tNow - x.Item2).TotalSeconds < 20)];
                 Grid.LastUpdates.Add((newFile, tNow));
                 File.WriteAllText(BasePath + "/last.js", $"window.lastUpdated = [\"{string.Join("\", \"", Grid.LastUpdates.Select(p => p.Item1))}\"]");
             }
@@ -401,7 +401,7 @@ public partial class GridGenCore
             Axis curAxis = axisList[0];
             if (axisList.Count == 1)
             {
-                return curAxis.Values.Where(v => !v.Skip || !FastSkip).Select(v => new SingleGridCall(Grid, [v])).ToList();
+                return [.. curAxis.Values.Where(v => !v.Skip || !FastSkip).Select(v => new SingleGridCall(Grid, [v]))];
             }
             List<SingleGridCall> result = [];
             List<Axis> nextAxisList = axisList.GetRange(1, axisList.Count - 1);
@@ -421,7 +421,7 @@ public partial class GridGenCore
             {
                 foreach (SingleGridCall obj in result)
                 {
-                    obj.Values = obj.Values.OrderBy(v => v.Axis.Index).Reverse().ToList();
+                    obj.Values = [.. obj.Values.OrderBy(v => v.Axis.Index).Reverse()];
                 }
             }
             return result;

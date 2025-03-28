@@ -41,6 +41,8 @@ If you see `Cannot handle this data type: (1, 1, 3), <f4`, that is because live 
 
 If you see `The parameter is incorrect.`, you are running something incompatible with AMD+DirectML+Windows, and can either just not run that, or swap backend (see below).
 
+If you see `Invalid or unsupported data type Float8_e4m3fn.`, you can avoid this by editing the parameter `Preferred DType` to `Default (16 bit)`
+
 ### Swap AMD Backend
 
 There are several alternate AMD backend options that work better than DirectML:
@@ -91,6 +93,7 @@ When you need to install a pip dependency, you're gonna have to use the command 
 - activate the venv with `source venv/bin/activate`
 - type the command `python -s -m pip install (your package)`
     - For example `python -s -m pip install transformers -U`
+- For Docker, you'll want to explicitly call `./venv/bin/python -s -m pip install (your package)`
 
 ### Note
 
