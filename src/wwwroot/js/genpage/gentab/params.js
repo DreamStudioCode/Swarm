@@ -245,28 +245,33 @@ function getParamMemoryDays() {
 
 /** Re-persist stored parameter values - to avoid some disappearing and others staying */
 function autoRepersistParams() {
+    let hrs = getUserSetting('parametermemorydurationhours', 'none');
+    if (hrs == 'none') { // (Avoid repersisting if the user setting isn't loaded)
+        return;
+    }
+    let days = parseFloat(hrs) / 24;
     let groups = [];
     for (let param of gen_param_types) {
         let val = getCookie(`lastparam_input_${param.id}`);
         if (val) {
-            setCookie(`lastparam_input_${param.id}`, val, getParamMemoryDays());
+            setCookie(`lastparam_input_${param.id}`, val, days);
         }
         if (param.toggleable) {
             let val = getCookie(`lastparam_input_${param.id}_toggle`);
             if (val) {
-                setCookie(`lastparam_input_${param.id}_toggle`, val, getParamMemoryDays());
+                setCookie(`lastparam_input_${param.id}_toggle`, val, days);
             }
         }
         if (param.group && !groups.includes(param.group.id)) {
             groups.push(param.group.id);
             let open = getCookie(`group_open_auto-group-${param.group.id}`);
             if (open) {
-                setCookie(`group_open_auto-group-${param.group.id}`, open, getParamMemoryDays());
+                setCookie(`group_open_auto-group-${param.group.id}`, open, days);
             }
             if (param.group.toggles) {
                 let toggle = getCookie(`group_toggle_auto-group-${param.group.id}`);
                 if (toggle) {
-                    setCookie(`group_toggle_auto-group-${param.group.id}`, toggle, getParamMemoryDays());
+                    setCookie(`group_toggle_auto-group-${param.group.id}`, toggle, days);
                 }
             }
         }
@@ -758,6 +763,7 @@ function toggle_advanced_checkbox_manual() {
 
 function getGenInput(input_overrides = {}, input_preoverrides = {}) {
     let input = JSON.parse(JSON.stringify(input_preoverrides));
+    let extraMetadata = {};
     for (let type of gen_param_types) {
         if (type.toggleable && !getRequiredElementById(`input_${type.id}_toggle`).checked) {
             continue;
@@ -776,6 +782,10 @@ function getGenInput(input_overrides = {}, input_preoverrides = {}) {
         let val = getInputVal(elem);
         if (val != null) {
             input[type.id] = val;
+        }
+        if (type.type == 'image') {
+            extraMetadata[`${type.id}_filename`] = elem.dataset.filename;
+            extraMetadata[`${type.id}_resolution`] = elem.dataset.resolution;
         }
         if (type.id == 'prompt') {
             let container = findParentOfClass(elem, 'auto-input');
@@ -799,6 +809,7 @@ function getGenInput(input_overrides = {}, input_preoverrides = {}) {
         input["promptimages"] = revisionImages.map(img => img.dataset.filedata).join('|');
     }
     if (imageEditor.active) {
+        extraMetadata["used_image_editor"] = "true";
         input["initimage"] = imageEditor.getFinalImageData();
         input["maskimage"] = imageEditor.getFinalMaskData();
         input["width"] = Math.floor(imageEditor.realWidth / 8) * 8;
@@ -823,6 +834,7 @@ function getGenInput(input_overrides = {}, input_preoverrides = {}) {
             input[key] = input_overrides[key];
         }
     }
+    input["extra_metadata"] = extraMetadata;
     return input;
 }
 
@@ -836,12 +848,11 @@ function refreshParameterValues(strong = true, callback = null) {
             let origParam = gen_param_types.find(p => p.id == param.id);
             if (origParam) {
                 origParam.values = param.values;
+                origParam.value_names = param.value_names;
             }
         }
-        genericRequest('ListT2IParams', {}, data => {
-            updateAllModels(data.models);
-            allWildcards = data.wildcards;
-        });
+        updateAllModels(data.models);
+        allWildcards = data.wildcards;
         let promises = [Promise.resolve(true)];
         for (let extra of refreshParamsExtra) {
             let promise = extra();
@@ -1012,6 +1023,11 @@ function hideUnalteredParameters() {
     hideUnsupportableParams();
 }
 
+/** Callbacks to run after hideUnsupportableParams, to do extra logic for showing/hiding specific params.
+ * Called as `callback(groups)`, where `groups` is an object mapping group IDs to `{ visible: 0, data: param.group, altered: 0 }`.
+ */
+let hideParamCallbacks = [];
+
 function hideUnsupportableParams() {
     if (!gen_param_types) {
         return;
@@ -1085,12 +1101,15 @@ function hideUnsupportableParams() {
                 groups[param.group.id] = groupData;
                 if (show) {
                     groupData.visible++;
-                }
-                if (isAltered) {
-                    groupData.altered++;
+                    if (isAltered) {
+                        groupData.altered++;
+                    }
                 }
             }
         }
+    }
+    for (let callback of hideParamCallbacks) {
+        callback(groups);
     }
     getRequiredElementById('advanced_hidden_count').innerText = `(${advancedCount})`;
     for (let group in groups) {

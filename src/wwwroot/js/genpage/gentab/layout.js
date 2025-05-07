@@ -114,7 +114,6 @@ class GenTabLayout {
         this.bottomInfoBar = getRequiredElementById('bottom_info_bar');
         this.bottomBar = getRequiredElementById('t2i_bottom_bar');
         this.inputSidebar = getRequiredElementById('input_sidebar');
-        this.mainInputsAreaWrapper = getRequiredElementById('main_inputs_area_wrapper');
         this.mainImageArea = getRequiredElementById('main_image_area');
         this.currentImage = getRequiredElementById('current_image');
         this.currentImageWrapbox = getRequiredElementById('current_image_wrapbox');
@@ -196,8 +195,6 @@ class GenTabLayout {
             curImgWidth = `100vw - ${barTopLeft} - ${barTopRight} - 10px`;
         }
         this.inputSidebar.style.width = `${barTopLeft}`;
-        this.mainInputsAreaWrapper.classList[this.leftSectionBarPos < 350 ? "add" : "remove"]("main_inputs_small");
-        this.mainInputsAreaWrapper.style.width = `${barTopLeft}`;
         this.inputSidebar.style.display = this.leftShut ? 'none' : '';
         this.altRegion.style.width = `calc(100vw - ${barTopLeft} - ${barTopRight} - 10px)`;
         this.mainImageArea.style.width = `calc(100vw - ${barTopLeft})`;
@@ -222,7 +219,8 @@ class GenTabLayout {
         this.bottomSplitBarButton.innerHTML = this.bottomShut ? '&#x290A;' : '&#x290B;';
         let altHeight = this.altRegion.style.display == 'none' ? '0px' : `${this.altRegion.offsetHeight}px`;
         if (this.bottomSectionBarPos != -1 || this.bottomShut) {
-            let fixed = this.bottomShut ? `6.5rem` : `${this.bottomSectionBarPos}px`;
+            let bottomBarHeight = this.bottomInfoBar.offsetHeight;
+            let fixed = this.bottomShut ? `(5rem + ${bottomBarHeight}px)` : `${this.bottomSectionBarPos}px`;
             this.leftSplitBar.style.height = `calc(100vh - ${fixed})`;
             this.rightSplitBar.style.height = `calc(100vh - ${fixed} - 5px)`;
             this.inputSidebar.style.height = `calc(100vh - ${fixed})`;
@@ -234,8 +232,7 @@ class GenTabLayout {
             this.editorSizebar.style.height = `calc(100vh - ${fixed} - ${altHeight})`;
             this.currentImageBatch.style.height = `calc(100vh - ${fixed})`;
             this.topSection.style.height = `calc(100vh - ${fixed})`;
-            let bottomBarHeight = this.bottomInfoBar.offsetHeight;
-            this.bottomBar.style.height = `calc(${fixed} - ${bottomBarHeight}px - 5px)`;
+            this.bottomBar.style.height = `calc(${fixed} - 45px)`;
         }
         else {
             this.leftSplitBar.style.height = 'calc(49vh)';
@@ -250,7 +247,7 @@ class GenTabLayout {
             this.currentImageBatch.style.height = '';
             this.topSection.style.height = '';
             let bottomBarHeight = this.bottomInfoBar.offsetHeight;
-            this.bottomBar.style.height = `calc(49vh - ${bottomBarHeight}px - 5px)`;
+            this.bottomBar.style.height = `calc(49vh - 30px)`;
         }
         if (imageEditor) {
             imageEditor.resize();
@@ -391,7 +388,7 @@ class GenTabLayout {
             });
         }
         this.altText.addEventListener('keydown', (e) => {
-            if (e.key == 'Enter' && !e.shiftKey) {
+            if (e.key == 'Enter' && !e.shiftKey && getUserSetting('enterkeygenerates', 'true')) {
                 this.altText.dispatchEvent(new Event('change'));
                 getRequiredElementById('alt_generate_button').click();
                 e.preventDefault();
@@ -400,7 +397,7 @@ class GenTabLayout {
             }
         });
         this.altNegText.addEventListener('keydown', (e) => {
-            if (e.key == 'Enter' && !e.shiftKey) {
+            if (e.key == 'Enter' && !e.shiftKey && getUserSetting('enterkeygenerates', 'true')) {
                 this.altNegText.dispatchEvent(new Event('change'));
                 getRequiredElementById('alt_generate_button').click();
                 e.preventDefault();

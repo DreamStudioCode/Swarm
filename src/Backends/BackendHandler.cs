@@ -351,13 +351,22 @@ public class BackendHandler
     }
 
     /// <summary>Replace the settings of a given backend. Shuts it down immediately and queues a reload.</summary>
-    public async Task<T2IBackendData> EditById(int id, FDSSection newSettings, string title)
+    public async Task<T2IBackendData> EditById(int id, FDSSection newSettings, string title, int new_id = -1)
     {
         if (!T2IBackends.TryGetValue(id, out T2IBackendData data))
         {
             return null;
         }
         await ShutdownBackendCleanly(data);
+        if (new_id >= 0)
+        {
+            if (!T2IBackends.TryAdd(new_id, data))
+            {
+                throw new SwarmReadableErrorException($"Backend new ID {new_id} is already in use!");
+            }
+            data.ID = new_id;
+            T2IBackends.TryRemove(id, out _);
+        }
         newSettings = data.Backend.SettingsRaw.ExcludeSecretValuesThatMatch(newSettings, "\t<secret>");
         data.Backend.SettingsRaw.Load(newSettings);
         Logs.Verbose($"Settings applied, now: {data.Backend.SettingsRaw.Save(true)}");
@@ -422,7 +431,7 @@ public class BackendHandler
             {
                 return;
             }
-            Console.WriteLine($"Could not read Backends save file: {ex.ReadableString()}");
+            Logs.Error($"Could not read Backends save file: {ex.ReadableString()}");
             return;
         }
         if (file is null)
@@ -434,7 +443,7 @@ public class BackendHandler
             FDSSection section = file.GetSection(idstr);
             if (!BackendTypes.TryGetValue(section.GetString("type"), out BackendType type))
             {
-                Console.WriteLine($"Unknown backend type '{section.GetString("type")}' in save file, skipping backend #{idstr}.");
+                Logs.Error($"Unknown backend type '{section.GetString("type")}' in save file, skipping backend #{idstr}.");
                 continue;
             }
             T2IBackendData data = new()
@@ -1189,7 +1198,20 @@ public class BackendHandler
                     }
                     List<T2IBackendData> unused = [.. valid.Where(a => a.Usages == 0)];
                     valid = unused.Any() ? unused : valid;
-                    T2IBackendData availableBackend = valid.MinBy(a => a.TimeLastRelease);
+                    string orderMode = Program.ServerSettings.Backends.ModelLoadOrderPreference;
+                    T2IBackendData availableBackend;
+                    if (orderMode == "last_used")
+                    {
+                        availableBackend = valid.MinBy(a => a.TimeLastRelease);
+                    }
+                    else if (orderMode == "first_free")
+                    {
+                        availableBackend = valid.First();
+                    }
+                    else
+                    {
+                        throw new SwarmReadableErrorException($"Invalid server setting for ModelLoadOrderPreference: '{orderMode}' unrecognized");
+                    }
                     Logs.Debug($"[BackendHandler] backend #{availableBackend.ID} will load a model: {highestPressure.Model.RawFilePath}, with {highestPressure.Count} requests waiting for {timeWait / 1000f:0.#} seconds");
                     highestPressure.IsLoading = true;
                     List<Session.GenClaim> claims = [];

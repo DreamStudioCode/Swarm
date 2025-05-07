@@ -25,9 +25,9 @@
     <link id="favicon" rel="shortcut icon" href="favicon.ico" />
     @RenderSection("Header", required: false)
     @WebServer.PageHeaderExtra
-    <script src="js/jquery.min.js"></script>
-    <script src="js/bootstrap.min.js"></script>
-    <script src="js/select2.min.js"></script>
+    <script src="js/lib/jquery.min.js"></script>
+    <script src="js/lib/bootstrap.min.js"></script>
+    <script src="js/lib/select2.min.js"></script>
     <script src="js/util.js?vary=@Utilities.VaryID"></script>
     <script src="js/translator.js?vary=@Utilities.VaryID"></script>
 </head>
@@ -39,7 +39,7 @@
     @RenderBody()
     <script src="js/permissions.js?vary=@Utilities.VaryID"></script>
     <script src="js/site.js?vary=@Utilities.VaryID"></script>
-    @RenderSection("Scripts", required: false)
     <div id="version_display" class="version-display">SwarmUI v<span>@Utilities.Version</span><span> (@Program.CurrentGitDate)</span></div>
+    @RenderSection("Scripts", required: false)
 </body>
 </html>

@@ -419,6 +419,9 @@ function isModelArchCorrect(model) {
             if (model.architecture.endsWith('/vae') && model.compat_class.startsWith('stable-diffusion-v3') && curModelCompatClass.startsWith('stable-diffusion-v3')) {
                 return true;
             }
+            if (model.architecture.endsWith('/vae') && model.compat_class.startsWith('flux-1') && curModelCompatClass.startsWith('hidream-i1')) {
+                return true;
+            }
             return model.compat_class == curModelCompatClass;
         }
     }
@@ -614,12 +617,28 @@ class ModelBrowserWrapper {
                     toggler.click();
                     toggleGroupOpen(toggler, true);
                 }
-            }
+            };
+            let buttonSetAsImageToVideo = () => {
+                let input = document.getElementById('input_videomodel');
+                if (!input) {
+                    return;
+                }
+                forceSetDropdownValue(input, model.data.name);
+                let toggler = document.getElementById('input_group_content_imagetovideo_toggle');
+                if (toggler && !toggler.checked) {
+                    toggler.click();
+                    toggleGroupOpen(toggler, true);
+                }
+            };
             buttons = [];
             if (permissions.hasPermission('load_models_now')) {
                 buttons.push({ label: 'Load Now', onclick: buttonLoad });
             }
             buttons.push({ label: 'Set as Refiner', onclick: buttonRefiner });
+            let videoModelInput = document.getElementById('input_videomodel');
+            if (videoModelInput && [...videoModelInput.options].map(o => o.value).includes(cleanModelName(model.data.name))) {
+                buttons.push({ label: 'Set as Image To Video', onclick: buttonSetAsImageToVideo });
+            }
         }
         else if (this.subType == 'Embedding') {
             buttons = [
@@ -1152,8 +1171,12 @@ function currentModelChanged() {
 }
 
 function doModelInstallRequiredCheck() {
-    if (curModelSpecialFormat == 'bnb_nf4' && !currentBackendFeatureSet.includes('bnb_nf4') && !localStorage.getItem('hide_bnb_nf4_check')) {
+    if ((curModelSpecialFormat == 'bnb_nf4' || curModelSpecialFormat == 'bnb_fp4') && !currentBackendFeatureSet.includes('bnb_nf4') && !localStorage.getItem('hide_bnb_nf4_check')) {
         $('#bnb_nf4_installer').modal('show');
+        return true;
+    }
+    if ((curModelSpecialFormat == 'nunchaku' || curModelSpecialFormat == 'nunchaku-fp4') && !currentBackendFeatureSet.includes('nunchaku') && !localStorage.getItem('hide_nunchaku_check')) {
+        $('#nunchaku_installer').modal('show');
         return true;
     }
     let imageVidToggler = document.getElementById('input_group_content_imagetovideo_toggle');

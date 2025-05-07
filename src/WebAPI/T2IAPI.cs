@@ -77,7 +77,7 @@ public static class T2IAPI
         """)]
     public static async Task<JObject> GenerateText2ImageWS(WebSocket socket, Session session,
         [API.APIParameter("The number of images to generate.")] int images,
-        [API.APIParameter("Raw mapping of input should contain general T2I parameters (see listing on Generate tab of main interface) to values, eg `{ \"prompt\": \"a photo of a cat\", \"model\": \"OfficialStableDiffusion/sd_xl_base_1.0\", \"steps\": 20, ... }`. Note that this is the root raw map, ie all params go on the same level as `images`, `session_id`, etc.")] JObject rawInput)
+        [API.APIParameter("Raw mapping of input should contain general T2I parameters (see listing on Generate tab of main interface) to values, eg `{ \"prompt\": \"a photo of a cat\", \"model\": \"OfficialStableDiffusion/sd_xl_base_1.0\", \"steps\": 20, ... }`. Note that this is the root raw map, ie all params go on the same level as `images`, `session_id`, etc.\nThe key 'extra_metadata' may be used to apply extra internal metadata as a JSON string:string map.")] JObject rawInput)
     {
         using CancellationTokenSource cancelTok = new();
         bool retain = false, ended = false;
@@ -154,7 +154,7 @@ public static class T2IAPI
         """)]
     public static async Task<JObject> GenerateText2Image(Session session,
         [API.APIParameter("The number of images to generate.")] int images,
-        [API.APIParameter("Raw mapping of input should contain general T2I parameters (see listing on Generate tab of main interface) to values, eg `{ \"prompt\": \"a photo of a cat\", \"model\": \"OfficialStableDiffusion/sd_xl_base_1.0\", \"steps\": 20, ... }`. Note that this is the root raw map, ie all params go on the same level as `images`, `session_id`, etc.")] JObject rawInput)
+        [API.APIParameter("Raw mapping of input should contain general T2I parameters (see listing on Generate tab of main interface) to values, eg `{ \"prompt\": \"a photo of a cat\", \"model\": \"OfficialStableDiffusion/sd_xl_base_1.0\", \"steps\": 20, ... }`. Note that this is the root raw map, ie all params go on the same level as `images`, `session_id`, etc.\nThe key 'extra_metadata' may be used to apply extra internal metadata as a JSON string:string map.")] JObject rawInput)
     {
         List<JObject> outputs = await API.RunWebsocketHandlerCallDirect(GenT2I_Internal, session, (images, rawInput, new SharedGenT2IData(), 0));
         Dictionary<int, string> imageOutputs = [];
@@ -192,9 +192,16 @@ public static class T2IAPI
         T2IParamInput user_input = new(session);
         List<string> keys = [.. rawInput.Properties().Select(p => p.Name)];
         keys = [.. keys.Where(AlwaysTopKeys.Contains), .. keys.Where(k => !AlwaysTopKeys.Contains(k))];
+        if (rawInput.TryGetValue("extra_metadata", out JToken extraMeta) && extraMeta is JObject obj)
+        {
+            foreach (JProperty prop in obj.Properties())
+            {
+                user_input.ExtraMeta[prop.Name] = prop.Value.ToString();
+            }
+        }
         foreach (string key in keys)
         {
-            if (key == "session_id" || key == "presets")
+            if (key == "session_id" || key == "presets" || key == "extra_metadata")
             {
                 // Skip
             }
@@ -221,7 +228,6 @@ public static class T2IAPI
             }
             user_input.ExtraMeta["presets_used"] = presets.Values().Select(v => v.ToString()).ToList();
         }
-        user_input.ApplySpecialLogic();
         return user_input;
     }
 
@@ -252,6 +258,7 @@ public static class T2IAPI
             setError(ex.Message);
             return;
         }
+        user_input.ApplySpecialLogic();
         images = user_input.Get(T2IParamTypes.Images, images);
         Logs.Info($"User {session.User.UserID} requested {images} image{(images == 1 ? "" : "s")} with model '{user_input.Get(T2IParamTypes.Model)?.Name}'...");
         if (Logs.MinimumLevel <= Logs.LogLevel.Verbose)
@@ -279,7 +286,12 @@ public static class T2IAPI
         int batchSizeExpected = user_input.Get(T2IParamTypes.BatchSize, 1);
         void saveImage(T2IEngine.ImageOutput image, int actualIndex, T2IParamInput thisParams, string metadata)
         {
-            (string url, string filePath) = thisParams.Get(T2IParamTypes.DoNotSave, false) ? (session.GetImageB64(image.Img), null) : session.SaveImage(image.Img, actualIndex, thisParams, metadata);
+            bool noSave = thisParams.Get(T2IParamTypes.DoNotSave, false);
+            if (!image.IsReal && thisParams.Get(T2IParamTypes.DoNotSaveIntermediates, false))
+            {
+                noSave = true;
+            }
+            (string url, string filePath) = noSave ? (session.GetImageB64(image.Img), null) : session.SaveImage(image.Img, actualIndex, thisParams, metadata);
             if (url == "ERROR")
             {
                 setError($"Server failed to save an image.");
@@ -441,6 +453,7 @@ public static class T2IAPI
         {
             return new() { ["error"] = ex.Message };
         }
+        user_input.ApplySpecialLogic();
         Logs.Info($"User {session.User.UserID} stored an image to history.");
         (img, string metadata) = user_input.SourceSession.ApplyMetadata(img, user_input, 1);
         (string path, _) = session.SaveImage(img, 0, user_input, metadata);
@@ -746,7 +759,7 @@ public static class T2IAPI
     {
         Logs.Verbose($"User {session.User.UserID} triggered a {(strong ? "strong" : "weak")} data refresh");
         bool botherToRun = strong && RefreshSemaphore.CurrentCount > 0; // no need to run twice at once
-        if (Environment.TickCount64 - LastRefreshed < 10000)
+        if (botherToRun && Environment.TickCount64 - LastRefreshed < 10000)
         {
             Logs.Debug($"User {session.User.UserID} requested weak refresh within 10 seconds of last refresh, ignoring as redundant.");
             botherToRun = false;

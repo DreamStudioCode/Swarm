@@ -88,7 +88,7 @@ public static class Utilities
         {
             return;
         }
-        Program.Shutdown(42);
+        Program.RequestRestart();
     }
 
     /// <summary>Internal tick loop thread main method.</summary>
@@ -328,11 +328,11 @@ public static class Utilities
     }
 
     /// <summary>Sends a JSON object post and receives a JSON object back.</summary>
-    public static async Task<JObject> PostJson(this HttpClient client, string url, JObject data, Action<HttpRequestMessage> adaptFunc)
+    public static async Task<JObject> PostJson(this HttpClient client, string url, JObject data, Action<HttpRequestMessage> adaptFunc, CancellationToken? cancel = null)
     {
         HttpRequestMessage request = new(HttpMethod.Post, url) { Content = JSONContent(data) };
         adaptFunc?.Invoke(request);
-        HttpResponseMessage response = await client.SendAsync(request, Program.GlobalProgramCancel);
+        HttpResponseMessage response = await client.SendAsync(request, cancel ?? Program.GlobalProgramCancel);
         return (await response.Content.ReadAsStringAsync()).ParseToJson();
     }
 
@@ -1243,11 +1243,60 @@ public static class Utilities
     /// <summary>Returns whether the given password matches the stored hash.</summary>
     public static bool CompareHashedPassword(string username, string password, string hashed)
     {
+        if (password.StartsWith("__swarmdoprehash:"))
+        {
+            password = password["__swarmdoprehash:".Length..];
+            password = BytesToHex(SHA256.HashData(password.EncodeUTF8())).ToLowerFast();
+        }
         string saltRaw = hashed.BeforeAndAfter(':', out string hashRaw);
         byte[] salt = Convert.FromBase64String(saltRaw);
         byte[] hash = Convert.FromBase64String(hashRaw);
         string borkedPw = $"*SwarmHashedPw:{username}:{password}*";
         byte[] hashedAttempt = KeyDerivation.Pbkdf2(password: borkedPw, salt: salt, prf: KeyDerivationPrf.HMACSHA256, iterationCount: 10_000, numBytesRequested: 256 / 8);
         return hashedAttempt.SequenceEqual(hash);
+    }
+
+    /// <summary>Splits a standard CSV file - that is, comma separated values that allow for quoted chunks with commas inside.</summary>
+    public static string[] SplitStandardCsv(string input)
+    {
+        List<string> strs = [];
+        bool inQuotes = false;
+        StringBuilder current = new(64);
+        for (int i = 0; i < input.Length; i++)
+        {
+            char c = input[i];
+            if (c == '\\')
+            {
+                i++;
+            }
+            else if (c == ',' && !inQuotes)
+            {
+                strs.Add(current.ToString());
+                current.Clear();
+                if (i + 1 < input.Length && input[i + 1] == '"')
+                {
+                    inQuotes = true;
+                    i++;
+                }
+            }
+            else if (c == '"' && inQuotes)
+            {
+                if (i + 1 < input.Length && input[i + 1] == '"') // Cursed escape hack in some csvs
+                {
+                    current.Append('"');
+                    i++;
+                }
+                else
+                {
+                    inQuotes = false;
+                }
+            }
+            else
+            {
+                current.Append(c);
+            }
+        }
+        strs.Add(current.ToString());
+        return [.. strs];
     }
 }

@@ -116,6 +116,13 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
             Status = BackendStatus.DISABLED;
             return;
         }
+        BackendStatus wasStatus = Status;
+        if (wasStatus == BackendStatus.ERRORED)
+        {
+            Logs.Verbose($"Refusing init because marked as errored.");
+            return;
+        }
+        // TODO: dotnet update: Future version should swap to: Interlocked.CompareExchange(ref Status, BackendStatus.LOADING, wasStatus);
         Status = BackendStatus.LOADING;
         try
         {
@@ -278,6 +285,7 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
             bool hasInterrupted = false;
             bool isReceivingOutputs = false;
             bool isExpectingVideo = false;
+            bool isExpectingText = false;
             string currentNode = "";
             bool isMe = false;
             // autoCanceller will be cancelled via the using to end the task and not leave it waiting when the method clears
@@ -349,8 +357,9 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
                             case "progress":
                                 int max = json["data"].Value<int>("max");
                                 curPercent = json["data"].Value<float>("value") / max;
-                                isReceivingOutputs = max == 12345 || max == 12346;
+                                isReceivingOutputs = max == 12345 || max == 12346 || max == 12347;
                                 isExpectingVideo = max == 12346;
+                                isExpectingText = max == 12347;
                                 yieldProgressUpdate();
                                 break;
                             case "executed":
@@ -375,7 +384,35 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
                     {
                         (string formatLabel, int index, int eventId) = ComfyRawWebsocketOutputToFormatLabel(output);
                         Logs.Verbose($"ComfyUI Websocket sent: {output.Length} bytes of image data as event {eventId} in format {formatLabel} to index {index}");
-                        if (isReceivingOutputs)
+                        if (isExpectingText)
+                        {
+                            string metadata = StringConversionHelper.UTF8Encoding.GetString(output[8..]);
+                            int colon = metadata.IndexOf(':');
+                            if (colon < 1 || colon > 200 || metadata.Length > 1_000_000)
+                            {
+                                Logs.Warning($"Invalid raw text output from Comfy backend.");
+                            }
+                            else
+                            {
+                                Logs.Verbose($"ComfyUI Websocket special metadata text output: {metadata}");
+                                string key = CustomMetaKeyCleaner.TrimToMatches(metadata[..colon]).ToLowerFast();
+                                string value = metadata[(colon + 1)..].Trim();
+                                bool handled = false;
+                                foreach (Func<T2IParamInput, string, string, bool> handler in AltCustomMetadataHandlers)
+                                {
+                                    if (handler(user_input, metadata[..colon], metadata[(colon + 1)..]))
+                                    {
+                                        handled = true;
+                                        break;
+                                    }
+                                }
+                                if (!handled)
+                                {
+                                    user_input.ExtraMeta[$"custom_{key}"] = value;
+                                }
+                            }
+                        }
+                        else if (isReceivingOutputs)
                         {
                             Image.ImageType type = ComfyFormatLabelToImageType(formatLabel);
                             if (isExpectingVideo && type == Image.ImageType.IMAGE)
@@ -467,6 +504,11 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
         }
     }
 
+    /// <summary>List of custom functions that take (user_input, key, value) for custom metadata emitted by `SwarmAddSaveMetadataWS` nodes. Return "true" to indicate handled (no further processing), or "false" for unhandled (let something else process it).</summary>
+    public static List<Func<T2IParamInput, string, string, bool>> AltCustomMetadataHandlers = [];
+
+    public static AsciiMatcher CustomMetaKeyCleaner = new(AsciiMatcher.BothCaseLetters + AsciiMatcher.Digits + "_");
+
     public static (string, int, int) ComfyRawWebsocketOutputToFormatLabel(byte[] output)
     {
         int eventId = BinaryPrimitives.ReverseEndianness(BitConverter.ToInt32(output, 0));
@@ -514,6 +556,14 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
                     if (cleanCheckMessage.StartsWith("[errno 2] no such file or directory") && cleanCheckMessage.After(':').Trim().Length > 250)
                     {
                         note = $"\n\n-- This looks like a Windows path length error (with a path of length {cleanCheckMessage.After(':').Trim().Length}). If it is, see https://superuser.com/questions/1807770/how-to-enable-long-paths-on-windows-11-home for info on how to enable Long Paths in Windows to fix this bug.";
+                    }
+                    else if (cleanCheckMessage.StartsWith("cuda error: operation not permitted") && cleanCheckMessage.Contains("for debugging consider passing cuda_launch_blocking=1"))
+                    {
+                        note = $"\n\n-- This looks like an NVIDIA CUDA driver fault. This may indicate your GPU has a fault, or that your drivers yielded an error. You may need to restart SwarmUI, or your whole PC. Check whether other GPU related tasks are functioning, such as whether you can call 'nvidia-smi' and get a correct result.";
+                        if (Program.ServerSettings.Maintenance.RestartOnGpuCriticalError)
+                        {
+                            Program.RequestRestart();
+                        }
                     }
                     throw new SwarmReadableErrorException($"ComfyUI execution error: {actualMessage}{note}");
                 }

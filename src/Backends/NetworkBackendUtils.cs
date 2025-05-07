@@ -1,4 +1,5 @@
 ﻿using FreneticUtilities.FreneticExtensions;
+using FreneticUtilities.FreneticToolkit;
 using Hardware.Info;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -195,6 +196,7 @@ public static class NetworkBackendUtils
             return false;
         }
         string subPath = path[1] == ':' ? path[2..] : path;
+        subPath = subPath.Replace("/@", "/"); // Allow an exception for eg `Programs/@comfyorgcomfyui` which Comfy Desktop uses for some reason
         if (Utilities.FilePathForbidden.ContainsAnyMatch(subPath))
         {
             Logs.Error($"Failed init of {backendLabel} with script target '{path}' because that file path contains invalid characters ( {Utilities.FilePathForbidden.TrimToMatches(subPath)} ). Please verify your start script location.");
@@ -486,7 +488,7 @@ public static class NetworkBackendUtils
                 }
             }
             everLoaded = status != BackendStatus.ERRORED;
-            addLoadStatus($"{nameSimple} self-start port {port} loop ending (should now be alive)");
+            addLoadStatus($"{nameSimple} self-start port {port} loop ending {(everLoaded ? "(should now be alive)" : "(failed?)")}");
         }
         await launch();
     }
@@ -526,7 +528,8 @@ public static class NetworkBackendUtils
             {
                 string line;
                 bool keepShowing = false;
-                while ((line = process.StandardOutput.ReadLine()) != null)
+                using StreamReader fixedReader = new(process.StandardOutput.BaseStream, Encoding.UTF8); // Force UTF-8, always
+                while ((line = fixedReader.ReadLine()) != null)
                 {
                     if (line.StartsWith("Traceback (") || line.StartsWith("RuntimeError: ") || line.StartsWith("Error: "))
                     {
@@ -573,7 +576,8 @@ public static class NetworkBackendUtils
                 StringBuilder errorLog = new();
                 string line;
                 bool keepShowing = false;
-                while ((line = process.StandardError.ReadLine()) != null)
+                using StreamReader fixedReader = new(process.StandardError.BaseStream, Encoding.UTF8); // Force UTF-8, always
+                while ((line = fixedReader.ReadLine()) != null)
                 {
                     string lineLow = line.ToLowerFast();
                     if (lineLow.StartsWith("traceback (") || lineLow.Contains("error: "))

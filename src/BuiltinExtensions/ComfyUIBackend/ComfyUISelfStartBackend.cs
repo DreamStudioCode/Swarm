@@ -123,7 +123,7 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
     /// <summary>Mapping of node folder names to exact git commits to maintain.</summary>
     public static ConcurrentDictionary<string, string> ComfyNodeGitPins = new()
     {
-        ["ComfyUI-TeaCache"] = "b3429ef3dea426d2f167e348b44cd2f5a3674e7d"
+        //["ComfyUI-TeaCache"] = "b3429ef3dea426d2f167e348b44cd2f5a3674e7d"
     };
 
     public async Task EnsureNodeRepos()
@@ -281,13 +281,15 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
         return Process.Start(start);
     }
 
-    public static string SwarmValidatedFrontendVersion = "1.11.8";
+    public static string SwarmValidatedFrontendVersion = "1.18.5";
 
     public override async Task Init()
     {
         AddLoadStatus("Starting init...");
         EnsureComfyFile();
         string addedArgs = "";
+        bool doFixFrontend = false;
+        bool doLatestFrontend = false;
         if (!Settings.DisableInternalArgs)
         {
             string pathRaw = $"{Program.DataDir}/comfy-auto-model.yaml";
@@ -307,10 +309,12 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
             if (Settings.FrontendVersion == "Latest")
             {
                 addedArgs += " --front-end-version Comfy-Org/ComfyUI_frontend@latest";
+                doLatestFrontend = true;
             }
             else if (Settings.FrontendVersion == "LatestSwarmValidated")
             {
                 addedArgs += $" --front-end-version Comfy-Org/ComfyUI_frontend@v{SwarmValidatedFrontendVersion}";
+                doFixFrontend = true;
             }
             else if (Settings.FrontendVersion == "Legacy")
             {
@@ -385,16 +389,20 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
             AddLoadStatus($"All tasks done.");
         }
         string lib = NetworkBackendUtils.GetProbableLibFolderFor(Settings.StartScript);
-        if (lib is null)
+        if (lib is null || lib.Length < 3)
         {
             AddLoadStatus($"Skip lib validation, can't find folder.");
         }
         else
         {
             AddLoadStatus($"Will validate required libs...");
+            string[] reqsRaw = [.. File.ReadAllLines(Path.GetDirectoryName(Settings.StartScript) + "/requirements.txt").Where(s => !string.IsNullOrWhiteSpace(s) && !s.Trim().StartsWith('#'))];
+            Dictionary<string, Version> reqs = reqsRaw.Select(s => s.Replace(">=", "==").Replace("<=", "==").Split("=="))
+                                                .Where(pair => RequirementPartMatcher.IsOnlyMatches(pair[0]) && (pair.Length == 1 || RequirementPartMatcher.IsOnlyMatches(pair[1])))
+                                                .ToDictionary(pair => pair[0], pair => pair.Length == 1 ? null : Version.Parse(pair[1]));
             string[] dirs = [.. Directory.GetDirectories($"{lib}").Select(f => f.Replace('\\', '/').AfterLast('/'))];
             string[] distinfos = [.. dirs.Where(d => d.EndsWith(".dist-info"))];
-            HashSet<string> libs = [.. dirs.Select(d => d.Before('-'))];
+            HashSet<string> libs = [.. dirs.Select(d => d.Before('-').ToLowerFast())];
             async Task install(string libFolder, string pipName)
             {
                 if (libs.Contains(libFolder))
@@ -439,9 +447,25 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
                 await update("numpy", "numpy>=1.25.0");
             }
             string frontendVersion = getVers("comfyui_frontend_package");
-            if (frontendVersion is not null && frontendVersion != SwarmValidatedFrontendVersion)
+            if (doFixFrontend && (frontendVersion is null || frontendVersion != SwarmValidatedFrontendVersion))
             {
-                await update("comfyui_frontend_package", $"comfyui_frontend_package=={SwarmValidatedFrontendVersion}");
+                await update("comfyui_frontend_package", $"comfyui-frontend-package=={SwarmValidatedFrontendVersion}");
+            }
+            if (reqs.TryGetValue("comfyui_frontend_package", out Version frontVers) && $"{frontVers}" != SwarmValidatedFrontendVersion)
+            {
+                Logs.Warning($"(Developer Notice) ComfyUI Frontend target version is {frontVers}, but validated version is {SwarmValidatedFrontendVersion}");
+            }
+            if ((doFixFrontend || doLatestFrontend) && reqs.TryGetValue("comfyui-workflow-templates", out Version templateVers))
+            {
+                await update("comfyui_workflow_templates", $"comfyui-workflow-templates=={templateVers}");
+            }
+            if (doLatestFrontend)
+            {
+                await update("comfyui_frontend_package", "comfyui-frontend-package");
+            }
+            else if (!doFixFrontend)
+            {
+                await install("comfyui_frontend_package", "comfyui-frontend-package");
             }
             string ultralyticsVers = getVers("ultralytics");
             if (ultralyticsVers is not null && Version.Parse(ultralyticsVers) < Version.Parse(UltralyticsVersion))
@@ -455,19 +479,65 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
                 if (File.Exists($"{lib}/../../python311.dll"))
                 {
                     // TODO: This is deeply cursed. This is published by the comfyui-ReActor-node developer so at least it's not a complete rando, but, jeesh. Insightface please fix your pip package.
-                    await install("insightface", "https://github.com/Gourieff/Assets/raw/main/Insightface/insightface-0.7.3-cp311-cp311-win_amd64.whl");
+                    await install("insightface", "https://github.com/Gourieff/Assets/raw/a20f16a2f4d2c856a14960afd709540a88ebef25/Insightface/insightface-0.7.3-cp311-cp311-win_amd64.whl");
+                }
+                else if (File.Exists($"{lib}/../../python313.dll"))
+                {
+                    await install("insightface", "https://github.com/Gourieff/Assets/raw/62742c24b2376266e915a327a4b2b6fb03943ef0/Insightface/insightface-0.7.3-cp313-cp313-win_amd64.whl");
                 }
                 else if (File.Exists($"{lib}/../../python312.dll"))
                 {
-                    await install("insightface", "https://github.com/Gourieff/Assets/raw/main/Insightface/insightface-0.7.3-cp312-cp312-win_amd64.whl");
+                    await install("insightface", "https://github.com/Gourieff/Assets/raw/a20f16a2f4d2c856a14960afd709540a88ebef25/Insightface/insightface-0.7.3-cp312-cp312-win_amd64.whl");
                 }
                 else if (File.Exists($"{lib}/../../python310.dll"))
                 {
-                    await install("insightface", "https://github.com/Gourieff/Assets/raw/main/Insightface/insightface-0.7.3-cp310-cp310-win_amd64.whl");
+                    await install("insightface", "https://github.com/Gourieff/Assets/raw/a20f16a2f4d2c856a14960afd709540a88ebef25/Insightface/insightface-0.7.3-cp310-cp310-win_amd64.whl");
                 }
                 else
                 {
                     await install("insightface", "insightface");
+                }
+            }
+            if (Directory.Exists($"{ComfyUIBackendExtension.Folder}/DLNodes/ComfyUI-nunchaku"))
+            {
+                // Nunchaku devs seem very confused how to python package. So we gotta do some cursed install for them.
+                bool isValid = true;
+                string pyVers = "310";
+                Process proc = DoPythonCall("--version");
+                string actualPyVers = await proc.StandardOutput.ReadToEndAsync();
+                if (actualPyVers.Contains("Python 3.11")) { pyVers = "311"; }
+                else if (actualPyVers.Contains("Python 3.13")) { pyVers = "313"; }
+                else if (actualPyVers.Contains("Python 3.12")) { pyVers = "312"; }
+                else if (actualPyVers.Contains("Python 3.10")) { pyVers = "310"; }
+                else
+                {
+                    Logs.Error($"Nunchaku is not currently supported on your python version.");
+                    isValid = false;
+                }
+                string osVers = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "win_amd64" : "linux_x86_64";
+                string torchPipVers = getVers("torch");
+                string torchVers = "2.8";
+                if (torchPipVers.StartsWith("2.5.")) { torchVers = "2.5"; }
+                else if (torchPipVers.StartsWith("2.6.")) { torchVers = "2.6"; }
+                else if (torchPipVers.StartsWith("2.7.")) { torchVers = "2.7"; }
+                else if (torchPipVers.StartsWith("2.8.")) { torchVers = "2.8"; }
+                else
+                {
+                    Logs.Error($"Nunchaku is not currently supported on your Torch version ({torchPipVers} not in range [2.5, 2.8]).");
+                    isValid = false;
+                }
+                // eg https://github.com/mit-han-lab/nunchaku/releases/download/v0.2.0/nunchaku-0.2.0+torch2.5-cp310-cp310-linux_x86_64.whl
+                string url = $"https://github.com/mit-han-lab/nunchaku/releases/download/v0.2.0/nunchaku-0.2.0+torch{torchVers}-cp{pyVers}-cp{pyVers}-{osVers}.whl";
+                if (isValid)
+                {
+                    await install("nunchaku", url);
+                }
+            }
+            foreach (string req in reqs.Keys)
+            {
+                if (!libs.Contains(req.Replace('-', '_').ToLowerFast()))
+                {
+                    Logs.Warning($"(Developer Warning) ComfyUI required package '{req}' not found in lib folder. May be an install error, or may be a new dependency.");
                 }
             }
             AddLoadStatus("Done validating required libs.");
@@ -476,11 +546,14 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
         await NetworkBackendUtils.DoSelfStart(Settings.StartScript, this, $"ComfyUI-{BackendData.ID}", $"backend-{BackendData.ID}", Settings.GPU_ID, Settings.ExtraArgs.Trim() + " --port {PORT}" + addedArgs, InitInternal, (p, r) => { Port = p; RunningProcess = r; }, Settings.AutoRestart);
     }
 
+    /// <summary>Strict matcher that will block any muckery, excluding URLs and etc.</summary>
+    public static AsciiMatcher RequirementPartMatcher = new(AsciiMatcher.BothCaseLetters + AsciiMatcher.Digits + ".-_");
+
     /// <summary>
     /// Version of Ultralytics pip package to use.
     /// This is hard-pinned due to the malicious 8.3.41 incident, only manual updates when needed until security practices are improved.
     /// </summary>
-    public static string UltralyticsVersion = "8.3.69";
+    public static string UltralyticsVersion = "8.3.123";
 
     /// <summary>List of known required python packages, as pairs of strings: Item1 is the folder name within python packages to look for, Item2 is the pip install command.</summary>
     public static List<(string, string)> RequiredPythonPackages =
@@ -490,6 +563,7 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
         ("sentencepiece", "sentencepiece"),
         ("spandrel", "spandrel"),
         ("av", "av"),
+        ("pydantic", "pydantic"),
         ("comfyui_frontend_package", $"comfyui_frontend_package=={SwarmValidatedFrontendVersion}"),
         // Other added dependencies
         ("rembg", "rembg"),

@@ -11,6 +11,7 @@
 - To access SwarmUI from another device over LAN:
     - Simply open SwarmUI to the `Server` -> `Server Configuration` tab, find `Host` (default value is `localhost`) and change the value to `0.0.0.0`, then save and restart
         - Note you may also need to allow SwarmUI through your firewall.
+    - The `Server Info` tab will show you what it thinks your LAN address is, when available.
 - To access SwarmUI over open internet without port forwarding:
     - You can either launch use Cloudflared or Ngrok
         - For **Cloudflared:** Install Cloudflared according to [their readme](https://github.com/cloudflare/cloudflared?tab=readme-ov-file#installing-cloudflared) (note: ignore the stuff about accounts/domains/whatever, only the `cloudflared` software install is relevant), and launch SwarmUI with `--cloudflared-path [...]` or set the path in Server Configuration `CloudflaredPath` option and restart
@@ -79,6 +80,7 @@ Triton is a Linux-only AI acceleration library that you can hack into working on
     - Save the backend, let it load, go back to Generate tab
     - Generate something. Let it finish, then generate a second thing.
     - Hopefully it works fine and is a bit faster than usual. If not, ~~god help you~~ maybe ask for help on the Swarm Discord. No promises. This stuff is a mess.
+        - Sage runs a few percentage faster normally (eg on a 4090, Flux goes from 11-12 sec per image to about 10 sec per image), but if you have limited VRAM some users report as much as 2x speedup from Sage alone.
     - Optionally go to Advanced->Advanced Model Addons->set `Torch Compile` to `inductor`
         - This will be much slower on the first run of any model, then subsequent runs will be faster.
         - That means TorchCompile is only faster if you're going to generate many things in sequence. It's maybe a 30% speedup, but 1-2 minutes added to the first run.

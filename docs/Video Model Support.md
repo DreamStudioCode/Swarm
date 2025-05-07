@@ -1,17 +1,25 @@
 # Video Model Type Support In SwarmUI
 
-| Model | Year | Author | Scale | Type | Quality/Status |
-| ----  | ---- | ---- | ---- | ---- | ---- |
-[Stable Video Diffusion](#stable-video-diffusion) | 2023 | Stability AI | 1B Unet | Image2Video | Outdated |
-[Hunyuan Video](#hunyuan-video) | 2024 | Tencent | 12B MMDiT | Text2Video and Image2Video variants | Modern, Decent Quality |
-[Genmo Mochi 1](#genmo-mochi-1-text2video) | 2024 | Genmo | 10B DiT | Text2Video | Outdated |
-[Lightricks LTX Video](#lightricks-ltx-video) | 2024 | Lightricks | 3B DiT | Text/Image 2Video | Modern, Fast but ugly |
-[Nvidia Cosmos](#nvidia-cosmos) | 2025 | NVIDIA | Various | Text/Image/Video 2Video | Modern, very slow, poor quality |
-[Wan 2.1](#wan-21) | 2025 | Alibaba - Wan-AI | 1.3B and 14B | Text/Image 2Video | Modern, Incredible Quality |
+| Model | Year | Author | Scale | Type | Censored? | Quality/Status |
+| ----  | ---- | ---- | ---- | ---- | ---- | ---- |
+[Stable Video Diffusion](#stable-video-diffusion) | 2023 | Stability AI | 1B Unet | Image2Video | Yes | Outdated |
+[Hunyuan Video](#hunyuan-video) | 2024 | Tencent | 12B MMDiT | Text2Video and Image2Video variants | No | Modern, Decent Quality |
+[Genmo Mochi 1](#genmo-mochi-1-text2video) | 2024 | Genmo | 10B DiT | Text2Video | ? | Outdated |
+[Lightricks LTX Video](#lightricks-ltx-video) | 2024 | Lightricks | 3B DiT | Text/Image 2Video | ? | Modern, Fast but ugly |
+[Nvidia Cosmos](#nvidia-cosmos) | 2025 | NVIDIA | Various | Text/Image/Video 2Video | ? | Modern, very slow, poor quality |
+[Wan 2.1](#wan-21) | 2025 | Alibaba - Wan-AI | 1.3B and 14B | Text/Image 2Video | No | Modern, Incredible Quality |
+
+Support for image models and technical formats is documented in [the Model Support doc](/docs/Model%20Support.md), as well as explanation of the table columns above
 
 **Unsupported:**
 - Below are some video models that are not natively supported in SwarmUI's `Generate` tab, but are available to use via the `Comfy Workflow` and `Simple` tabs:
     - [CogVideoX](https://github.com/THUDM/CogVideo) (Tsinghua University, 2024, 2B & 5B DiT, Text/Image 2Video) is a decent video model, but unfortunately ComfyUI support is limited to [very hacky comfy nodes based on diffusers](https://github.com/kijai/ComfyUI-CogVideoXWrapper) which can not be easily integrated in SwarmUI's workflow generator.
+
+## Current Recommendations
+
+Video model(s) most worth using, as of April 2025:
+
+- Wan 2.1 - It's just leaps above the rest, no competition currently worth using.
 
 ## Demo Gifs
 
@@ -29,6 +37,8 @@
 - At time of writing, Hunyuan Video is the only properly good model. LTXV is really fast though.
 
 ## Basic Usage
+
+There's a full step by step guide for video model usage here: <https://github.com/mcmonkeyprojects/SwarmUI/discussions/716>
 
 ### Text-To-Video Models
 
@@ -183,7 +193,7 @@
 - Lightricks LTX Video ("LTXV") is supported natively in SwarmUI as a Text-To-Video and also as an Image-To-Video model.
     - The text2video is not great quality compared to other models, but the image2video functionality is popular.
 - Download your preferred safetensors version from <https://huggingface.co/Lightricks/LTX-Video/tree/main>
-    - At time of writing, they have 0.9, 0.9.1, and 0.9.5, each new version better than the last
+    - At time of writing, they have 0.9, 0.9.1, 0.9.5, and 0.9.6, each new version better than the last, but all pretty bad
     - save to `Stable-Diffusion` folder
     - The text encoder (T5-XXL) and VAE will be automatically downloaded
         - You can also set these manually if preferred
@@ -196,13 +206,15 @@
 - **Resolution:** They recommend 768x512, which is a 3:2 resolution. Other aspect ratios are fine, but the recommended resolution does appear to yield better quality.
 - **CFG:** Recommended CFG=3
 - **Prompt:** very very long descriptive prompts.
-    - Seriously this model will make a mess with short prompts.
+    - Seriously this model will make a mess with short prompts. If you ask for `a video of a cat` you will just get a dark blur.
     - Example prompt (from ComfyUI's reference workflow):
         - Prompt: `best quality, 4k, HDR, a tracking shot of a beautiful scene of the sea waves on the beach`
+        - Or Prompt: `A drone quickly rises through a bank of morning fog, revealing a pristine alpine lake surrounded by snow-capped mountains. The camera glides forward over the glassy water, capturing perfect reflections of the peaks. As it continues, the perspective shifts to reveal a lone wooden cabin with a curl of smoke from its chimney, nestled among tall pines at the lake's edge. The final shot tracks upward rapidly, transitioning from intimate to epic as the full mountain range comes into view, bathed in the golden light of sunrise breaking through scattered clouds.`
         - Negative Prompt: `low quality, worst quality, deformed, distorted, disfigured, motion smear, motion artifacts, fused fingers, bad anatomy, weird hand, ugly`
 - If you installed the `SkipLayerGuidanceExtension`, Find the `Skip Layer Guidance` parameter group in advanced
     - Set `[SLG] Scale` to `1`
     - Leave `Rescaling Scale` and `Layer Target` unchecked, leave the start/end percents default
+- LTX has some official tips and info on their HF page <https://huggingface.co/Lightricks/LTX-Video>
 
 ### LTXV Image To Video
 
@@ -270,6 +282,7 @@
         - The 720p model isn't bigger, it just supports higher resolutions. Subjective comments say the higher resolution isn't worth the performance loss.
     - the 1.3B model is very small and can run on almost any modern GPU
     - the 14B versions are 10x larger and require around 10x more VRAM, requires nvidia xx90 tier models to run at decent speed
+    - The FLF2V Model <https://huggingface.co/Kijai/WanVideo_comfy/blob/main/Wan2_1-FLF2V-14B-720P_fp8_e4m3fn.safetensors> is an Image-To-Video model that requires an End Frame input as well
     - save to `diffusion_models`
 - Or GGUF format for reduced VRAM requirements
     - For T2V 14B <https://huggingface.co/city96/Wan2.1-T2V-14B-gguf/tree/main>

@@ -63,6 +63,7 @@ public class ComfyUIBackendExtension : Extension
         ["SanaCheckpointLoader"] = "extramodelssana",
         ["CheckpointLoaderNF4"] = "bnb_nf4",
         ["UnetLoaderGGUF"] = "gguf",
+        ["NunchakuFluxDiTLoader"] = "nunchaku",
         ["TensorRTLoader"] = "tensorrt",
         ["TeaCache"] = "teacache",
         ["TeaCacheForVidGen"] = "teacache",
@@ -560,7 +561,7 @@ public class ComfyUIBackendExtension : Extension
 
     public static T2IRegisteredParam<bool> AITemplateParam, DebugRegionalPrompting, ShiftedLatentAverageInit, UseCfgZeroStar;
 
-    public static T2IRegisteredParam<double> IPAdapterWeight, IPAdapterStart, IPAdapterEnd, SelfAttentionGuidanceScale, SelfAttentionGuidanceSigmaBlur, PerturbedAttentionGuidanceScale, StyleModelMergeStrength, StyleModelApplyStart, StyleModelMultiplyStrength, RescaleCFGMultiplier, TeaCacheThreshold, RenormCFG;
+    public static T2IRegisteredParam<double> IPAdapterWeight, IPAdapterStart, IPAdapterEnd, SelfAttentionGuidanceScale, SelfAttentionGuidanceSigmaBlur, PerturbedAttentionGuidanceScale, StyleModelMergeStrength, StyleModelApplyStart, StyleModelMultiplyStrength, RescaleCFGMultiplier, TeaCacheThreshold, NunchakuCacheThreshold, RenormCFG;
 
     public static T2IRegisteredParam<int> RefinerHyperTile, VideoFrameInterpolationMultiplier, Text2VideoFrameInterpolationMultiplier;
 
@@ -574,12 +575,12 @@ public class ComfyUIBackendExtension : Extension
             "lms///LMS (Linear Multi-Step)", "dpm_fast///DPM Fast (DPM without the DPM2 slowdown)", "dpm_adaptive///DPM Adaptive (Dynamic Steps)",
             "dpmpp_2s_ancestral///DPM++ 2S Ancestral (2nd Order Single-Step) (2x Slow)", "dpmpp_sde///DPM++ SDE (Stochastic / randomizing) (2x Slow)", "dpmpp_sde_gpu///DPM++ SDE, GPU Seeded (2x Slow)",
             "dpmpp_2m///DPM++ 2M (2nd Order Multi-Step)", "dpmpp_2m_sde///DPM++ 2M SDE", "dpmpp_2m_sde_gpu///DPM++ 2M SDE, GPU Seeded", "dpmpp_3m_sde///DPM++ 3M SDE (3rd Order Multi-Step)", "dpmpp_3m_sde_gpu///DPM++ 3M SDE, GPU Seeded",
-            "ddim///DDIM (Denoising Diffusion Implicit Models) (Identical to Euler)", "ddpm///DDPM (Denoising Diffusion Probabilistic Models)",
+            "ddim///DDIM (Denoising Diffusion Implicit Models) (Identical to Euler)", "ddpm///DDPM (Denoising Diffusion Probabilistic Models)", "er_sde///ER-SDE-Solver (used with AlignYourSteps schedule)", "seeds_2///SEEDS 2 (Exponential SDE Solvers, variant of DPM++ SDE)", "seeds_3///SEEDS 3",
             // Unique tack-ons
-             "lcm///LCM (for LCM models)", "uni_pc///UniPC (Unified Predictor-Corrector)", "uni_pc_bh2///UniPC BH2", "res_multistep///Res MultiStep (for Cosmos)",
+             "lcm///LCM (for LCM models)", "uni_pc///UniPC (Unified Predictor-Corrector)", "uni_pc_bh2///UniPC BH2", "res_multistep///Res MultiStep (for Cosmos)", "res_multistep_ancestral///Res MultiStep Ancestral (randomizing, for Cosmos)",
             "ipndm///iPNDM (Improved Pseudo-Numerical methods for Diffusion Models)", "ipndm_v///iPNDM-V (Variable-Step)", "deis///DEIS (Diffusion Exponential Integrator Sampler)", "gradient_estimation///Gradient Estimation (Improving from Optimization Perspective)",
             // CFG++ variants
-            "euler_cfg_pp///Euler CFG++ (Manifold-constrained CFG)", "euler_ancestral_cfg_pp///Euler Ancestral CFG++", "dpmpp_2m_cfg_pp///DPM++ 2M CFG++", "dpmpp_2s_ancestral_cfg_pp///DPM++ 2S Ancestral CFG++ (2x Slow)", "res_multistep_cfg_pp///Res MultiStep CFG++"
+            "euler_cfg_pp///Euler CFG++ (Manifold-constrained CFG)", "euler_ancestral_cfg_pp///Euler Ancestral CFG++", "dpmpp_2m_cfg_pp///DPM++ 2M CFG++", "dpmpp_2s_ancestral_cfg_pp///DPM++ 2S Ancestral CFG++ (2x Slow)", "res_multistep_cfg_pp///Res MultiStep CFG++", "res_multistep_ancestral_cfg_pp///Res MultiStep Ancestral CFG++", "gradient_estimation_cfg_pp///Gradient Estimation CFG++"
         ],
         Schedulers = ["normal///Normal", "karras///Karras", "exponential///Exponential", "simple///Simple", "ddim_uniform///DDIM Uniform", "sgm_uniform///SGM Uniform", "turbo///Turbo (for turbo models, max 10 steps)", "align_your_steps///Align Your Steps (NVIDIA, rec. 10 steps)", "beta///Beta", "linear_quadratic///Linear Quadratic (Mochi)", "ltxv///LTX-Video", "ltxv-image///LTXV-Image", "kl_optimal///KL Optimal (Nvidia AYS)"];
 
@@ -712,6 +713,9 @@ public class ComfyUIBackendExtension : Extension
             ));
         TeaCacheThreshold = T2IParamTypes.Register<double>(new("TeaCache Threshold", "What threshold to use with TeaCache.\nSee 'TeaCache Mode' parameter above.\n0.4 might work well with Flux image generation, and 0.15 might work well with video generation.\n0.25 is a good stable default for most purposes - decent acceleration but little visual change.",
             "0.25", IgnoreIf: "0.25", Min: 0, Max: 1, Step: 0.01, FeatureFlag: "teacache", Group: T2IParamTypes.GroupAdvancedSampling, IsAdvanced: true, ViewType: ParamViewType.SLIDER, OrderPriority: 15.5
+            ));
+        NunchakuCacheThreshold = T2IParamTypes.Register<double>(new("Nunchaku Cache Threshold", "What threshold to use with Nunchaku block caching.\nThis makes Nunchaku gens faster at the cost of quality.\nOnly applicable to Nunchaku models.\nGenerally 0 to 0.2 is the reasonable range, above that you can start noticing quality drop.",
+            "0", IgnoreIf: "0", Min: 0, Max: 1, Step: 0.01, FeatureFlag: "nunchaku", Group: T2IParamTypes.GroupAdvancedSampling, IsAdvanced: true, ViewType: ParamViewType.SLIDER, OrderPriority: 16
             ));
         Program.Backends.RegisterBackendType<ComfyUIAPIBackend>("comfyui_api", "ComfyUI API By URL", "A backend powered by a pre-existing installation of ComfyUI, referenced via API base URL.", true);
         Program.Backends.RegisterBackendType<ComfyUISelfStartBackend>("comfyui_selfstart", "ComfyUI Self-Starting", "A backend powered by a pre-existing installation of the ComfyUI, automatically launched and managed by this UI server.", isStandard: true);

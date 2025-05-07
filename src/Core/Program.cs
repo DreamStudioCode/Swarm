@@ -84,7 +84,7 @@ public class Program
     public static string DataDir = "Data";
 
     /// <summary>If a version update is available, this is the message.</summary>
-    public static string VersionUpdateMessage = null;
+    public static string VersionUpdateMessage = null, VersionUpdateMessageShort = null;
 
     /// <summary>Date of the current git commit, if known.</summary>
     public static string CurrentGitDate = null;
@@ -178,8 +178,8 @@ public class Program
                 {
                     string url = $"{Utilities.RepoRoot}/releases/tag/{newer[0]}";
                     Logs.Warning($"A new version of SwarmUI is available: {newer[0]}! You are running version {Utilities.Version}, this is {newer.Length} release(s) behind. See release notes at {url}");
-                    VersionUpdateMessage = $"Update available: {newer[0]} (you are running {Utilities.Version}, this is {newer.Length} release(s) behind):\nSee release notes at <a target=\"_blank\" href=\"{url}\">{url}</a>"
-                        + "\nThere is a button available to automatically apply the update on the <a href=\"#Settings-Server\" onclick=\"getRequiredElementById('servertabbutton').click();getRequiredElementById('serverinfotabbutton').click();\">Server Info Tab</a>.";
+                    VersionUpdateMessageShort = $"Update available: {newer[0]} (you are running {Utilities.Version}, this is {newer.Length} release(s) behind):\nSee release notes at <a target=\"_blank\" href=\"{url}\">{url}</a>";
+                    VersionUpdateMessage = $"{VersionUpdateMessageShort}\nThere is a button available to automatically apply the update on the <a href=\"#Settings-Server\" onclick=\"getRequiredElementById('servertabbutton').click();getRequiredElementById('serverinfotabbutton').click();\">Server Info Tab</a>.";
                 }
                 else
                 {
@@ -191,10 +191,11 @@ public class Program
         {
             try
             {
-                string commitDate = await Utilities.RunGitProcess("show --no-patch --format=%ci HEAD");
-                DateTimeOffset date = DateTimeOffset.Parse(commitDate.Trim()).ToUniversalTime();
+                string showOutput = await Utilities.RunGitProcess("show --no-patch --format=%h^%ci^%s HEAD");
+                string[] parts = showOutput.SplitFast('^', 2);
+                DateTimeOffset date = DateTimeOffset.Parse(parts[1].Trim()).ToUniversalTime();
                 CurrentGitDate = $"{date:yyyy-MM-dd HH:mm:ss}";
-                Logs.Init($"Current git commit marked as date {CurrentGitDate}");
+                Logs.Init($"Current git commit is [{parts[0]}: {parts[2]}], marked as date {CurrentGitDate}");
             }
             catch (Exception ex)
             {
@@ -382,7 +383,7 @@ public class Program
         int downloadRootId = Math.Abs(ServerSettings.Paths.DownloadToRootID) % roots.Length;
         void buildPathList(string folder, T2IModelHandler handler)
         {
-            List<string> result = [];
+            Dictionary<string, string> result = [];
             int rootCount = 0;
             foreach (string modelRoot in roots)
             {
@@ -404,12 +405,12 @@ public class Program
                     {
                         continue;
                     }
-                    result.Add(patched);
+                    result[patched] = patched;
                     sfCount++;
                 }
                 rootCount++;
             }
-            handler.FolderPaths = [.. result];
+            handler.FolderPaths = [.. result.Keys];
         }
         Directory.CreateDirectory(ServerSettings.Paths.ActualModelRoot + "/tensorrt");
         Directory.CreateDirectory(ServerSettings.Paths.ActualModelRoot + "/diffusion_models");
@@ -456,6 +457,12 @@ public class Program
     }
 
     private volatile static bool HasShutdown = false;
+
+    /// <summary>Tell the server to shutdown and restart. This call is not blocking, other code will continue momentarily.</summary>
+    public static void RequestRestart()
+    {
+        _ = Utilities.RunCheckedTask(() => Shutdown(42));
+    }
 
     /// <summary>Main shutdown handler. Tells everything to stop.</summary>
     public static void Shutdown(int code = 0)

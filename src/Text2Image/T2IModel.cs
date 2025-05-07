@@ -197,6 +197,17 @@ public class T2IModel(T2IModelHandler handler, string folderPath, string filePat
                         metaHeader.Remove($"modelspec.{key}");
                     }
                 }
+                void specSetEmptyable(string key, string val)
+                {
+                    if (val is not null)
+                    {
+                        metaHeader[$"modelspec.{key}"] = val;
+                    }
+                    else
+                    {
+                        metaHeader.Remove($"modelspec.{key}");
+                    }
+                }
                 specSet("sai_model_spec", "1.0.0");
                 specSet("title", Metadata.Title);
                 specSet("architecture", Metadata.ModelClassType);
@@ -204,9 +215,9 @@ public class T2IModel(T2IModelHandler handler, string folderPath, string filePat
                 specSet("description", Metadata.Description);
                 specSet("thumbnail", Metadata.PreviewImage);
                 specSet("license", Metadata.License);
-                specSet("usage_hint", Metadata.UsageHint);
-                specSet("trigger_phrase", Metadata.TriggerPhrase);
-                specSet("tags", string.Join(",", Metadata.Tags ?? []));
+                specSetEmptyable("usage_hint", Metadata.UsageHint);
+                specSetEmptyable("trigger_phrase", Metadata.TriggerPhrase);
+                specSetEmptyable("tags", Metadata.Tags is null ? null : string.Join(",", Metadata.Tags));
                 specSet("merged_from", Metadata.MergedFrom);
                 specSet("date", Metadata.Date);
                 specSet("preprocessor", Metadata.Preprocessor);
@@ -271,7 +282,7 @@ public class T2IModel(T2IModelHandler handler, string folderPath, string filePat
         string previewImg = PreviewImage;
         if (!dataImgs && previewImg is not null && previewImg.StartsWithFast("data:"))
         {
-            previewImg = $"/ViewSpecial/{Handler.ModelType}/{name}?editid={ModelsAPI.ModelEditID}";
+            previewImg = $"/ViewSpecial/{Handler.ModelType}/{Name}?editid={ModelsAPI.ModelEditID}";
         }
         return new JObject()
         {
@@ -422,6 +433,11 @@ public class T2IModel(T2IModelHandler handler, string folderPath, string filePat
             file.ReadExactly(buf, 0, 8);
             long metaKvCount = BitConverter.ToInt64(buf, 0);
             JObject metadata = [];
+            JObject result = new()
+            {
+                ["gguf_version"] = ggufVers,
+                ["tensor_count"] = tensorCount
+            };
             for (int i = 0; i < metaKvCount; i++)
             {
                 file.ReadExactly(buf, 0, 8);
@@ -441,14 +457,46 @@ public class T2IModel(T2IModelHandler handler, string folderPath, string filePat
                 }
                 JToken val = ReadRawGGUFObject(file, modelPath, i, (GGUFMetadataValueType)valType, buf);
                 metadata[keyStr] = val;
-                // TODO: Bother to read the tensor list?
             }
-            return new JObject()
+            for (int i = 0; i < tensorCount; i++)
             {
-                ["gguf_version"] = ggufVers,
-                ["tensor_count"] = tensorCount,
-                ["__metadata__"] = metadata
-            };
+                file.ReadExactly(buf, 0, 8);
+                long tensorNameLen = BitConverter.ToInt64(buf, 0);
+                if (tensorNameLen < 0 || tensorNameLen > 100 * 1024 * 1024)
+                {
+                    throw new SwarmReadableErrorException($"Improper GGUF file {modelPath}. Unreasonable tensor name length: {tensorNameLen} (for tensor {i})");
+                }
+                byte[] tensorNameBuf = new byte[tensorNameLen];
+                file.ReadExactly(tensorNameBuf, 0, (int)tensorNameLen);
+                string tensorName = Encoding.UTF8.GetString(tensorNameBuf);
+                file.ReadExactly(buf, 0, 4);
+                int nDimensions = BitConverter.ToInt32(buf, 0);
+                if (nDimensions < 0 || nDimensions > 100)
+                {
+                    throw new SwarmReadableErrorException($"Improper GGUF file {modelPath}. Unreasonable tensor dimension count: {nDimensions} (for tensor {i})");
+                }
+                ulong[] dims = new ulong[nDimensions];
+                ulong totalLen = 1; // TODO: Dtype width
+                for (int j = 0; j < nDimensions; j++)
+                {
+                    file.ReadExactly(buf, 0, 8);
+                    dims[j] = BitConverter.ToUInt64(buf, 0);
+                    totalLen *= dims[j];
+                }
+                file.ReadExactly(buf, 0, 4);
+                int dtype = BitConverter.ToInt32(buf, 0);
+                file.ReadExactly(buf, 0, 8);
+                ulong dataOffset = BitConverter.ToUInt64(buf, 0);
+                JObject tensor = new()
+                {
+                    ["dtype"] = dtype,
+                    ["shape"] = new JArray(dims),
+                    ["data_offsets"] = new JArray() { dataOffset, dataOffset + totalLen }
+                };
+                result[tensorName] = tensor;
+            }
+            result["__metadata__"] = metadata;
+            return result;
         }
         // Otherwise, safetensors
         file.ReadExactly(buf, 0, 8);

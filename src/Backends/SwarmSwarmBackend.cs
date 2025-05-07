@@ -36,6 +36,9 @@ public class SwarmSwarmBackend : AbstractT2IBackend
 
         [ConfigComment("Any other headers here, newline separated, for example:\nMyHeader: MyVal\nSecondHeader: secondVal")]
         public string OtherHeaders = "";
+
+        [ConfigComment("When attempting to connect to the backend, this is the maximum time Swarm will wait before considering the connection to be failed.\nNote that depending on other configurations, it may fail faster than this.\nFor local network machines, set this to a low value (eg 5) to avoid 'Loading...' delays.")]
+        public int ConnectionAttemptTimeoutSeconds = 30;
     }
 
     /// <summary>Internal HTTP handler.</summary>
@@ -104,7 +107,8 @@ public class SwarmSwarmBackend : AbstractT2IBackend
 
     public async Task ValidateAndBuild()
     {
-        JObject sessData = await HttpClient.PostJson($"{Address}/API/GetNewSession", [], RequestAdapter());
+        using CancellationTokenSource timeout = Utilities.TimedCancel(TimeSpan.FromSeconds(Settings.ConnectionAttemptTimeoutSeconds));
+        JObject sessData = await HttpClient.PostJson($"{Address}/API/GetNewSession", [], RequestAdapter(), timeout.Token);
         Session = sessData["session_id"].ToString();
         string id = sessData["server_id"]?.ToString();
         Logs.Verbose($"{HandlerTypeData.Name} {BackendData.ID} Connected to remote Swarm instance {Address} with server ID '{id}'.");
@@ -172,7 +176,7 @@ public class SwarmSwarmBackend : AbstractT2IBackend
                     {
                         try
                         {
-                            JObject modelsData = await HttpClient.PostJson($"{Address}/API/ListModels", new() { ["session_id"] = Session, ["path"] = "", ["depth"] = 999, ["subtype"] = runType, ["allowRemote"] = Settings.AllowForwarding }, RequestAdapter());
+                            JObject modelsData = await HttpClient.PostJson($"{Address}/API/ListModels", new() { ["session_id"] = Session, ["path"] = "", ["depth"] = 999, ["subtype"] = runType, ["allowRemote"] = Settings.AllowForwarding, ["dataImages"] = true }, RequestAdapter());
                             JToken[] remoteModels = [.. modelsData["files"]];
                             if (fullLoad)
                             {
@@ -221,15 +225,17 @@ public class SwarmSwarmBackend : AbstractT2IBackend
                 {
                     features.UnionWith(backend["features"].ToArray().Select(f => f.ToString()));
                     string type = backend["type"].ToString();
+                    string title = backend["title"].ToString();
                     types.Add(type);
                     if (IsReal && !ids.Remove(id) && (Settings.AllowForwarding || type != "swarmswarmbackend"))
                     {
-                        Logs.Verbose($"{HandlerTypeData.Name} {BackendData.ID} adding remote backend {id} ({type})");
+                        Logs.Verbose($"{HandlerTypeData.Name} {BackendData.ID} adding remote backend {id} ({type}) '{title}'");
                         BackendHandler.T2IBackendData newData = Handler.AddNewNonrealBackend(HandlerTypeData, BackendData, SettingsRaw);
                         SwarmSwarmBackend newSwarm = newData.Backend as SwarmSwarmBackend;
                         newSwarm.LinkedRemoteBackendID = id;
                         newSwarm.Models = Models;
                         newSwarm.LinkedRemoteBackendType = type;
+                        newSwarm.Title = $"[Remote from {BackendData.ID}: {Title}] {title}";
                         newSwarm.CanLoadModels = backend["can_load_models"].Value<bool>();
                         OnSwarmBackendAdded?.Invoke(newSwarm);
                         ControlledNonrealBackends.TryAdd(id, newData);

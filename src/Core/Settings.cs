@@ -83,6 +83,9 @@ public class Settings : AutoConfiguration
 
         [ConfigComment("Comma-separated list of numeric days-of-week in which auto-restarting is allowed. Sunday is 0, Saturday is 6.\nIf empty, days are unrestricted.\nFor example, '6,0' only allows auto-restarting from Sunday/Saturday.")]
         public string RestartDayAllowed = "";
+
+        [ConfigComment("If true, critical GPU errors (eg CUDA operation not permitted, or nvidia-smi crash) will cause SwarmUI to entirely restart itself.\nThis primarily exists as a workaround for an nvidia-docker bug (docker randomly uses GPU, so do full restart to get the GPU back)\nbut may be useful to other configs.\nIf false, GPU errors will be logged and nothing further will happen.")]
+        public bool RestartOnGpuCriticalError = false;
     }
 
     /// <summary>Settings related to authorization.</summary>
@@ -131,7 +134,7 @@ public class Settings : AutoConfiguration
         public bool AllowGpuSpecificOptimizations = true;
 
         [ConfigComment("How many models can be loaded in a model list at once.\nPast this count, the list will simply be cut off.\nUse sub-folder organization to prevent issues.")]
-        public int ModelListSanityCap = 2000;
+        public int ModelListSanityCap = 5000;
     }
 
     /// <summary>Settings related to backends.</summary>
@@ -162,6 +165,10 @@ public class Settings : AutoConfiguration
 
         [ConfigComment("If true, any time you load the UI, trigger a server refresh.\nIf false, only triggers a refresh if you restart Swarm or trigger a refresh manually from the Quick Tools menu.\nDefaults to true.")]
         public bool AlwaysRefreshOnLoad = true;
+
+        [ConfigComment("Preference for order of backend selection when loading a new model.\n'Last Used' will load the model on the last backend to load a model. This tends to distribute work between GPUs fairly.\n'First Free' will load the model on the first free backend. This tends to cause frequent model reloading on your first backend, and underuse of others.\nDefaults to Last Used.")]
+        [ManualSettingsOptions(ManualNames = ["Last Used", "First Free"], Vals = ["last_used", "first_free"])]
+        public string ModelLoadOrderPreference = "last_used";
     }
 
     /// <summary>Settings related to networking and the webserver.</summary>
@@ -297,7 +304,7 @@ public class Settings : AutoConfiguration
         public bool EditMetadataWriteJSON = false;
 
         [ConfigComment("If true, image metadata will include a list of models with their hashes.\nThis is useful for services like civitai to automatically link models.\nThis will cause extra time to be taken when new hashes need to be loaded.")]
-        public bool ImageMetadataIncludeModelHash = false;
+        public bool ImageMetadataIncludeModelHash = true;
     }
 
     /// <summary>Settings per-user.</summary>
@@ -370,6 +377,10 @@ public class Settings : AutoConfiguration
             + "\nThe default is blank, which currently implies 'Use As Init,Edit Image,Star,Reuse Parameters'")]
         public string ButtonsUnderMainImages = "";
 
+        [ConfigComment("How to format image metadata on the Generate tab when looking at an image.\n'below' means put the metadata below the image.\n'side' means put the image in a vertical column to the side.\n'auto' means switch to whichever fits better depending on the page width.\nDefault is 'auto'.")]
+        [ManualSettingsOptions(Vals = ["auto", "below", "side"])]
+        public string ImageMetadataFormat = "auto";
+
         [ConfigComment("If enabled, batch size will be reset to 1 when parameters are loaded.\nThis can prevent accidents that might thrash your GPU or cause compatibility issues, especially for example when importing a comfy workflow.\nYou can still set the batch size at will in the GUI.")]
         public bool ResetBatchSizeToOne = false;
 
@@ -432,6 +443,9 @@ public class Settings : AutoConfiguration
 
         [ConfigComment("When generating live previews (ie the turbo preview system, not normal generation previews after you've hit the Generate button),\nthis is how many simultaneous generation requests can be waiting at one time.")]
         public int MaxSimulPreviews = 1;
+
+        [ConfigComment("If true, hitting enter while in the prompt box starts generation.\nIf false, hitting enter will insert a newline.")]
+        public bool EnterKeyGenerates = true;
 
         [ConfigComment("Delay, in seconds, between Generate Forever updates.\nIf the delay hits and a generation is still waiting, it will be skipped.\nDefault is 0.1 seconds.")]
         public double GenerateForeverDelay = 0.1;

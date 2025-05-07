@@ -435,6 +435,8 @@ function load_image_file(elem) {
                 label.textContent = `${name} (${img.naturalWidth}x${img.naturalHeight}, ${describeAspectRatio(img.naturalWidth, img.naturalHeight)})`;
                 elem.dataset.width = img.naturalWidth;
                 elem.dataset.height = img.naturalHeight;
+                elem.dataset.filename = file.name.length > 500 ? file.name.substring(0, 150) + '...' : file.name;
+                elem.dataset.resolution = `${img.naturalWidth}x${img.naturalHeight}`;
                 loadImageFileDedup = true;
                 triggerChangeFor(elem);
                 loadImageFileDedup = false;
@@ -909,3 +911,13 @@ async function doPasswordClientPrehash(userId, pw) {
         return `__swarmdoprehash:${str}`;
     }
 }
+
+function fixTabHeights() {
+    let tabs = document.querySelectorAll('.scroll-within-tab');
+    for (let tab of tabs) {
+        tab.style.maxHeight = `calc(100vh - ${tab.offsetTop}px)`;
+    }
+}
+
+fixTabHeights();
+setTimeout(fixTabHeights, 100);

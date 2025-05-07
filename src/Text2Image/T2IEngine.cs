@@ -60,10 +60,16 @@ namespace SwarmUI.Text2Image
         public static Func<BackendHandler.T2IBackendData, bool> BackendMatcherFor(T2IParamInput user_input)
         {
             string type = user_input.Get(T2IParamTypes.BackendType, "any");
-            bool requireId = user_input.TryGet(T2IParamTypes.ExactBackendID, out int reqId);
+            bool requireId = user_input.TryGet(T2IParamTypes.ExactBackendID, out string reqIdStr);
+            int reqId = requireId ? int.Parse(reqIdStr) : -1;
             string typeLow = type.ToLowerFast();
             return backend =>
             {
+                if (!backend.Backend.CanLoadModels)
+                {
+                    Logs.Verbose($"Filter out backend {backend.ID} as it is marked as unable to load models (eg generic placeholder backend, this is not an important refusal)");
+                    return false;
+                }
                 if (typeLow != "any" && typeLow != backend.Backend.HandlerTypeData.ID.ToLowerFast())
                 {
                     Logs.Verbose($"Filter out backend {backend.ID} as the Type is specified as {typeLow}, but the backend type is {backend.Backend.HandlerTypeData.ID.ToLowerFast()}");

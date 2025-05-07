@@ -217,6 +217,10 @@ public class WorkflowGeneratorSteps
                 {
                     // wrong step, skip
                 }
+                else if (g.FinalLoadedModel?.Metadata?.SpecialFormat == "nunchaku" || g.FinalLoadedModel?.Metadata?.SpecialFormat == "nunchaku-fp4")
+                {
+                    Logs.Warning($"Ignore TeaCache Mode parameter because the current model is Nunchaku which does not support TeaCache. Use 'Nunchaku Cache Threshold' for a similar effect to TeaCache.");
+                }
                 else if (g.IsFlux())
                 {
                     if (teaCacheMode != "video only")
@@ -245,7 +249,7 @@ public class WorkflowGeneratorSteps
                     else
                     {
                         string arch = g.CurrentModelClass()?.ID;
-                        if (arch == "wan-2_1-text2video-1_3b")
+                        if (arch == "wan-2_1-text2video-1_3b" || arch == "wan-2_1-image2video-1_3b")
                         {
                             type = "wan2.1_t2v_1.3B";
                         }
@@ -253,9 +257,9 @@ public class WorkflowGeneratorSteps
                         {
                             type = "wan2.1_t2v_14B";
                         }
-                        else if (arch == "wan-2_1-image2video-14b")
+                        else if (arch == "wan-2_1-image2video-14b" || arch == "wan-2_1-flf2v-14b")
                         {
-                            if (g.FinalLoadedModel.Name.Contains("720p") || g.FinalLoadedModel.StandardWidth == 960)
+                            if (g.FinalLoadedModel.Name.Contains("720p") || g.FinalLoadedModel.StandardWidth == 960 || arch == "wan-2_1-flf2v-14b")
                             {
                                 type = "wan2.1_i2v_720p_14B";
                             }
@@ -1021,9 +1025,9 @@ public class WorkflowGeneratorSteps
                             ["end_percent"] = g.UserInput.Get(controlnetParams.End, 1)
                         });
                     }
-                    else if (g.IsSD3() || g.IsFlux())
+                    else if (g.IsSD3() || g.IsFlux() || g.IsChroma())
                     {
-                        applyNode = g.CreateNode("ControlNetApplySD3", new JObject()
+                        applyNode = g.CreateNode("ControlNetApplyAdvanced", new JObject()
                         {
                             ["positive"] = g.FinalPrompt,
                             ["negative"] = g.FinalNegativePrompt,
@@ -1147,7 +1151,7 @@ public class WorkflowGeneratorSteps
                 g.NoVAEOverride = false;
                 prompt = g.CreateConditioning(g.UserInput.Get(T2IParamTypes.Prompt), g.FinalClip, g.FinalLoadedModel, true, isRefiner: true);
                 negPrompt = g.CreateConditioning(g.UserInput.Get(T2IParamTypes.NegativePrompt), g.FinalClip, g.FinalLoadedModel, false, isRefiner: true);
-                bool doSave = g.UserInput.Get(T2IParamTypes.SaveIntermediateImages, false);
+                bool doSave = g.UserInput.Get(T2IParamTypes.OutputIntermediateImages, false);
                 bool doUspcale = g.UserInput.TryGet(T2IParamTypes.RefinerUpscale, out double refineUpscale) && refineUpscale != 1;
                 // TODO: Better same-VAE check
                 bool doPixelUpscale = doUspcale && (upscaleMethod.StartsWith("pixel-") || upscaleMethod.StartsWith("model-"));
@@ -1258,7 +1262,7 @@ public class WorkflowGeneratorSteps
             PromptRegion.Part[] parts = [.. new PromptRegion(g.UserInput.Get(T2IParamTypes.Prompt, "")).Parts.Where(p => p.Type == PromptRegion.PartType.Segment)];
             if (parts.Any())
             {
-                if (g.UserInput.Get(T2IParamTypes.SaveIntermediateImages, false))
+                if (g.UserInput.Get(T2IParamTypes.OutputIntermediateImages, false))
                 {
                     g.CreateImageSaveNode(g.FinalImageOut, g.GetStableDynamicID(50000, 0));
                 }
@@ -1296,13 +1300,19 @@ public class WorkflowGeneratorSteps
                         {
                             index = 0;
                         }
+                        if (part.Strength > 0.999)
+                        {
+                            Logs.Warning($"Yolo confidence threshold is set to 1. This was recommended syntax before yolo thresholds were supported, but is no longer valid. Swarm will automatically reset the value to default (0.25) instead.");
+                            part.Strength = 0.25;
+                        }
                         segmentNode = g.CreateNode("SwarmYoloDetection", new JObject()
                         {
                             ["image"] = g.FinalImageOut,
                             ["model_name"] = fullname,
                             ["index"] = index,
                             ["class_filter"] = classFilter,
-                            ["sort_order"] = g.UserInput.Get(T2IParamTypes.SegmentSortOrder, "left-right")
+                            ["sort_order"] = g.UserInput.Get(T2IParamTypes.SegmentSortOrder, "left-right"),
+                            ["threshold"] = Math.Abs(part.Strength)
                         });
                     }
                     else
@@ -1376,7 +1386,7 @@ public class WorkflowGeneratorSteps
             PromptRegion.Part[] parts = [.. new PromptRegion(g.UserInput.Get(T2IParamTypes.Prompt, "")).Parts.Where(p => p.Type == PromptRegion.PartType.ClearSegment)];
             foreach (PromptRegion.Part part in parts)
             {
-                if (g.UserInput.Get(T2IParamTypes.SaveIntermediateImages, false))
+                if (g.UserInput.Get(T2IParamTypes.OutputIntermediateImages, false))
                 {
                     g.CreateImageSaveNode(g.FinalImageOut, g.GetStableDynamicID(50000, 0));
                 }
@@ -1414,7 +1424,7 @@ public class WorkflowGeneratorSteps
             }
             if (g.UserInput.Get(T2IParamTypes.RemoveBackground, false))
             {
-                if (g.UserInput.Get(T2IParamTypes.SaveIntermediateImages, false))
+                if (g.UserInput.Get(T2IParamTypes.OutputIntermediateImages, false))
                 {
                     g.CreateImageSaveNode(g.FinalImageOut, g.GetStableDynamicID(50000, 0));
                 }
@@ -1432,7 +1442,7 @@ public class WorkflowGeneratorSteps
             {
                 bool willHaveFollowupVideo = g.UserInput.TryGet(T2IParamTypes.VideoModel, out _) || g.UserInput.Get(T2IParamTypes.Prompt, "").Contains("<extend:");
                 // Heuristic check for if this is an Init Image with no further processing, ie the initial image save is redundant because we're just wanting to extend a presaved image to a video
-                bool formedFromSingleImage = g.UserInput.Get(T2IParamTypes.InitImageCreativity, -1) == 0 && !g.UserInput.Get(T2IParamTypes.SaveIntermediateImages, false) && !g.UserInput.TryGet(T2IParamTypes.RefinerMethod, out _);
+                bool formedFromSingleImage = g.UserInput.Get(T2IParamTypes.InitImageCreativity, -1) == 0 && !g.UserInput.Get(T2IParamTypes.OutputIntermediateImages, false) && !g.UserInput.TryGet(T2IParamTypes.RefinerMethod, out _);
                 if (g.IsVideoModel() && !formedFromSingleImage && !willHaveFollowupVideo)
                 {
                     if (g.UserInput.TryGet(T2IParamTypes.TrimVideoStartFrames, out _) || g.UserInput.TryGet(T2IParamTypes.TrimVideoEndFrames, out _))
@@ -1449,7 +1459,7 @@ public class WorkflowGeneratorSteps
                         && g.UserInput.TryGet(ComfyUIBackendExtension.Text2VideoFrameInterpolationMultiplier, out int mult) && mult > 1
                         && g.UserInput.Get(T2IParamTypes.Text2VideoFrames, 99) > 1)
                     {
-                        if (g.UserInput.Get(T2IParamTypes.SaveIntermediateImages, false))
+                        if (g.UserInput.Get(T2IParamTypes.OutputIntermediateImages, false))
                         {
                             g.CreateNode("SwarmSaveAnimationWS", new JObject()
                             {
@@ -1553,7 +1563,7 @@ public class WorkflowGeneratorSteps
                 g.CreateImageToVideo(vidModel, ref frames, videoCfg, ref videoFps, width, height, prompt, negPrompt, steps, seed, altLatent, batchInd, batchLen);
                 if (g.UserInput.TryGet(ComfyUIBackendExtension.VideoFrameInterpolationMethod, out string method) && g.UserInput.TryGet(ComfyUIBackendExtension.VideoFrameInterpolationMultiplier, out int mult) && mult > 1)
                 {
-                    if (g.UserInput.Get(T2IParamTypes.SaveIntermediateImages, false))
+                    if (g.UserInput.Get(T2IParamTypes.OutputIntermediateImages, false))
                     {
                         g.CreateNode("SwarmSaveAnimationWS", new JObject()
                         {
@@ -1606,7 +1616,7 @@ public class WorkflowGeneratorSteps
                 int? videoFps = g.UserInput.TryGet(T2IParamTypes.VideoFPS, out int fpsRaw) ? fpsRaw : null;
                 string format = g.UserInput.Get(T2IParamTypes.VideoExtendFormat, "webp").ToLowerFast();
                 int frameExtendOverlap = g.UserInput.Get(T2IParamTypes.VideoExtendFrameOverlap, 9);
-                bool saveIntermediate = g.UserInput.Get(T2IParamTypes.SaveIntermediateImages, false);
+                bool saveIntermediate = g.UserInput.Get(T2IParamTypes.OutputIntermediateImages, false);
                 T2IModel extendModel = g.UserInput.Get(T2IParamTypes.VideoExtendModel, null) ?? throw new SwarmUserErrorException("You have an '<extend:' block in your prompt, but you don't have a 'Video Extend Model' selected.");
                 PromptRegion regionalizer = new(fullRawPrompt);
                 List<JArray> vidChunks = [g.FinalImageOut];

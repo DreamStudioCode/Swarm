@@ -150,7 +150,7 @@ body {
     white-space: normal;
     padding: 0.5rem;
     padding-right: 1rem;
-    width: calc(28rem - 5px);
+    width: 100%;
     height: 100%;
 }
 .main_inputs_area_hidden {
@@ -218,6 +218,12 @@ body {
     vertical-align: top;
     margin-left: 0.5rem;
     max-height: 10rem;
+}
+.extras-wrapper-sideblock .current-image-data {
+    text-align: left;
+}
+.extras-wrapper-sideblock .param_view_block {
+    width: calc(100% - 10px);
 }
 .batch-gear-button {
     height: 1.4rem;
@@ -730,13 +736,13 @@ body {
 .browser-folder-tree-container {
     width: 15rem;
     display: inline-block;
-    height: calc(max(10rem, 100% - 1rem));
+    height: calc(max(10rem, 100%));
     overflow: auto;
     vertical-align: top;
 }
 .browser-folder-tree-splitter {
     width: 7px;
-    height: calc(max(10rem, 100% - 1rem));
+    height: calc(max(10rem, 100%));
     cursor: col-resize;
 }
 .browser-header-bar {
@@ -764,7 +770,7 @@ body {
 .browser-content-container {
     display: inline-block;
     width: 100%;
-    height: calc(100% - 3rem);
+    height: calc(100% - 2rem);
     overflow: auto;
     vertical-align: top;
     padding-bottom: 3rem;

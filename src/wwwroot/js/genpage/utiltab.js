@@ -6,7 +6,7 @@ function utilClipTokenize() {
     let resultLine = getRequiredElementById('clip_tokenization_result_line');
     function process() {
         elem.dataset.is_running_proc = true;
-        genericRequest('TokenizeInDetail', { text: elem.value }, data => {
+        genericRequest('TokenizeInDetail', { text: elem.value, skipPromptSyntax: true }, data => {
             let html = `<span style="width: 3rem; display: inline-block;">${data.tokens.length} tokens: </span>`;
             for (let token of data.tokens) {
                 let text = token.text;
@@ -739,7 +739,7 @@ class ModelMetadataScanner {
                 let civitUrl = getCivitUrlGuessFor(model);
                 if (filter != 'all') {
                     let allowed = true;
-                    if (filter == 'no_thumbnail' && model.preview_image) {
+                    if (filter == 'no_thumbnail' && model.preview_image && model.preview_image != 'imgs/model_placeholder.jpg') {
                         allowed = false;
                     }
                     else if (filter == 'no_description' && !invalidDescriptions.includes(model.description.trim())) {

@@ -318,7 +318,7 @@ public class T2IModelHandler
 
     public static readonly string[] AltMetadataDescriptionKeys = ["VersionName", "VersionDescription", "ModelDescription", "description"];
 
-    public static readonly string[] AltMetadataTriggerWordsKeys = ["TrainedWords", "trainedWords"];
+    public static readonly string[] AltMetadataTriggerWordsKeys = ["TrainedWords", "trainedWords", "ss_tag_frequency"];
 
     public static readonly string[] AltMetadataNameKeys = ["UserTitle", "ModelName", "name"];
 
@@ -428,45 +428,75 @@ public class T2IModelHandler
             }
             string altDescription = "", altName = null;
             HashSet<string> triggerPhrases = [];
+            void procAltHeader(JObject altMetadata)
+            {
+                if (altMetadata.TryGetValue("model", out JToken modelSection) && modelSection is JObject modelSectionObj && modelSectionObj.TryGetValue("name", out JToken subNameTok))
+                {
+                    altName ??= subNameTok.Value<string>();
+                }
+                foreach (string nameKey in AltMetadataNameKeys)
+                {
+                    if (altMetadata.TryGetValue(nameKey, out JToken nameTok) && nameTok.Type != JTokenType.Null)
+                    {
+                        altName ??= nameTok.Value<string>();
+                    }
+                }
+                foreach (string descKey in AltMetadataDescriptionKeys)
+                {
+                    if (altMetadata.TryGetValue(descKey, out JToken descTok) && descTok.Type != JTokenType.Null)
+                    {
+                        altDescription += descTok.Value<string>() + "\n";
+                    }
+                }
+                foreach (string wordsKey in AltMetadataTriggerWordsKeys)
+                {
+                    static string[] procWordsFrom(JToken tok)
+                    {
+                        if (tok.Type == JTokenType.Array)
+                        {
+                            return tok.ToObject<string[]>();
+                        }
+                        else if (tok is JObject jobj)
+                        {
+                            IEnumerable<string[]> wordSets = jobj.Properties().Select(p => p.Value is JObject subData ? procWordsFrom(subData) : [p.Name]);
+                            return [.. wordSets.Flatten()];
+                        }
+                        else if (tok.Type == JTokenType.String)
+                        {
+                            string trainedWordsTok = tok.Value<string>();
+                            if (trainedWordsTok.StartsWithFast('{') && trainedWordsTok.EndsWithFast('}'))
+                            {
+                                try
+                                {
+                                    return procWordsFrom(trainedWordsTok.ParseToJson());
+                                }
+                                catch (Exception) { } // Ignored
+                            }
+                            return trainedWordsTok.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+                        }
+                        return null;
+                    }
+                    if (triggerPhrases.IsEmpty() && altMetadata.TryGetValue(wordsKey, out JToken wordsTok) && wordsTok.Type != JTokenType.Null)
+                    {
+                        string[] trainedWords = procWordsFrom(wordsTok);
+                        if (trainedWords is not null && trainedWords.Length > 0)
+                        {
+                            triggerPhrases.UnionWith(trainedWords);
+                        }
+                    }
+                }
+                if (triggerPhrases.IsEmpty() && altMetadata.TryGetValue("activation text", out JToken actTok) && actTok.Type != JTokenType.Null)
+                {
+                    triggerPhrases.Add(actTok.Value<string>());
+                }
+            }
+            procAltHeader(metaHeader);
             foreach (string altSuffix in AltModelMetadataJsonFileSuffixes)
             {
                 if (File.Exists(altModelPrefix + altSuffix))
                 {
                     JObject altMetadata = File.ReadAllText(altModelPrefix + altSuffix).ParseToJson();
-                    if (altMetadata.TryGetValue("model", out JToken modelSection) && modelSection is JObject modelSectionObj && modelSectionObj.TryGetValue("name", out JToken subNameTok))
-                    {
-                        altName ??= subNameTok.Value<string>();
-                    }
-                    foreach (string nameKey in AltMetadataNameKeys)
-                    {
-                        if (altMetadata.TryGetValue(nameKey, out JToken nameTok) && nameTok.Type != JTokenType.Null)
-                        {
-                            altName ??= nameTok.Value<string>();
-                        }
-                    }
-                    foreach (string descKey in AltMetadataDescriptionKeys)
-                    {
-                        if (altMetadata.TryGetValue(descKey, out JToken descTok) && descTok.Type != JTokenType.Null)
-                        {
-                            altDescription += descTok.Value<string>() + "\n";
-                        }
-                    }
-                    foreach (string wordsKey in AltMetadataTriggerWordsKeys)
-                    {
-                        if (altMetadata.TryGetValue(wordsKey, out JToken wordsTok) && wordsTok.Type != JTokenType.Null)
-                        {
-                            string[] trainedWords = wordsTok.ToObject<string[]>();
-                            if (trainedWords is not null && trainedWords.Length > 0)
-                            {
-                                triggerPhrases.UnionWith(trainedWords);
-                            }
-                        }
-                    }
-                    if (altMetadata.TryGetValue("activation text", out JToken actTok) && actTok.Type != JTokenType.Null)
-                    {
-                        triggerPhrases.Add(actTok.Value<string>());
-                    }
-                    break;
+                    procAltHeader(altMetadata);
                 }
             }
             string altTriggerPhrase = triggerPhrases.JoinString(", ");
@@ -479,10 +509,29 @@ public class T2IModelHandler
                     specialFormat = "bnb_nf4";
                     break;
                 }
+                if (key.Contains("bitsandbytes__fp4"))
+                {
+                    specialFormat = "bnb_fp4";
+                    break;
+                }
+                if (key.EndsWith(".scale_weight"))
+                {
+                    specialFormat = "fp8_scaled";
+                    break;
+                }
             }
             if (model.Name.EndsWith(".gguf"))
             {
                 specialFormat = "gguf";
+            }
+            if (model.Name.EndsWith("/transformer_blocks.safetensors") && File.Exists(model.RawFilePath.Replace('\\', '/').BeforeLast('/') + "/comfy_config.json"))
+            {
+                specialFormat = "nunchaku";
+                if (headerData.ContainsKey("single_transformer_blocks.0.mlp_fc1.wtscale"))
+                {
+                    specialFormat = "nunchaku-fp4";
+                }
+                altName ??= model.Name.BeforeLast('/').AfterLast('/');
             }
             if (specialFormat is not null)
             {
@@ -522,8 +571,13 @@ public class T2IModelHandler
             }
             static string pickBest(params string[] options)
             {
+                string nonNull = null;
                 foreach (string opt in options)
                 {
+                    if (opt is not null)
+                    {
+                        nonNull = opt;
+                    }
                     if (!string.IsNullOrWhiteSpace(opt))
                     {
                         return opt;
@@ -533,7 +587,7 @@ public class T2IModelHandler
                 {
                     return options[0];
                 }
-                return null;
+                return nonNull;
             }
             metadata = new()
             {
@@ -550,7 +604,7 @@ public class T2IModelHandler
                 StandardHeight = height,
                 UsageHint = pickBest(metaHeader?.Value<string>("modelspec.usage_hint"), metaHeader?.Value<string>("usage_hint")),
                 MergedFrom = pickBest(metaHeader?.Value<string>("modelspec.merged_from"), metaHeader?.Value<string>("merged_from")),
-                TriggerPhrase = pickBest(metaHeader?.Value<string>("modelspec.trigger_phrase"), metaHeader?.Value<string>("trigger_phrase"), altTriggerPhrase),
+                TriggerPhrase = pickBest(metaHeader?.Value<string>("modelspec.trigger_phrase"), metaHeader?.Value<string>("trigger_phrase")) ?? altTriggerPhrase,
                 License = pickBest(metaHeader?.Value<string>("modelspec.license"), metaHeader?.Value<string>("license")),
                 Date = pickBest(metaHeader?.Value<string>("modelspec.date"), metaHeader?.Value<string>("date")),
                 Preprocessor = pickBest(metaHeader?.Value<string>("modelspec.preprocessor"), metaHeader?.Value<string>("preprocessor")),
@@ -612,6 +666,11 @@ public class T2IModelHandler
         Parallel.ForEach(Directory.EnumerateDirectories(actualFolder), subfolder =>
         {
             string path = $"{prefix}{subfolder.Replace('\\', '/').AfterLast('/')}";
+            if (path.AfterLast('/') == ".git")
+            {
+                Logs.Warning($"You have a .git folder in your {ModelType} model folder '{pathBase}/{path}'! That's not supposed to be there.");
+                return;
+            }
             try
             {
                 AddAllFromFolder(pathBase, path);
@@ -639,6 +698,10 @@ public class T2IModelHandler
             }
             else if (T2IModel.NativelySupportedModelExtensions.Contains(fn.AfterLast('.')))
             {
+                if (fixedFileName.EndsWith("/unquantized_layers.safetensors") && File.Exists(fixedFileName.BeforeLast('/') + "/comfy_config.json"))
+                {
+                    return; // Nunchaku secondary file
+                }
                 T2IModel model = new(this, pathBase, fixedFileName, fullFilename)
                 {
                     Title = fullFilename.AfterLast('/'),

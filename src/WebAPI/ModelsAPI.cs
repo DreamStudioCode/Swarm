@@ -35,7 +35,13 @@ public static class ModelsAPI
         API.RegisterAPICall(RenameModel, false, Permissions.DeleteModels);
     }
 
-    public static Dictionary<string, JObject> InternalExtraModels(string subtype)
+    /// <summary>Map of unique registration IDs to extra model provider functions.</summary>
+    public static ConcurrentDictionary<string, Func<string, Dictionary<string, JObject>>> ExtraModelProviders = new()
+    {
+        ["remote_swarm"] = InternalSwarmRemoteModels
+    };
+
+    public static Dictionary<string, JObject> InternalSwarmRemoteModels(string subtype)
     {
         SwarmSwarmBackend[] backends = [.. Program.Backends.RunningBackendsOfType<SwarmSwarmBackend>().Where(b => b.RemoteModels is not null)];
         IEnumerable<Dictionary<string, JObject>> sets = backends.Select(b => b.RemoteModels.GetValueOrDefault(subtype)).Where(b => b is not null);
@@ -44,6 +50,27 @@ public static class ModelsAPI
             return [];
         }
         return sets.Aggregate((a, b) => a.Union(b).PairsToDictionary(false));
+    }
+
+    public static Dictionary<string, JObject> InternalExtraModels(string subtype)
+    {
+        List<Dictionary<string, JObject>> provided = [];
+        foreach (string provider in ExtraModelProviders.Keys)
+        {
+            try
+            {
+                Dictionary<string, JObject> result = ExtraModelProviders[provider](subtype);
+                if (result is not null)
+                {
+                    provided.Add(result);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logs.Error($"Failed to load extra models from provider '{provider}': {ex.ReadableString()}");
+            }
+        }
+        return provided.Aggregate((a, b) => a.Union(b).PairsToDictionary(false));
     }
 
     /// <summary>Placeholder model indicating the lack of a model.</summary>
@@ -148,7 +175,8 @@ public static class ModelsAPI
         [API.APIParameter("Model sub-type - `LoRA`, `Wildcards`, etc.")] string subtype = "Stable-Diffusion",
         [API.APIParameter("What to sort the list by - `Name`, `DateCreated`, or `DateModified.")] string sortBy = "Name",
         [API.APIParameter("If true, allow remote models. If false, only local models.")] bool allowRemote = true,
-        [API.APIParameter("If true, the sorting should be done in reverse.")] bool sortReverse = false)
+        [API.APIParameter("If true, the sorting should be done in reverse.")] bool sortReverse = false,
+        [API.APIParameter("If true, provide model images in raw data format. If false, use URLs.")] bool dataImages = false)
     {
         if (!Enum.TryParse(sortBy, true, out ModelHistorySortMode sortMode))
         {
@@ -200,7 +228,7 @@ public static class ModelsAPI
                 if (tryMatch(file))
                 {
                     WildcardsHelper.Wildcard card = WildcardsHelper.GetWildcard(file);
-                    files.Add(new(card.Name, card.Name.AfterLast('/'), card.TimeCreated, card.TimeModified, card.GetNetObject(false)));
+                    files.Add(new(card.Name, card.Name.AfterLast('/'), card.TimeCreated, card.TimeModified, card.GetNetObject(dataImages)));
                     if (files.Count > sanityCap)
                     {
                         break;
@@ -214,7 +242,7 @@ public static class ModelsAPI
             {
                 if (tryMatch(possible.Name))
                 {
-                    files.Add(new(possible.Name, possible.Title, possible.Metadata?.TimeCreated ?? long.MaxValue, possible.Metadata?.TimeModified ?? long.MaxValue, possible.ToNetObject(dataImgs: false)));
+                    files.Add(new(possible.Name, possible.Title, possible.Metadata?.TimeCreated ?? long.MaxValue, possible.Metadata?.TimeModified ?? long.MaxValue, possible.ToNetObject(dataImgs: dataImages)));
                     if (files.Count > sanityCap)
                     {
                         break;
@@ -229,7 +257,7 @@ public static class ModelsAPI
                 if (tryMatch(name))
                 {
                     JObject toAdd = possible;
-                    if (toAdd.TryGetValue("preview_image", out JToken previewImg) && previewImg.ToString().StartsWith("data:"))
+                    if (!dataImages && toAdd.TryGetValue("preview_image", out JToken previewImg) && previewImg.ToString().StartsWith("data:"))
                     {
                         toAdd = toAdd.DeepClone() as JObject;
                         toAdd["preview_image"] = $"/ViewSpecial/{subtype}/{name}";
@@ -315,6 +343,11 @@ public static class ModelsAPI
         {
             Logs.Warning($"Rejected model access for model '{name}' from user {session.User.UserID}");
             refusal = new JObject() { ["error"] = "Model not found." };
+            return true;
+        }
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            refusal = new JObject() { ["error"] = "Invalid empty name." };
             return true;
         }
         refusal = null;
@@ -468,14 +501,17 @@ public static class ModelsAPI
             if (!string.IsNullOrWhiteSpace(preview_image))
             {
                 Image img = Image.FromDataString(preview_image).ToMetadataJpg(preview_image_metadata);
-                actualModel.PreviewImage = img.AsDataString();
-                actualModel.Metadata.PreviewImage = actualModel.PreviewImage;
+                if (img is not null)
+                {
+                    actualModel.PreviewImage = img.AsDataString();
+                    actualModel.Metadata.PreviewImage = actualModel.PreviewImage;
+                }
             }
-            actualModel.Metadata.Author = string.IsNullOrWhiteSpace(author) ? null : author;
-            actualModel.Metadata.UsageHint = string.IsNullOrWhiteSpace(usage_hint) ? null : usage_hint;
-            actualModel.Metadata.Date = string.IsNullOrWhiteSpace(date) ? null : date;
-            actualModel.Metadata.License = string.IsNullOrWhiteSpace(license) ? null : license;
-            actualModel.Metadata.TriggerPhrase = string.IsNullOrWhiteSpace(trigger_phrase) ? null : trigger_phrase;
+            actualModel.Metadata.Author = author;
+            actualModel.Metadata.UsageHint = usage_hint;
+            actualModel.Metadata.Date = date;
+            actualModel.Metadata.License = license;
+            actualModel.Metadata.TriggerPhrase = trigger_phrase;
             actualModel.Metadata.Tags = string.IsNullOrWhiteSpace(tags) ? null : tags.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
             actualModel.Metadata.IsNegativeEmbedding = is_negative_embedding;
             actualModel.Metadata.PredictionType = string.IsNullOrWhiteSpace(prediction_type) ? null : prediction_type;

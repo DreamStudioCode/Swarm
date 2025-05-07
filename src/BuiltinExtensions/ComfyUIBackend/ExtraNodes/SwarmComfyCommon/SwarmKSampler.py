@@ -4,7 +4,7 @@ from io import BytesIO
 import latent_preview
 import comfy
 from server import PromptServer
-from comfy.model_base import SDXL, SVD_img2vid
+from comfy.model_base import SDXL, SVD_img2vid, Flux, WAN21, Chroma
 from comfy import samplers
 import numpy as np
 from math import ceil
@@ -46,7 +46,7 @@ def swarm_send_extra_preview(id, image):
     num_data = 1 + (id * 16)
     header = struct.pack(">I", num_data)
     bytesIO.write(header)
-    image.save(bytesIO, format="JPEG", quality=95, compress_level=4)
+    image.save(bytesIO, format="JPEG", quality=90, compress_level=4)
     preview_bytes = bytesIO.getvalue()
     server.send_sync(1, preview_bytes, sid=server.client_id)
 
@@ -56,7 +56,7 @@ def swarm_send_animated_preview(id, images):
     num_data = 3 + (id * 16)
     header = struct.pack(">I", num_data)
     bytesIO.write(header)
-    images[0].save(bytesIO, save_all=True, duration=int(1000.0/6), append_images=images[1 : len(images)], lossless=False, quality=50, method=0, format='WEBP')
+    images[0].save(bytesIO, save_all=True, duration=int(1000.0/6), append_images=images[1 : len(images)], lossless=False, quality=60, method=0, format='WEBP')
     bytesIO.seek(0)
     preview_bytes = bytesIO.getvalue()
     server.send_sync(1, preview_bytes, sid=server.client_id)
@@ -118,7 +118,12 @@ def loglinear_interp(t_steps, num_steps):
 AYS_NOISE_LEVELS = {
     "SD1": [14.6146412293, 6.4745760956,  3.8636745985,  2.6946151520, 1.8841921177,  1.3943805092,  0.9642583904,  0.6523686016, 0.3977456272,  0.1515232662,  0.0291671582],
     "SDXL":[14.6146412293, 6.3184485287,  3.7681790315,  2.1811480769, 1.3405244945,  0.8620721141,  0.5550693289,  0.3798540708, 0.2332364134,  0.1114188177,  0.0291671582],
-    "SVD": [700.00, 54.5, 15.886, 7.977, 4.248, 1.789, 0.981, 0.403, 0.173, 0.034, 0.002]
+    "SVD": [700.00, 54.5, 15.886, 7.977, 4.248, 1.789, 0.981, 0.403, 0.173, 0.034, 0.002],
+    # Flux and Wan from https://github.com/comfyanonymous/ComfyUI/pull/7584
+    "Flux": [0.9968, 0.9886, 0.9819, 0.975, 0.966, 0.9471, 0.9158, 0.8287, 0.5512, 0.2808, 0.001],
+    "Wan": [1.0, 0.997, 0.995, 0.993, 0.991, 0.989, 0.987, 0.985, 0.98, 0.975, 0.973, 0.968, 0.96, 0.946, 0.927, 0.902, 0.864, 0.776, 0.539, 0.208, 0.001],
+    # https://github.com/comfyanonymous/ComfyUI/commit/08ff5fa08a92e0b3f23b9abec979a830a6cffb03#diff-3e4e70e402dcd9e1070ad71ef9292277f10d9faccf36a1c405c0c717a7ee6485R23
+    "Chroma": [0.992, 0.99, 0.988, 0.985, 0.982, 0.978, 0.973, 0.968, 0.961, 0.953, 0.943, 0.931, 0.917, 0.9, 0.881, 0.858, 0.832, 0.802, 0.769, 0.731, 0.69, 0.646, 0.599, 0.55, 0.501, 0.451, 0.402, 0.355, 0.311, 0.27, 0.232, 0.199, 0.169, 0.143, 0.12, 0.101, 0.084, 0.07, 0.058, 0.048, 0.001]
 }
 
 def split_latent_tensor(latent_tensor, tile_size=1024, scale_factor=8):
@@ -264,7 +269,14 @@ class SwarmKSampler:
                 model_type = "SDXL"
             elif isinstance(model.model, SVD_img2vid):
                 model_type = "SVD"
+            elif isinstance(model.model, Flux):
+                model_type = "Flux"
+            elif isinstance(model.model, WAN21):
+                model_type = "Wan"
+            elif isinstance(model.model, Chroma):
+                model_type = "Chroma"
             else:
+                print(f"Unknown model type: {type(model.model)}, defaulting to SD1")
                 model_type = "SD1"
             sigmas = AYS_NOISE_LEVELS[model_type][:]
             if (steps + 1) != len(sigmas):
@@ -288,7 +300,7 @@ class SwarmKSampler:
                                     force_full_denoise=return_with_leftover_noise == "disable", noise_mask=noise_mask, sigmas=sigmas, callback=callback, seed=noise_seed)
             out["samples"] = samples
         return (out, )
-    
+
     # tiled sample version of sample function
     def tiled_sample(self, model, noise_seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, start_at_step, end_at_step, var_seed, var_seed_strength, sigma_max, sigma_min, rho, add_noise, return_with_leftover_noise, previews, tile_size):
         out = latent_image.copy()
@@ -304,7 +316,7 @@ class SwarmKSampler:
         result = stitch_latent_tensors(latent_samples.shape, resampled_tiles)
         out["samples"] = result
         return (out,)
-        
+
     def run_sampling(self, model, noise_seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, start_at_step, end_at_step, var_seed, var_seed_strength, sigma_max, sigma_min, rho, add_noise, return_with_leftover_noise, previews, tile_sample,  tile_size):
         if tile_sample:
             return self.tiled_sample(model, noise_seed, steps, cfg, sampler_name, scheduler, positive, negative, latent_image, start_at_step, end_at_step, var_seed, var_seed_strength, sigma_max, sigma_min, rho, add_noise, return_with_leftover_noise, previews, tile_size)

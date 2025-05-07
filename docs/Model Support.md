@@ -1,33 +1,61 @@
 # Model Type Support In SwarmUI
 
-| Model | Architecture | Year | Author | Scale | Quality/Status |
-| ----  | ---- | ---- | ---- | ---- | ---- |
-[Stable Diffusion v1 and v2](#stable-diffusion-v1-and-v2) | unet | 2022 | Stability AI | 1B | Outdated |
-[Stable Diffusion v1 Inpainting Models](#stable-diffusion-v1-inpainting-models) | unet | 2022 | RunwayML | 1B | Outdated |
-[Stable Diffusion XL](#stable-diffusion-xl) | unet | 2023 | Stability AI | 2B | Older but some finetunes are worth using |
-[SD1 and SDXL Turbo Variants](#sd1-and-sdxl-turbo-variants) | unet | 2023 | Stability AI and others | 2B | Outdated |
-[Stable Diffusion 3](#stable-diffusion-3) | MMDiT | 2024 | Stability AI | 2B | Outdated, prefer 3.5 |
-[Stable Diffusion 3.5 Large](#stable-diffusion-35-large) | MMDiT | 2024 | Stability AI | 8B | Modern, High Quality |
-[Stable Diffusion 3.5 Medium](#stable-diffusion-35-medium) | MMDiT | 2024 | Stability AI | 2B | Modern, Good Quality |
-[Segmind SSD 1B](#segmind-ssd-1b) | unet | 2023 | Segmind | 1B | Outdated |
-[Stable Cascade](#stable-cascade) | unet cascade | 2024 | Stability AI | 5B | Outdated |
-[PixArt Sigma](#pixart-sigma) | DiT | 2024 | PixArt | 1B | Outdated |
-[Nvidia Sana](#nvidia-sana) | DiT | 2024 | NVIDIA | 1.6B | Modern, Low Quality |
-[AuraFlow](#auraflow) | MMDiT | 2024 | Fal.AI | 6B | Outdated |
-[Flux.1](#black-forest-labs-flux1-models) | MMDiT | 2024 | Black Forest Labs | 12B | Modern, High Quality |
-[Lumina 2.0](#lumina-2) | NextDiT | 2025 | Alpha-VLLM | 2.6B | Modern, Decent Quality |
+| Model | Architecture | Year | Author | Scale | Censored? | Quality/Status |
+| ----  | ---- | ---- | ---- | ---- | ---- | ---- |
+[Stable Diffusion v1 and v2](#stable-diffusion-v1-and-v2) | unet | 2022 | Stability AI | 1B | No | Outdated |
+[Stable Diffusion v1 Inpainting Models](#stable-diffusion-v1-inpainting-models) | unet | 2022 | RunwayML | 1B | No | Outdated |
+[Stable Diffusion XL](#stable-diffusion-xl) | unet | 2023 | Stability AI | 2B | Partial | Older but some finetunes are worth using |
+[SD1 and SDXL Turbo Variants](#sd1-and-sdxl-turbo-variants) | unet | 2023 | Stability AI and others | 2B | Partial | Outdated |
+[Stable Diffusion 3](#stable-diffusion-3) | MMDiT | 2024 | Stability AI | 2B | Yes | Outdated, prefer 3.5 |
+[Stable Diffusion 3.5 Large](#stable-diffusion-35-large) | MMDiT | 2024 | Stability AI | 8B | Partial | Modern, High Quality |
+[Stable Diffusion 3.5 Medium](#stable-diffusion-35-medium) | MMDiT | 2024 | Stability AI | 2B | Partial | Modern, Good Quality |
+[Segmind SSD 1B](#segmind-ssd-1b) | unet | 2023 | Segmind | 1B | Partial | Outdated |
+[Stable Cascade](#stable-cascade) | unet cascade | 2024 | Stability AI | 5B | Partial | Outdated |
+[PixArt Sigma](#pixart-sigma) | DiT | 2024 | PixArt | 1B | ? | Outdated |
+[Nvidia Sana](#nvidia-sana) | DiT | 2024 | NVIDIA | 1.6B | No | Modern, Low Quality |
+[AuraFlow](#auraflow) | MMDiT | 2024 | Fal.AI | 6B | Yes | Outdated |
+[Flux.1](#black-forest-labs-flux1-models) | MMDiT | 2024 | Black Forest Labs | 12B | Partial | Modern, High Quality |
+[Lumina 2.0](#lumina-2) | NextDiT | 2025 | Alpha-VLLM | 2.6B | Partial | Modern, Decent Quality |
+[HiDream i1](#hidream-i1) | MMDiT | 2025 | HiDream AI (Vivago) | 17B | Minimal | Modern, High Quality, very memory intense |
+
+- **Architecture** is the fundamental machine learning structure used for the model, UNet's were used in the past but DiT (Diffusion Transformers) are the modern choice
+- **Scale** is how big the model is - "B" for "Billion", so for example "2B" means "Two billion parameters".
+    - One parameter is one number value, so for example in fp16 (16 bit, ie 2 bytes per number), a 2B model is 4 gigabytes. In fp8 (8 bit, ie 1 byte per number), a 2B model is 2 gigabytes.
+    - If you often use fp8 or q8 models, just read the "B" as "gigabytes" for a good approximation
+- **Censored?** is tested by generating eg "a photo of a naked woman" on the model.
+    - This test only refers to the base models, finetunes can add nudity and other "risque" content back in.
+    - Most base models will not generate genitalia, and have limited quality with other body parts and poses. Every popular model has finetunes available to add those capabilities, if you want them.
+        - Sometimes it's not even intentional censorship, just the simple fact that broad base models aren't good at any one thing - so, again, content-specific finetunes fix that.
+    - Model censorship can take other forms (eg does it recognize names of celebrities/artists/brands, can it do gore, etc.) so if a model sounds right to you you may want do your own testing to see if it's capable of the type of content you like
+    - "No" means it generates what was asked,
+    - "Minimal" means it's eg missing genitals but otherwise complete,
+    - "Partial" means it's clearly undertrained at NSFW content (eg difficult to prompt for or poor quality body) but doesn't explicitly refuse,
+    - "Yes" means it's entirely incapable or provides an explicit refusal response.
+- **Quality/Status** is a loose vibe-based metric to imply whether it's worth using in the current year or not.
 
 - Video models are in [Video Model Support](/docs/Video%20Model%20Support.md)
 
-- [Alternative Model Formats](#alternative-model-formats)
-    - [BnB NF4](#bits-and-bytes-nf4-format-models)
-    - [GGUF](#gguf-quantized-models)
-    - [TensorRT](#tensorrt)
+# Current Recommendations
+
+Image model(s) most worth using, as of April 2025:
+
+- Flux Dev in Nunchaku format for best speed/quality combo
+- SDXL finetunes for best broad availability of finetunes and loras, at high speed (with limited quality), especially for anime-style usage
+- HiDream for best base model quality and least censorship, at cost of speed (especially with limited PC hardware)
 
 # General Info
 
 - Swarm natively supports `.safetensors` format models with [ModelSpec](https://github.com/Stability-AI/ModelSpec) metadata
     - can also import metadata from some legacy formats used by other UIs (auto webui thumbnails, matrix jsons, etc)
+    - can also fallback to a `.swarm.json` sidecar file for other supported file formats
+- Swarm can load other model file formats, see [Alternative Model Formats](#alternative-model-formats)
+    - Notably, *quantization* technique formats. "Quantization" means shrinking a model to use lower memory than is normally reasonable.
+        - Normal sizes are named like "BF16", "FP16", "FP8", ... ("BF"/"FP" prefixes are standard formats)
+        - Quantized sizes have names like "NF4", "Q4_K_M", "Q8", "SVDQ-4", "Int-4", ("Q" means quantized, but there are technique-specific labels)
+    - [BnB NF4](#bits-and-bytes-nf4-format-models) (not recommended, quantization technique)
+    - [GGUF](#gguf-quantized-models) (recommended, good quality quantization technique, slower speed)
+    - [Nunchaku](#nunchaku-mit-han-lab) (very recommended, great quality high speed quantization technique)
+    - [TensorRT](#tensorrt) (not recommended, speedup technique)
 
 # Image Models
 
@@ -254,6 +282,18 @@ Parameters and usage is the same as any other normal model.
     - Add a Mask, draw a dot anywhere in the empty area (this is just a trick to tell the editor to automask all the empty area to the side, you don't need to mask it manually)
     - Type your prompt, hit generate
 
+### Chroma
+
+- Chroma is a derivative of Flux, and is supported in SwarmUI
+    - FP8 Scaled versions here: <https://huggingface.co/Clybius/Chroma-fp8-scaled/tree/main>
+    - Or GGUF versions here: <https://huggingface.co/silveroxides/Chroma-GGUF>
+    - Or original BF16 here (not recommended): <https://huggingface.co/lodestones/Chroma/tree/main>
+    - Model files goes in `diffusion_models`
+    - Uses standard CFG, not distilled to 1 like other Flux models
+    - Official reference workflow uses Scheduler=`Align Your Steps` with Steps=`26` and CFG Scale=`4`
+    - Probably works better with longer prompts
+    - "Sigmoid Offset" scheduler may be useful with Chroma? You can `git clone https://github.com/silveroxides/ComfyUI_SigmoidOffsetScheduler` into your ComfyUI `custom_nodes`, and then restart SwarmUI, and it will be available from the `Scheduler` param dropdown
+
 # Lumina 2
 
 ![img](/docs/images/models/lumina-2.png)
@@ -282,6 +322,40 @@ Parameters and usage is the same as any other normal model.
     - **Renorm CFG:** Lumina 2 reference code sets a new advanced parameter `Renorm CFG` to 1. This is available in Swarm under `Advanced Sampling`.
         - The practical difference is subjective and hard to predict, but enabling it seems to tend towards more fine detail
 
+# HiDream-i1
+
+![img](/docs/images/models/hidream-i1-dev.jpg)
+*(Generated with HiDream-i1 Dev, CFG=1, Steps=20, SigmaShift=3)*
+
+- HiDream-i1 Models are supported in SwarmUI.
+    - You can pick Full, Dev, or Fast variant. Most users should prefer Dev or Fast.
+        - **Full:** Uses standard CFG and step counts, no distillation or other tricks. Slowest option, theoretically smartest model (in practice visual quality is poor, but prompt understanding is strong)
+        - **Dev:** Uses CFG=1 distillation but standard step counts, akin to Flux-Dev. Best middle ground option.
+        - **Fast:** Uses CFG=1 and low step count distillation, akin to Flux-Schnell. Best for speed focus, at cost of quality.
+    - The models are 17B, which is massive, so you'll likely prefer a quantized version.
+        - Dev model gguf quant: <https://huggingface.co/city96/HiDream-I1-Dev-gguf/tree/main>
+        - Full model gguf quant: <https://huggingface.co/city96/HiDream-I1-Full-gguf/tree/main>
+        - `Q6_K` is best accuracy on high VRAM, but `Q4_K_S` cuts VRAM requirements while still being very close to original quality, other variants shouldn't be used normally
+        - Comfy Org's fp8 and fat bf16 versions: <https://huggingface.co/Comfy-Org/HiDream-I1_ComfyUI/tree/main/split_files/diffusion_models>
+        - Goes in `(Swarm)/Models/diffusion_models`
+        - All models share the same architecture identifiers. Make sure to configure parameters appropriately for the specific variant you're using (CFG and Steps).
+    - There's also "Edit", a version that does ip2p style editing (give an init image, set creativity to 1, and prompt it with a change request, eg "draw a mustache on her")
+        - BF16 raw fat file here <https://huggingface.co/Comfy-Org/HiDream-I1_ComfyUI/blob/main/split_files/diffusion_models/hidream_e1_full_bf16.safetensors>
+        - This model class cannot be automatically detected, and so you must manually click the `☰` hamburger menu on a model, then `Edit Metadata`, and set the `Architecture:` field to `HiDream i1 Edit`, otherwise it will not use the input image properly
+        - Also set `Resolution:` to `768x768`, the Edit model misbehaves at high res
+    - HiDream uses the Flux VAE, it will be autodownloaded for you if not already present
+    - HiDream uses a quad-textencoder of Long-CLIP L, Long-CLIP G, T5-XXL, and LLaMA-3.1-8B (this is unhinged I'm so sorry for your RAM size)
+        - These will be autodownloaded for you if not already present
+    - LoRAs cross-apply between the three variants, but best alignment between dev/fast, full tends to be more different
+- Parameters:
+    - **CFG Scale:** HiDream Full uses standard standard CFG ranges (eg 6), HiDream Dev and Fast use CFG=1
+    - **Steps:** HiDream Dev uses standard step counts (eg 20), HiDream Fast can use low counts (eg 8). HiDream Full requires higher than normal step counts (at least 30, maybe 50) for clean results.
+        - Official recommendation from HiDream team is: Full=50, Dev=28, Fast=16.
+    - **Sampler and Scheduler:** Standard samplers/schedulers work. Defaults to `Euler` and `Normal`
+        - The dev model is more open to weirder samplers like `LCM` and official recommendation for Full is UniPC, but these are not needed
+    - **Sigma Shift:** Sigma shift defaults to 3 and does not need to be modified.
+        - Officially, HiDream Full and Fast recommend Shift of 3, but for Dev they recommend 6. That 6 on dev seems to look worse though, so I don't recommend it.
+
 # Video Models
 
 Video models are documented in [Video Model Support](/docs/Video%20Model%20Support.md)
@@ -290,14 +364,16 @@ Video models are documented in [Video Model Support](/docs/Video%20Model%20Suppo
 
 ## Bits-and-Bytes NF4 Format Models
 
-- BnB NF4 format models, such as this copy of Flux Dev <https://huggingface.co/lllyasviel/flux1-dev-bnb-nf4/tree/main?show_file_info=flux1-dev-bnb-nf4.safetensors>, are partially supported in SwarmUI automatically.
-    - The detection internally works by looking for `bitsandbytes__nf4` in the model's keys
-    - The first time you try to load an NF4 model, it will give you a popup asking to install support
-        - This will autoinstall https://github.com/comfyanonymous/ComfyUI_bitsandbytes_NF4 which is developed by comfyanonymous and lllyasviel, and is under the AGPL license.
+- BnB NF4 and FP4 format models, such as this copy of Flux Dev <https://huggingface.co/lllyasviel/flux1-dev-bnb-nf4/blob/main/flux1-dev-bnb-nf4.safetensors>, are partially supported in SwarmUI automatically.
+    - The detection internally works by looking for `bitsandbytes__nf4` or `bitsandbytes__fp4` in the model's keys
+    - The first time you try to load a BNB-NF4 or BNB-FP4 model, it will give you a popup asking to install support
+        - This will autoinstall <https://github.com/silveroxides/ComfyUI_bnb_nf4_fp4_Loaders> which is developed by silveroxides, comfyanonymous, and lllyasviel, and is under the AGPL license.
     - You can accept this popup, and it will install and reload the backend
     - Then try to generate again, and it should work
-- Note that BnB-NF4 models have multiple compatibility limitations, including even LoRAs don't apply properly.
+- Note that BnB-NF4 and BNB-FP4 models have multiple compatibility limitations, including even LoRAs don't apply properly.
     - If you want a quantized flux model, GGUF is recommended instead.
+    - Support is barely tested, latest bnb doesn't work with comfy but old bnb is incompatible with other dependencies, good luck getting it to load.
+        - Seriously, just use GGUF or something. bnb is not worth it.
 
 ## GGUF Quantized Models
 
@@ -305,11 +381,25 @@ Video models are documented in [Video Model Support](/docs/Video%20Model%20Suppo
     - The detection is based on file extension.
     - They go in `(Swarm)/Models/diffusion_models` and work similar to other `diffusion_models` format models
         - Required VAE & TextEncoders will be autodownloaded if you do not already have them.
-    - You will have to click the `☰` hamburger menu on a model, then `Edit Metadata`, and set the `Architecture:` field to the relevant correct one (it cannot be autodetected currently).
     - The first time you try to load a GGUF model, it will give you a popup asking to install support
         - This will autoinstall https://github.com/city96/ComfyUI-GGUF which is developed by city96.
-    - You can accept this popup, and it will install and reload the backend
-    - Then try to generate again, and it should just work
+        - You can accept this popup, and it will install and reload the backend
+        - Then try to generate again, and it should just work
+
+## Nunchaku (MIT Han Lab)
+
+- MIT Han Lab's "[Nunchaku](https://github.com/mit-han-lab/ComfyUI-nunchaku)" / 4-bit SVDQuant models are a unusual quant format that is supported in SwarmUI.
+    - Nunchaku is a very dense quantization of models (eg 6GiB for Flux models) that runs very fast (4.4 seconds for a 20 step Flux Dev image on Windows RTX 4090)
+    - They go in `(Swarm)/Models/diffusion_models` and have to have their own folder (eg `(Swarm)/Models/diffusion_models/myfluxmodel`) and work similar to other `diffusion_models` format models
+        - Required VAE & TextEncoders will be autodownloaded if you do not already have them.
+    - The detection is based on the folder structure, you need the files `transformer_blocks.safetensors` and `comfy_config.json` inside the folder. You cannot have unrelated files in the folder.
+    - The first time you try to load a Nunchaku model, it will give you a popup asking to install support
+        - This will autoinstall https://github.com/mit-han-lab/ComfyUI-nunchaku
+        - You can accept this popup, and it will install and reload the backend
+        - Then try to generate again, and it should just work
+    - Nunchaku has various compatibility limitations due to hacks in the custom nodes. Not all lora, textenc, etc. features will work as intended.
+        - It does not work on all python/torch/etc. versions, as they have deeply cursed dependency distribution
+    - The `Nunchaku Cache Threshold` param is available to enable block-caching, which improves performance further at the cost of quality.
 
 ## TensorRT
 

@@ -48,10 +48,11 @@ public class T2IModelClassSorter
         bool isCascadeA(JObject h) => h.ContainsKey("vquantizer.codebook.weight");
         bool isCascadeB(JObject h) => h.ContainsKey("model.diffusion_model.clf.1.weight") && h.ContainsKey("model.diffusion_model.clip_mapper.weight");
         bool isCascadeC(JObject h) => h.ContainsKey("model.diffusion_model.clf.1.weight") && h.ContainsKey("model.diffusion_model.clip_txt_mapper.weight");
-        bool isFluxSchnell(JObject h) => (h.ContainsKey("double_blocks.0.img_attn.norm.key_norm.scale") && !h.ContainsKey("guidance_in.in_layer.bias")) // 'unet'
-                || (h.ContainsKey("model.diffusion_model.double_blocks.0.img_attn.norm.key_norm.scale") && !h.ContainsKey("model.diffusion_model.guidance_in.in_layer.bias")); // 'checkpoint'
-        bool isFluxDev(JObject h) => (h.ContainsKey("double_blocks.0.img_attn.norm.key_norm.scale") && h.ContainsKey("guidance_in.in_layer.bias")) // 'unet'
-                || h.ContainsKey("model.diffusion_model.double_blocks.0.img_attn.norm.key_norm.scale") && h.ContainsKey("model.diffusion_model.guidance_in.in_layer.bias"); // 'checkpoint'
+        bool isFluxSchnell(JObject h) => (h.ContainsKey("double_blocks.0.img_attn.norm.key_norm.scale") && !h.ContainsKey("guidance_in.in_layer.bias")) // 'diffusion_models'
+                || (h.ContainsKey("model.diffusion_model.double_blocks.0.img_attn.norm.key_norm.scale") && !h.ContainsKey("model.diffusion_model.guidance_in.in_layer.bias")); // 'checkpoints'
+        bool isFluxDev(JObject h) => (h.ContainsKey("double_blocks.0.img_attn.norm.key_norm.scale") && h.ContainsKey("guidance_in.in_layer.bias")) // 'diffusion_models'
+                || (h.ContainsKey("single_transformer_blocks.0.norm.linear.qweight") && h.ContainsKey("transformer_blocks.0.mlp_context_fc1.bias") && h.ContainsKey("transformer_blocks.0.mlp_context_fc1.wscales")) // Nunchaku
+                || (h.ContainsKey("model.diffusion_model.double_blocks.0.img_attn.norm.key_norm.scale") && h.ContainsKey("model.diffusion_model.guidance_in.in_layer.bias")); // 'checkpoints'
         bool isFluxLora(JObject h)
         {
             // some models only have some but not all blocks, so...
@@ -92,6 +93,10 @@ public class T2IModelClassSorter
         bool isWan21_1_3bLora(JObject h) => tryGetWanLoraTok(h, out JToken tok) && tok["shape"].ToArray()[1].Value<long>() == 1536;
         bool isWan21_14bLora(JObject h) => tryGetWanLoraTok(h, out JToken tok) && tok["shape"].ToArray()[1].Value<long>() == 5120;
         bool isWanI2v(JObject h) => h.ContainsKey("model.diffusion_model.blocks.0.cross_attn.k_img.bias") || h.ContainsKey("blocks.0.cross_attn.k_img.bias");
+        bool isWanflf2v(JObject h) => h.ContainsKey("model.diffusion_model.img_emb.emb_pos") || h.ContainsKey("img_emb.emb_pos");
+        bool isHiDream(JObject h) => h.ContainsKey("caption_projection.0.linear.weight");
+        bool isHiDreamLora(JObject h) => h.ContainsKey("diffusion_model.double_stream_blocks.0.block.ff_i.shared_experts.w1.lora_A.weight");
+        bool isChroma(JObject h) => h.ContainsKey("distilled_guidance_layer.in_proj.bias") && h.ContainsKey("double_blocks.0.img_attn.proj.bias");
         // ====================== Stable Diffusion v1 ======================
         Register(new() { ID = "stable-diffusion-v1", CompatClass = "stable-diffusion-v1", Name = "Stable Diffusion v1", StandardWidth = 512, StandardHeight = 512, IsThisModelOfClass = (m, h) =>
         {
@@ -268,7 +273,7 @@ public class T2IModelClassSorter
         Register(new() { ID = "flux.1/vae", CompatClass = "flux-1", Name = "Flux.1 Autoencoder", StandardWidth = 1024, StandardHeight = 1024, IsThisModelOfClass = (m, h) => { return false; } });
         Register(new() { ID = "Flux.1-schnell", CompatClass = "flux-1", Name = "Flux.1 Schnell", StandardWidth = 1024, StandardHeight = 1024, IsThisModelOfClass = (m, h) =>
         {
-            return isFluxSchnell(h);
+            return isFluxSchnell(h) && !isChroma(h);
         }});
         Register(new() { ID = "Flux.1-dev", CompatClass = "flux-1", Name = "Flux.1 Dev", StandardWidth = 1024, StandardHeight = 1024, IsThisModelOfClass = (m, h) =>
         {
@@ -330,7 +335,11 @@ public class T2IModelClassSorter
         }});
         Register(new() { ID = "wan-2_1-image2video-14b", CompatClass = "wan-21-14b", Name = "Wan 2.1 Image2Video 14B", StandardWidth = 640, StandardHeight = 640, IsThisModelOfClass = (m, h) =>
         {
-            return isWan21_14b(h) && isWanI2v(h);
+            return isWan21_14b(h) && isWanI2v(h) && !isWanflf2v(h);
+        }});
+        Register(new() { ID = "wan-2_1-flf2v-14b", CompatClass = "wan-21-14b", Name = "Wan 2.1 First/LastFrame2Video 14B", StandardWidth = 960, StandardHeight = 960, IsThisModelOfClass = (m, h) =>
+        {
+            return isWan21_14b(h) && isWanI2v(h) && isWanflf2v(h);
         }});
         // ====================== Hunyuan Video ======================
         Register(new() { ID = "hunyuan-video", CompatClass = "hunyuan-video", Name = "Hunyuan Video", StandardWidth = 720, StandardHeight = 720, IsThisModelOfClass = (m, h) =>
@@ -383,6 +392,10 @@ public class T2IModelClassSorter
             return isCosmosVae(h);
         }});
         // ====================== Random Other Models ======================
+        Register(new() { ID = "chroma", CompatClass = "chroma", Name = "Chroma", StandardWidth = 1024, StandardHeight = 1024, IsThisModelOfClass = (m, h) =>
+        {
+            return isChroma(h);
+        }});
         Register(new() { ID = "alt_diffusion_v1_512_placeholder", CompatClass = "alt_diffusion_v1", Name = "Alt-Diffusion", StandardWidth = 512, StandardHeight = 512, IsThisModelOfClass = (m, h) =>
         {
             return IsAlt(h);
@@ -402,6 +415,18 @@ public class T2IModelClassSorter
         Register(new() { ID = "lumina-2", CompatClass = "lumina-2", Name = "Lumina 2", StandardWidth = 1024, StandardHeight = 1024, IsThisModelOfClass = (m, h) =>
         {
             return isLumina2(h);
+        }});
+        Register(new() { ID = "hidream-i1", CompatClass = "hidream-i1", Name = "HiDream i1", StandardWidth = 1024, StandardHeight = 1024, IsThisModelOfClass = (m, h) =>
+        {
+            return isHiDream(h);
+        }});
+        Register(new() { ID = "hidream-i1-edit", CompatClass = "hidream-i1", Name = "HiDream i1 Edit", StandardWidth = 768, StandardHeight = 768, IsThisModelOfClass = (m, h) =>
+        {
+            return false; // Must manual edit, seems undetectable?
+        }});
+        Register(new() { ID = "hidream-i1/lora", CompatClass = "hidream-i1", Name = "HiDream i1 LoRA", StandardWidth = 1024, StandardHeight = 1024, IsThisModelOfClass = (m, h) =>
+        {
+            return isHiDreamLora(h);
         }});
         // ====================== Everything below this point does not autodetect, it must match through ModelSpec or be manually set ======================
         // General Stable Diffusion variants
@@ -502,7 +527,6 @@ public class T2IModelClassSorter
                 }
             }
             Logs.Debug($"Model {model.Name} has unknown architecture ID {arch}");
-            return new() { ID = arch, CompatClass = arch, Name = arch, StandardWidth = width, StandardHeight = height, IsThisModelOfClass = (m, h) => false };
         }
         if (!model.RawFilePath.EndsWith(".safetensors") && !model.RawFilePath.EndsWith(".sft") && header is null)
         {
