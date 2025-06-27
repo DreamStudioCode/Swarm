@@ -152,7 +152,7 @@ public class Session : IEquatable<Session>
     }
 
     /// <summary>Applies metadata to an image and converts the filetype, following the user's preferences.</summary>
-    public (Image, string) ApplyMetadata(Image image, T2IParamInput user_input, int numImagesGenned)
+    public (Task<Image>, string) ApplyMetadata(Image image, T2IParamInput user_input, int numImagesGenned, bool maySkipConversion = false)
     {
         if (numImagesGenned > 0 && user_input.TryGet(T2IParamTypes.BatchSize, out int batchSize) && numImagesGenned < batchSize)
         {
@@ -167,9 +167,24 @@ public class Session : IEquatable<Session>
             }
         }
         string metadata = user_input.GenRawMetadata();
-        string format = user_input.Get(T2IParamTypes.ImageFormat, User.Settings.FileFormat.ImageFormat);
-        image = image.ConvertTo(format, User.Settings.FileFormat.SaveMetadata ? metadata : null, User.Settings.FileFormat.DPI);
-        return (image, metadata ?? "");
+        Task<Image> resultImg = Task.FromResult(image);
+        if (!maySkipConversion || !user_input.Get(T2IParamTypes.DoNotSave, false) || user_input.SourceSession.User.Settings.FileFormat.ReformatTransientImages)
+        {
+            string format = user_input.Get(T2IParamTypes.ImageFormat, User.Settings.FileFormat.ImageFormat);
+            resultImg = Task.Run(() =>
+            {
+                try
+                {
+                    return image.ConvertTo(format, User.Settings.FileFormat.SaveMetadata ? metadata : null, User.Settings.FileFormat.DPI, Math.Clamp(User.Settings.FileFormat.ImageQuality, 1, 100));
+                }
+                catch (Exception ex)
+                {
+                    Logs.Error($"Internal error in async task: {ex.ReadableString()}");
+                    return null;
+                }
+            });
+        }
+        return (resultImg, metadata ?? "");
     }
 
     /// <summary>Returns a properly web-formatted base64 encoding of an image, per the user's file format preference.</summary>
@@ -178,16 +193,25 @@ public class Session : IEquatable<Session>
         return image.AsDataString();
     }
 
-    /// <summary>Special cache of recently deleted images, to prevent generating new images with exact same filenames.</summary>
-    public static ConcurrentDictionary<string, string> RecentlyDeletedFilenames = [];
+    /// <summary>Special cache of recently blocked image filenames (eg file deleted, or may be saving), to prevent generating new images with exact same filenames.</summary>
+    public static ConcurrentDictionary<string, string> RecentlyBlockedFilenames = [];
+
+    /// <summary>File data that will be saved soon, or has very recently saved.</summary>
+    public static ConcurrentDictionary<string, Task<byte[]>> StillSavingFiles = [];
+
+    [Obsolete("Use ImageOutput overload instead")]
+    public (string, string) SaveImage(Image image, int batchIndex, T2IParamInput user_input, string metadata)
+    {
+        return SaveImage(new T2IEngine.ImageOutput() { Img = image }, batchIndex, user_input, metadata);
+    }
 
     /// <summary>Save an image as this user, and returns the new URL. If user has disabled saving, returns a data URL.</summary>
     /// <returns>(User-Visible-WebPath, Local-FilePath)</returns>
-    public (string, string) SaveImage(Image image, int batchIndex, T2IParamInput user_input, string metadata)
+    public (string, string) SaveImage(T2IEngine.ImageOutput image, int batchIndex, T2IParamInput user_input, string metadata)
     {
         if (!User.Settings.SaveFiles)
         {
-            return (GetImageB64(image), null);
+            return (GetImageB64(image.Img), null);
         }
         string rawImagePath = User.BuildImageOutputPath(user_input, batchIndex);
         string imagePath = rawImagePath.Replace("[number]", "1");
@@ -202,10 +226,10 @@ public class Session : IEquatable<Session>
             Logs.Debug($"Invalid file format extension: {ex.GetType().Name}: {ex.Message}");
             extension = "jpg";
         }
-        if (image.Type != Image.ImageType.IMAGE)
+        if (image.Img.Type != Image.ImageType.IMAGE)
         {
-            Logs.Verbose($"Image is type {image.Type} and will save with extension '{image.Extension}'.");
-            extension = image.Extension;
+            Logs.Verbose($"Image is type {image.Img.Type} and will save with extension '{image.Img.Extension}'.");
+            extension = image.Img.Extension;
         }
         string fullPathNoExt = Path.GetFullPath($"{User.OutputDirectory}/{imagePath}");
         string pathFolder = imagePath.Contains('/') ? imagePath.BeforeLast('/') : "";
@@ -216,7 +240,7 @@ public class Session : IEquatable<Session>
             try
             {
                 Directory.CreateDirectory(folderRoute);
-                HashSet<string> existingFiles = [.. Directory.EnumerateFiles(folderRoute).Union(RecentlyDeletedFilenames.Keys.Where(f => f.StartsWith(folderRoute))).Select(f => f.BeforeLast('.'))];
+                HashSet<string> existingFiles = [.. Directory.EnumerateFiles(folderRoute).Union(RecentlyBlockedFilenames.Keys.Where(f => f.StartsWith(folderRoute))).Select(f => f.BeforeLast('.'))];
                 int num = 0;
                 while (existingFiles.Contains(fullPathNoExt))
                 {
@@ -225,23 +249,28 @@ public class Session : IEquatable<Session>
                     fullPathNoExt = Path.GetFullPath($"{User.OutputDirectory}/{imagePath}");
                     fullPath = $"{fullPathNoExt}.{extension}";
                 }
-                File.WriteAllBytes(fullPath, image.ImageData);
-                if (User.Settings.FileFormat.SaveTextFileMetadata && !string.IsNullOrWhiteSpace(metadata))
+                RecentlyBlockedFilenames[fullPath] = fullPath;
+                StillSavingFiles[fullPath] = image.ActualImageTask is null ? Task.FromResult(image.Img.ImageData) : Task.Run(async () => (await image.ActualImageTask).ImageData);
+                Utilities.RunCheckedTask(async () =>
                 {
-                    File.WriteAllBytes(fullPathNoExt + ".txt", metadata.EncodeUTF8());
-                }
-                if (!ImageMetadataTracker.ExtensionsWithMetadata.Contains(extension) && !string.IsNullOrWhiteSpace(metadata))
-                {
-                    File.WriteAllBytes(fullPathNoExt + ".swarm.json", metadata.EncodeUTF8());
-                }
-                if (ImageMetadataTracker.ExtensionsForFfmpegables.Contains(extension) && !string.IsNullOrWhiteSpace(Utilities.FfmegLocation.Value))
-                {
-                    Utilities.QuickRunProcess(Utilities.FfmegLocation.Value, ["-i", fullPath, "-vf", "select=eq(n\\,0)", "-q:v", "3", fullPathNoExt + ".swarmpreview.jpg"]).Wait();
-                    if (Program.ServerSettings.UI.AllowAnimatedPreviews)
+                    Image actualImage = image.ActualImageTask is null ? image.Img : await image.ActualImageTask;
+                    File.WriteAllBytes(fullPath, actualImage.ImageData);
+                    if ((User.Settings.FileFormat.SaveTextFileMetadata || !ImageMetadataTracker.ExtensionsWithMetadata.Contains(extension)) && !string.IsNullOrWhiteSpace(metadata))
                     {
-                        Utilities.QuickRunProcess(Utilities.FfmegLocation.Value, ["-i", fullPath, "-vcodec", "libwebp", "-filter:v", "fps=fps=6,scale=-1:128", "-lossless", "0", "-compression_level", "2", "-q:v", "60", "-loop", "0", "-preset", "picture", "-an", "-vsync", "0", "-t", "5", fullPathNoExt + ".swarmpreview.webp"]).Wait();
+                        File.WriteAllBytes(fullPathNoExt + ".swarm.json", metadata.EncodeUTF8());
                     }
-                }
+                    if (ImageMetadataTracker.ExtensionsForFfmpegables.Contains(extension) && !string.IsNullOrWhiteSpace(Utilities.FfmegLocation.Value))
+                    {
+                        Utilities.QuickRunProcess(Utilities.FfmegLocation.Value, ["-i", fullPath, "-vf", "select=eq(n\\,0)", "-q:v", "3", fullPathNoExt + ".swarmpreview.jpg"]).Wait();
+                        if (Program.ServerSettings.UI.AllowAnimatedPreviews)
+                        {
+                            Utilities.QuickRunProcess(Utilities.FfmegLocation.Value, ["-i", fullPath, "-vcodec", "libwebp", "-filter:v", "fps=fps=6,scale=-1:128", "-lossless", "0", "-compression_level", "2", "-q:v", "60", "-loop", "0", "-preset", "picture", "-an", "-vsync", "0", "-t", "5", fullPathNoExt + ".swarmpreview.webp"]).Wait();
+                        }
+                    }
+                    Logs.Debug($"Saved an output file as '{fullPath}'");
+                    await Task.Delay(TimeSpan.FromSeconds(10)); // (Give time for WebServer to read data from cache rather than having to reload from file for first read)
+                    StillSavingFiles.TryRemove(fullPath, out _);
+                });
             }
             catch (Exception ex)
             {

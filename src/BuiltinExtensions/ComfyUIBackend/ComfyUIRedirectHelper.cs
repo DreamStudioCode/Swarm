@@ -111,15 +111,11 @@ public class ComfyUIRedirectHelper
     public static SingleValueExpiringCacheAsync<JObject> ObjectInfoReadCacher = new(() =>
     {
         ComfyUIBackendExtension.ComfyBackendData backend = ComfyUIBackendExtension.ComfyBackendsDirect().First();
+        JObject result = null;
         try
         {
             using CancellationTokenSource cancel = Utilities.TimedCancel(TimeSpan.FromMinutes(1));
-            JObject result = backend.Client.GetAsync($"{backend.APIAddress}/object_info", cancel.Token).Result.Content.ReadAsStringAsync().Result.ParseToJson();
-            if (result is not null)
-            {
-                LastObjectInfo = result;
-                return result;
-            }
+            result = backend.Client.GetAsync($"{backend.APIAddress}/object_info", cancel.Token).Result.Content.ReadAsStringAsync().Result.ParseToJson();
         }
         catch (Exception ex)
         {
@@ -128,6 +124,23 @@ public class ComfyUIRedirectHelper
             {
                 throw;
             }
+        }
+        foreach (ComfyUIBackendExtension.ComfyBackendData trackedBackend in ComfyUIBackendExtension.ComfyBackendsDirect())
+        {
+            if (trackedBackend.Backend is ComfyUIAPIAbstractBackend comfy && comfy.RawObjectInfo is not null)
+            {
+                foreach (JProperty property in comfy.RawObjectInfo.Properties())
+                {
+                    if (!result.ContainsKey(property.Name))
+                    {
+                        result[property.Name] = property.Value;
+                    }
+                }
+            }
+        }
+        if (result is not null)
+        {
+            LastObjectInfo = result;
         }
         return LastObjectInfo;
     }, TimeSpan.FromMinutes(10));
@@ -234,9 +247,11 @@ public class ComfyUIRedirectHelper
                                     bool isJson = received.MessageType == WebSocketMessageType.Text && received.EndOfMessage && received.Count < 8192 * 10 && recvBuf[0] == '{';
                                     if (isJson)
                                     {
+                                        string rawText = null;
                                         try
                                         {
-                                            JObject parsed = StringConversionHelper.UTF8Encoding.GetString(recvBuf[0..received.Count]).ParseToJson();
+                                            rawText = StringConversionHelper.UTF8Encoding.GetString(recvBuf[0..received.Count]);
+                                            JObject parsed = rawText.ParseToJson();
                                             JToken typeTok = parsed["type"];
                                             if (typeTok is not null)
                                             {
@@ -277,8 +292,9 @@ public class ComfyUIRedirectHelper
                                                 {
                                                     client.LastNode = nodeTok.ToString();
                                                 }
-                                                JToken queueRemTok = dataObj["status"]?["exec_info"]?["queue_remaining"];
-                                                if (queueRemTok is not null)
+                                                if (dataObj.TryGetValue("status", out JToken statusTok) && statusTok is JObject status
+                                                    && status.TryGetValue("exec_info", out JToken execTok) && execTok is JObject exec
+                                                    && exec.TryGetValue("queue_remaining", out JToken queueRemTok))
                                                 {
                                                     client.QueueRemaining = queueRemTok.Value<int>();
                                                     dataObj["status"]["exec_info"]["queue_remaining"] = user.TotalQueue;
@@ -287,7 +303,7 @@ public class ComfyUIRedirectHelper
                                         }
                                         catch (Exception ex)
                                         {
-                                            Logs.Error($"Failed to parse ComfyUI message: {ex.ReadableString()}");
+                                            Logs.Error($"Failed to parse ComfyUI message \"{rawText.Replace('\n', ' ')}\": {ex.ReadableString()}");
                                         }
                                     }
                                     if (!isJson)
@@ -413,6 +429,21 @@ public class ComfyUIRedirectHelper
                                 if (preferredBackendIndex >= 0)
                                 {
                                     client = available[preferredBackendIndex % available.Length];
+                                }
+                                else if (available.Length > 1)
+                                {
+                                    string[] classTypes = [.. prompt.Properties().Select(p => p.Value is JObject jobj ? (string)jobj["class_type"] : null).Where(ct => ct is not null)];
+                                    ComfyClientData[] validClients = [.. available.Where(c => c.Backend is not ComfyUIAPIAbstractBackend comfy || classTypes.All(ct => comfy.NodeTypes.Contains(ct)))];
+                                    if (validClients.Length == 0)
+                                    {
+                                        Logs.Debug("It looks like no available backends support all relevant comfy node class types?!");
+                                        Logs.Verbose($"Expected class types: [{classTypes.JoinString(", ")}]");
+                                    }
+                                    else if (validClients.Length != available.Length)
+                                    {
+                                        Logs.Debug($"Required {classTypes.Length} class types, and {validClients.Length} out of {available.Length} backends support them.");
+                                        client = validClients.MinBy(c => c.QueueRemaining);
+                                    }
                                 }
                                 if (shouldReserve)
                                 {

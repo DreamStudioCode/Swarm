@@ -17,7 +17,6 @@
                             <span class="clear_input_icon" id="clear_input_icon" onclick="clearParamFilterInput()">&#x2715;</span>
                         </div>
                         <div id="main_inputs_area"></div>
-                        <div id="main_inputs_area_advanced" class="main_inputs_area_advanced"></div>
                         <div id="main_inputs_area_hidden" class="main_inputs_area_hidden"></div>
                         <div style="height: 10rem;"></div> <!-- Spacer -->
                     </div>
@@ -59,7 +58,7 @@
                             </div>
                             <div class="batchgear-toggler" title="If enabled, automatically swaps to previews of new images the moment they're available, before the image itself is done generating.">
                                 <span class="form-check form-switch display-inline-block">
-                                    <input type="checkbox" class="form-check-input" id="auto_load_previews_checkbox" onchange="toggleAutoLoadPreviews()" checked=""> <label class="form-check-label translate" for="auto_load_previews_checkbox">Auto Swap To Previews</label>
+                                    <input type="checkbox" class="form-check-input" id="auto_load_previews_checkbox" onchange="toggleAutoLoadPreviews()"> <label class="form-check-label translate" for="auto_load_previews_checkbox">Auto Swap To Previews</label>
                                 </span>
                             </div>
                             <div class="batchgear-toggler" title="If enabled, automatically swaps to new images the moment they're done generating.">
@@ -70,6 +69,11 @@
                             <div class="batchgear-toggler" title="If enabled, display loading spinners and failed generation crosses.">
                                 <span class="form-check form-switch display-inline-block">
                                     <input type="checkbox" class="form-check-input" id="show_load_spinners_checkbox" onchange="toggleShowLoadSpinners()" checked="true"> <label class="form-check-label translate" for="show_load_spinners_checkbox">Show Load Spinners</label>
+                                </span>
+                            </div>
+                            <div class="batchgear-toggler" title="If enabled, images in generation batches will be in sections together (ie if you generate multiple batches at once, the separate batches won't mix).">
+                                <span class="form-check form-switch display-inline-block">
+                                    <input type="checkbox" class="form-check-input" id="separate_batches_checkbox" onchange="toggleSeparateBatches()"> <label class="form-check-label translate" for="separate_batches_checkbox">Separate Batches</label>
                                 </span>
                             </div>
                         </div>
@@ -96,9 +100,11 @@
                         <br>
                         <textarea id="alt_negativeprompt_textbox" class="alt_prompt_textbox translate" rows="1" placeholder="Optionally, type a negative prompt here..."></textarea>
                     </div>
-                    <button class="alt-prompt-buttons alt-prompt-generate-button basic-button translate" id="alt_generate_button" oncontextmenu="doPopover('generate'); return false;" onclick="mainGenHandler.doGenerateButton(event)">Generate</button>
-                    <button class="alt-prompt-buttons alt-prompt-center-button basic-button" id="alt_center_button" oncontextmenu="doPopover('generate_center'); return false;" onclick="doPopover('generate_center')">&#x2B9F;</button>
-                    <button class="alt-prompt-buttons interrupt-button interrupt-button-none alt-interrupt" id="alt_interrupt_button" oncontextmenu="doPopover('interrupt'); return false;" onclick="mainGenHandler.doInterrupt()">&times;</button>
+                    <div class="alt-prompt-buttons-wrapper">
+                        <button class="alt-prompt-buttons alt-prompt-generate-button basic-button translate" id="alt_generate_button" oncontextmenu="doPopover('generate'); return false;" onclick="mainGenHandler.doGenerateButton(event)">Generate</button>
+                        <button class="alt-prompt-buttons alt-prompt-center-button basic-button" id="alt_center_button" oncontextmenu="doPopover('generate_center'); return false;" onclick="doPopover('generate_center')">&#x2B9F;</button>
+                        <button class="alt-prompt-buttons interrupt-button interrupt-button-none alt-interrupt" id="alt_interrupt_button" oncontextmenu="doPopover('interrupt'); return false;" onclick="mainGenHandler.doInterrupt()">&times;</button>
+                    </div>
                 </div>
             </div>
             <div class="sui-popover sui_popover_model" id="popover_generate_center">
@@ -121,7 +127,7 @@
                 <div class="sui_popover_model_button translate" onclick="mainGenHandler.doInterrupt(true)">Interrupt All Sessions</div>
             </div>
         </div>
-        <div class="model-block-menu-button t2i-area-quicktools translate" onclick="doPopover('quicktools')">Quick Tools</div>
+        <div id="quicktools-button" class="model-block-menu-button t2i-area-quicktools translate" onclick="doPopover('quicktools')">Quick Tools &#x2B9F;</div>
         <div class="sui-popover sui_popover_model" id="popover_quicktools">
             <div class="sui_popover_model_button translate" onclick="genTabLayout.resetLayout()">Reset Page Layout</div>
             <div class="sui_popover_model_button translate" onclick="refreshParameterValues(true)">Reload Parameter Values</div>
@@ -179,7 +185,8 @@
         <div class="modal modal-fullscreen imageview_popup_modal_background" id="image_fullview_modal">
             <div id="image_fullview_modal_content" style="width:fit-content;margin:auto;min-width:70vw;"></div>
             <div style="position: fixed; top: 1rem; right: 10%; width: 0; height: 0">
-                <span class="text_button translate" onclick="imageFullView.close()">[Close]</span>
+                <span class="text_button translate" onclick="imageFullView.close()">[Close]</span><br>
+                <div id="image_fullview_extra_buttons" class="image_fullview_extra_buttons"></div>
             </div>
         </div>
         <div class="tab-pane genpage-bottom-tab" id="Presets-Tab" role="tabpanel">

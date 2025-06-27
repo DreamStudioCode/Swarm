@@ -63,7 +63,7 @@ body {
     background-color: var(--light-border);
     margin: 0px;
 }
-.splitter-bar:hover {
+.large-window .splitter-bar:hover {
     background-color: var(--emphasis);
     box-shadow:
       -0.5rem 0 0.5rem 0 color-mix(in srgb, transparent 50%, var(--emphasis)),
@@ -100,6 +100,9 @@ body {
 }
 .t2i-split-quickbutton:hover {
     background-color: var(--button-background-hover);
+}
+.small-window .t2i-split-quickbutton {
+    display: none;
 }
 .t2i-top-split-quickbutton {
     float: right;
@@ -226,7 +229,7 @@ body {
     width: calc(100% - 10px);
 }
 .batch-gear-button {
-    height: 1.4rem;
+    height: 1.6rem;
     position: absolute;
     top: -0.2rem;
     left: 0;
@@ -297,7 +300,7 @@ body {
     display: inline-block;
     overflow: hidden;
 }
-.image-block-batch img {
+.image-block-batch img, .image-block-batch video {
     max-height: 100%;
     width: 100%;
 }
@@ -487,7 +490,8 @@ body {
     padding-right: 3px;
     color: var(--text);
     text-decoration: none;
-    height: 1.3rem;
+    min-height: 1.3rem;
+    line-height: 1.3rem;
     margin-top: 0;
     margin-bottom: 0;
     padding-top: 0;
@@ -583,6 +587,21 @@ body {
 .modal_success_bottom {
     color: #00ff00;
 }
+#add_preset_modal {
+    max-height: calc(95vh - var(--bs-modal-margin));
+    margin-top: var(--bs-modal-margin);
+}
+#add_preset_modal .modal-dialog {
+    margin-top: 0;
+    margin-bottom: 0;
+    height: 100%;
+}
+#add_preset_modal .modal-content {
+    height: 100%;
+}
+#add_preset_modal .modal-body {
+    overflow-y: auto;
+}
 .preset-block-selected {
     border: 1px solid var(--box-selected-border);
     background-color: var(--box-selected-background);
@@ -634,7 +653,7 @@ body {
     display: inline-block;
 }
 .t2i-area-quicktools {
-    right: 3rem;
+    right: 2rem;
     top: 1.5rem;
     vertical-align: top;
     background-color: var(--background-soft);
@@ -934,6 +953,11 @@ body {
     padding: 0px 4px !important;
     border-radius: 1rem !important;
 }
+.small-window .alt-text-add-button {
+    top: -45px;
+    font-size: 1.5rem;
+    height: 2.5rem;
+}
 .alt-prompt-buttons {
     vertical-align: top;
     padding-top: 0.1rem;
@@ -941,6 +965,24 @@ body {
     height: 4rem;
     text-align: center;
     border-radius: 0.7rem;
+    margin: 0;
+}
+.alt-prompt-buttons-wrapper {
+    display: flex;
+}
+.small-window .alt-prompt-buttons-wrapper {
+    position: absolute;
+    top: -15px;
+    right: 0;
+}
+.small-window .alt-prompt-buttons {
+    height: 2.5rem;
+}
+.small-window .alt_prompt_textboxes {
+    position: relative;
+    width: 95vw;
+    left: 0vw;
+    padding: 0;
     margin: 0;
 }
 .alt-prompt-generate-button {
@@ -1116,6 +1158,7 @@ body {
 }
 .image_editor_input {
     vertical-align: top;
+    height: 100%;
 }
 .image_editor_leftbar {
     margin: 0;
@@ -1553,12 +1596,21 @@ body {
     display: flex;
     position: relative;
 }
+.input_filter_container.bottom_filter {
+    display: inline;
+}
+.input_filter_container.bottom_filter input {
+    padding-right: 20px;
+}
 .clear_input_icon {
     position: absolute;
     right: 5px;
     top: 2px;
     cursor: pointer;
     display: none;
+}
+.clear_input_icon.bottom_filter {
+    top: -1px;
 }
 .swap_aspectratio_button {
     position: absolute;
@@ -1571,4 +1623,7 @@ body {
     padding: 0.5rem;
     border: 1px solid var(--light-border);
     margin: 1rem;
+}
+.prompt-copy-button {
+    float: right;
 }

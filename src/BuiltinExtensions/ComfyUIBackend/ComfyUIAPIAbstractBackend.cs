@@ -30,6 +30,8 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
 
     public JObject RawObjectInfo;
 
+    public HashSet<string> NodeTypes = [];
+
     public string ModelFolderFormat = null;
 
     public record class ReusableSocket(string ID, ClientWebSocket Socket);
@@ -53,6 +55,7 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
         RawObjectInfo = result;
         ConcurrentDictionary<string, List<string>> newModels = [];
         string firstBackSlash = null;
+        NodeTypes = [.. RawObjectInfo.Properties().Select(p => p.Name)];
         void trackModels(string subtype, string node, string param)
         {
             if (RawObjectInfo.TryGetValue(node, out JToken loaderNode))
@@ -253,7 +256,8 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
             JObject toSend = new()
             {
                 ["batch_index"] = batchId,
-                ["overall_percent"] = nodesDone / (float)expectedNodes,
+                ["request_id"] = $"{user_input.UserRequestId}",
+                ["overall_percent"] = (nodesDone + curPercent) / (float)expectedNodes,
                 ["current_percent"] = curPercent
             };
             if (previewMetadata is not null)
@@ -282,6 +286,7 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
             }
             string promptId = $"{promptResult["prompt_id"]}";
             long firstStep = 0;
+            bool hasDeletedQueueItem = false;
             bool hasInterrupted = false;
             bool isReceivingOutputs = false;
             bool isExpectingVideo = false;
@@ -291,10 +296,16 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
             // autoCanceller will be cancelled via the using to end the task and not leave it waiting when the method clears
             using CancellationTokenSource autoCanceller = new();
             using CancellationTokenSource interruptCanceller = CancellationTokenSource.CreateLinkedTokenSource(interrupt, autoCanceller.Token);
-            Task interruptTask = Task.Delay(TimeSpan.FromHours(24), interruptCanceller.Token);
+            Task interruptTask = Task.Delay(TimeSpan.FromHours(72), interruptCanceller.Token);
             async Task doInterruptNow()
             {
-                if (!hasInterrupted)
+                if (!hasDeletedQueueItem)
+                {
+                    hasDeletedQueueItem = true;
+                    Logs.Debug("ComfyUI queue-item-remove requested");
+                    await HttpClient.PostAsync($"{APIAddress}/queue", new StringContent(new JObject() { ["delete"] = new JArray() { promptId } }.ToString()), Program.GlobalProgramCancel);
+                }
+                if (!hasInterrupted && isMe)
                 {
                     hasInterrupted = true;
                     Logs.Debug("ComfyUI Interrupt requested");
@@ -306,12 +317,14 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
                 if (interrupt.IsCancellationRequested && !hasInterrupted)
                 {
                     await doInterruptNow();
+                    return;
                 }
                 Task<byte[]> getData = socket.ReceiveData(100 * 1024 * 1024, Program.GlobalProgramCancel);
                 Task t = await Task.WhenAny(getData, interruptTask);
                 if (t == interruptTask)
                 {
                     await doInterruptNow();
+                    return;
                 }
                 byte[] output = await getData;
                 if (output is not null)
@@ -384,13 +397,17 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
                     {
                         (string formatLabel, int index, int eventId) = ComfyRawWebsocketOutputToFormatLabel(output);
                         Logs.Verbose($"ComfyUI Websocket sent: {output.Length} bytes of image data as event {eventId} in format {formatLabel} to index {index}");
-                        if (isExpectingText)
+                        if (isExpectingText || formatLabel == "txt")
                         {
                             string metadata = StringConversionHelper.UTF8Encoding.GetString(output[8..]);
                             int colon = metadata.IndexOf(':');
-                            if (colon < 1 || colon > 200 || metadata.Length > 1_000_000)
+                            if (metadata.Length > 1_000_000)
                             {
-                                Logs.Warning($"Invalid raw text output from Comfy backend.");
+                                Logs.Info($"Invalid raw text output from Comfy backend, skipping text len {metadata.Length}.");
+                            }
+                            if (colon < 1 || colon > 200)
+                            {
+                                Logs.Info($"Invalid raw text output from Comfy backend, skipping text: \"{Utilities.EscapeJsonString(metadata)}\"");
                             }
                             else
                             {
@@ -448,6 +465,7 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
                             {
                                 "jpg" => "image/jpeg",
                                 "png" => "image/png",
+                                "bmp" => "image/bmp",
                                 "webp" => "image/webp",
                                 "gif" => "image/gif",
                                 "mp4" => "video/mp4",
@@ -457,8 +475,9 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
                             takeOutput(new JObject()
                             {
                                 ["batch_index"] = index == 0 || !int.TryParse(batchId, out int batchInt) ? batchId : batchInt + index,
+                                ["request_id"] = $"{user_input.UserRequestId}",
                                 ["preview"] = $"data:{dataType};base64," + Convert.ToBase64String(output, 8, output.Length - 8),
-                                ["overall_percent"] = nodesDone / (float)expectedNodes,
+                                ["overall_percent"] = (nodesDone + curPercent) / (float)expectedNodes,
                                 ["current_percent"] = curPercent
                             });
                         }
@@ -500,7 +519,10 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
         }
         finally
         {
-            ReusableSockets.Enqueue(new(id, socket));
+            if (!socket.CloseStatus.HasValue)
+            {
+                ReusableSockets.Enqueue(new(id, socket));
+            }
         }
     }
 
@@ -519,7 +541,19 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
             index = (format >> 4) & 0xffff;
             format &= 7;
         }
-        string formatLabel = format switch { 1 => "jpg", 2 => "png", 3 => "webp", 4 => "gif", 5 => "mp4", 6 => "webm", 7 => "mov", _ => "jpg" };
+        string formatLabel;
+        if (eventId == 3)
+        {
+            formatLabel = "txt";
+        }
+        else if (eventId == 10)
+        {
+            formatLabel = format switch { 1 => "bmp", _ => "jpg" };
+        }
+        else
+        {
+            formatLabel = format switch { 1 => "jpg", 2 => "png", 3 => "webp", 4 => "gif", 5 => "mp4", 6 => "webm", 7 => "mov", _ => "jpg" };
+        }
         return (formatLabel, index, eventId);
     }
 
@@ -527,6 +561,7 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
     {
         "jpg" => Image.ImageType.IMAGE,
         "png" => Image.ImageType.IMAGE,
+        "bmp" => Image.ImageType.IMAGE,
         "webp" => Image.ImageType.IMAGE,
         "gif" => Image.ImageType.ANIMATION,
         "mp4" => Image.ImageType.VIDEO,
@@ -801,7 +836,7 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
                 Image fixedImage = resize ? img.Resize(width, height) : img;
                 if (key.Contains("swarmloadimageb") || key.Contains("swarminputimage"))
                 {
-                    user_input.ValuesInput[key] = fixedImage;
+                    user_input.InternalSet.ValuesInput[key] = fixedImage;
                     return;
                 }
                 int index = workflow.IndexOf("${" + key);
@@ -833,7 +868,7 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
                     index = workflow.IndexOf("${" + key);
                 }
             }
-            foreach ((string key, object val) in new Dictionary<string, object>(user_input.ValuesInput))
+            foreach ((string key, object val) in new Dictionary<string, object>(user_input.InternalSet.ValuesInput))
             {
                 bool resize = !T2IParamTypes.TryGetType(key, out T2IParamType type, user_input) || type.ImageShouldResize;
                 if (val is Image img && !type.ImageAlwaysB64)
@@ -919,6 +954,8 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
             copyParam(T2IParamTypes.ClipGModel);
             copyParam(T2IParamTypes.ClipLModel);
             copyParam(T2IParamTypes.T5XXLModel);
+            copyParam(T2IParamTypes.LLaVAModel);
+            copyParam(T2IParamTypes.LLaMAModel);
         }
         WorkflowGenerator wg = new() { UserInput = input, ModelFolderFormat = ModelFolderFormat, Features = [.. SupportedFeatures] };
         JObject workflow = wg.Generate();

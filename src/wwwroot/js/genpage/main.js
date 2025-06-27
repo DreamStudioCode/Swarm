@@ -1,4 +1,6 @@
-let gen_param_types = null, rawGenParamTypesFromServer = null;
+let gen_param_types = null, rawGenParamTypesFromServer = null, rawGroupMapFromServer = null;
+
+let swarmHasLoaded = false;
 
 let lastImageDir = '';
 
@@ -675,7 +677,6 @@ function clearParamFilterInput() {
 }
 
 function genpageLoad() {
-    console.log('Load page...');
     $('#toptablist').on('shown.bs.tab', function (e) {
         let versionDisp = getRequiredElementById('version_display');
         if (e.target.id == 'maintab_comfyworkflow') {
@@ -735,13 +736,12 @@ function genpageLoad() {
     reviseStatusBar();
     loadHashHelper();
     getSession(() => {
-        console.log('First session loaded - prepping page.');
         imageHistoryBrowser.navigate('');
         initialModelListLoad();
         genericRequest('ListT2IParams', {}, data => {
             updateAllModels(data.models);
-            allWildcards = data.wildcards;
-            rawGenParamTypesFromServer = sortParameterList(data.list);
+            wildcardHelpers.newWildcardList(data.wildcards);
+            [rawGenParamTypesFromServer, rawGroupMapFromServer] = buildParameterList(data.list, data.groups);
             gen_param_types = rawGenParamTypesFromServer;
             paramConfig.preInit();
             paramConfig.applyParamEdits(data.param_edits);
@@ -765,10 +765,9 @@ function genpageLoad() {
             }
             automaticWelcomeMessage();
             autoTitle();
+            swarmHasLoaded = true;
         });
         reviseStatusInterval = setInterval(reviseStatusBar, 2000);
         window.resLoopInterval = setInterval(serverResourceLoop, 1000);
     });
 }
-
-setTimeout(genpageLoad, 1);

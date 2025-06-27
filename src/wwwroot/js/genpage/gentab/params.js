@@ -6,6 +6,14 @@ let refreshParamsExtra = [];
 /** Set 'id': true to indicate that advanced status should be overridden for a group, ie it should be visible even when Display Advanced is unchecked. */
 let groupAdvancedOverrides = {};
 
+// TODO: Temporary (v0.9.6) legacy cookie cleanup
+for (let cookie of listCookies('group_toggle_auto-group-')) {
+    deleteCookie(cookie);
+}
+for (let cookie of listCookies('group_open_auto-group-')) {
+    deleteCookie(cookie);
+}
+
 function setGroupAdvancedOverride(groupId, enable) {
     if (groupAdvancedOverrides[groupId] && !enable) {
         delete groupAdvancedOverrides[groupId];
@@ -26,8 +34,8 @@ class AspectRatio {
         this.altLogic = altLogic;
     }
 
-    read(inWidth, inHeight) {
-        if (this.altLogic) {
+    read(inWidth, inHeight, doAltLogic = true) {
+        if (this.altLogic && doAltLogic) {
             let [newWidth, newHeight] = this.altLogic(inWidth, inHeight);
             if (newWidth && newHeight) {
                 return [newWidth, newHeight];
@@ -37,6 +45,7 @@ class AspectRatio {
             inWidth = roundTo(Math.sqrt(inWidth * inHeight), 16);
             inHeight = inWidth;
         }
+        // NOTE: This math must match T2IParamInput GetImageWidth
         let width = roundTo(this.width * (inWidth <= 0 ? 512 : inWidth) / 512, 16);
         let height = roundTo(this.height * (inHeight <= 0 ? 512 : inHeight) / 512, 16);
         return [width, height];
@@ -87,7 +96,7 @@ let aspectRatios = [
 function getHtmlForParam(param, prefix) {
     try {
         let example = param.examples ? `<br><span class="translate">Examples</span>: <code>${param.examples.map(escapeHtmlNoBr).join(`</code>,&emsp;<code>`)}</code>` : '';
-        let pop = param.no_popover ? '' : `<div class="sui-popover" id="popover_${prefix}${param.id}"><b class="translate">${escapeHtmlNoBr(param.name)}</b> (${param.type}):<br><span class="translate slight-left-margin-block">${safeHtmlOnly(param.description)}</span>${example}</div>`;
+        let pop = param.no_popover ? '' : `<div class="sui-popover sui-info-popover" id="popover_${prefix}${param.id}"><b class="translate">${escapeHtmlNoBr(param.name)}</b> (${param.type}):<br><span class="translate slight-left-margin-block">${safeHtmlOnly(param.description)}</span>${example}</div>`;
         switch (param.type) {
             case 'text':
                 let runnable = param.view_type == 'prompt' ? () => {
@@ -183,6 +192,7 @@ function doGroupOpenUpdate(group, parent, isOpen) {
     parent.classList.remove('input-group-closed');
     parent.classList.remove('input-group-open');
     let symbol = parent.querySelector('.auto-symbol');
+    let groupId = parent.id.substring('auto-group-'.length);
     if (isOpen || header.classList.contains('input-group-noshrink')) {
         group.style.display = 'flex';
         parent.classList.add('input-group-open');
@@ -190,7 +200,7 @@ function doGroupOpenUpdate(group, parent, isOpen) {
             symbol.innerHTML = '&#x2B9F;';
         }
         if (!group.dataset.do_not_save) {
-            setCookie(`group_open_${parent.id}`, 'open', getParamMemoryDays());
+            setCookie(`group_open_${groupId}`, 'open', getParamMemoryDays());
         }
     }
     else {
@@ -200,7 +210,7 @@ function doGroupOpenUpdate(group, parent, isOpen) {
             symbol.innerHTML = '&#x2B9E;';
         }
         if (!group.dataset.do_not_save) {
-            setCookie(`group_open_${parent.id}`, 'closed', getParamMemoryDays());
+            setCookie(`group_open_${groupId}`, 'closed', getParamMemoryDays());
         }
     }
     scheduleParamUnsupportUpdate();
@@ -219,8 +229,9 @@ function doToggleGroup(id) {
         header.classList.remove('input-group-header-activated');
         group.classList.remove('input-group-content-activated');
     }
+    let groupId = parent.id.substring('auto-group-'.length);
     if (!group.dataset.do_not_save) {
-        setCookie(`group_toggle_${parent.id}`, elem.checked ? 'yes' : 'no', getParamMemoryDays());
+        setCookie(`group_toggle_${groupId}`, elem.checked ? 'yes' : 'no', getParamMemoryDays());
     }
     doGroupOpenUpdate(group, parent, group.style.display != 'none');
 }
@@ -264,14 +275,14 @@ function autoRepersistParams() {
         }
         if (param.group && !groups.includes(param.group.id)) {
             groups.push(param.group.id);
-            let open = getCookie(`group_open_auto-group-${param.group.id}`);
+            let open = getCookie(`group_open_${param.group.id}`);
             if (open) {
-                setCookie(`group_open_auto-group-${param.group.id}`, open, days);
+                setCookie(`group_open_${param.group.id}`, open, days);
             }
             if (param.group.toggles) {
-                let toggle = getCookie(`group_toggle_auto-group-${param.group.id}`);
+                let toggle = getCookie(`group_toggle_${param.group.id}`);
                 if (toggle) {
-                    setCookie(`group_toggle_auto-group-${param.group.id}`, toggle, days);
+                    setCookie(`group_toggle_${param.group.id}`, toggle, days);
                 }
             }
         }
@@ -284,74 +295,95 @@ function genInputs(delay_final = false) {
     let groupsEnable = [];
     let isPrompt = (p) => p.id == 'prompt' || p.id == 'negativeprompt';
     let defaultPromptVisible = rawGenParamTypesFromServer.find(p => isPrompt(p)).visible;
-    for (let areaData of [['main_inputs_area', 'new_preset_modal_inputs', (p) => (p.visible || isPrompt(p)) && !isParamAdvanced(p), true],
-            ['main_inputs_area_advanced', 'new_preset_modal_advanced_inputs', (p) => p.visible && isParamAdvanced(p), false],
+    for (let areaData of [['main_inputs_area', 'new_preset_modal_inputs', (p) => (p.visible || isPrompt(p)), true],
             ['main_inputs_area_hidden', 'new_preset_modal_hidden_inputs', (p) => (!p.visible || isPrompt(p)), false]]) {
         let area = getRequiredElementById(areaData[0]);
         area.innerHTML = '';
         let presetArea = areaData[1] ? getRequiredElementById(areaData[1]) : null;
         let html = '', presetHtml = '';
-        let lastGroup = null;
         let isMain = areaData[3];
         if (isMain && defaultPromptVisible) {
             html += `<button class="generate-button" id="generate_button" onclick="getRequiredElementById('alt_generate_button').click()" oncontextmenu="return getRequiredElementById('alt_generate_button').oncontextmenu()">Generate</button>
             <button class="interrupt-button legacy-interrupt interrupt-button-none" id="interrupt_button" onclick="getRequiredElementById('alt_interrupt_button').click()" oncontextmenu="return getRequiredElementById('alt_interrupt_button').oncontextmenu()">&times;</button>`;
         }
-        for (let param of gen_param_types.filter(areaData[2])) {
-            let groupName = param.group ? param.group.name : null;
-            if (groupName != lastGroup) {
-                if (lastGroup) {
-                    html += '</div></div>';
-                    if (presetArea) {
-                        presetHtml += '</div></div>';
-                    }
-                }
-                if (param.group) {
-                    let infoButton = '';
-                    let groupId = param.group.id;
-                    if (param.group.description) {
-                        html += `<div class="sui-popover" id="popover_group_${groupId}"><b>${translateableHtml(escapeHtml(param.group.name))}</b>:<br>&emsp;${translateableHtml(safeHtmlOnly(param.group.description))}</div>`;
-                        infoButton = `<span class="auto-input-qbutton info-popover-button" onclick="doPopover('group_${groupId}', arguments[0])">?</span>`;
-                    }
-                    let shouldOpen = getCookie(`group_open_auto-group-${groupId}`) || (param.group.open ? 'open' : 'closed');
-                    if (shouldOpen == 'closed') {
-                        groupsClose.push(groupId);
-                    }
-                    if (param.group.toggles) {
-                        let shouldToggle = getCookie(`group_toggle_auto-group-${groupId}`) || 'no';
-                        if (shouldToggle == 'yes') {
-                            groupsEnable.push(groupId);
-                        }
-                    }
-                    let symbol = param.group.can_shrink ? '<span class="auto-symbol">&#x2B9F;</span>' : '';
-                    let shrinkClass = param.group.can_shrink ? 'input-group-shrinkable' : 'input-group-noshrink';
-                    let extraSpanInfo = param.group.id == 'revision' ? ' style="display: none;"' : '';
-                    let openClass = shouldOpen == 'closed' ? 'input-group-closed' : 'input-group-open';
-                    let extraContentInfo = shouldOpen == 'closed' ? ' style="display: none;"' : '';
-                    let toggler = getToggleHtml(param.group.toggles, `input_group_content_${groupId}`, escapeHtml(param.group.name), ' group-toggler-switch', 'doToggleGroup');
-                    html += `<div class="input-group ${openClass}" id="auto-group-${groupId}"><span${extraSpanInfo} id="input_group_${groupId}" class="input-group-header ${shrinkClass}"><span class="header-label-wrap">${symbol}<span class="header-label">${translateableHtml(escapeHtml(param.group.name))}</span>${infoButton}<span class="header-label-spacer"></span><span class="header-label-counter"></span>${toggler || '<span class="header-label-notoggle"></span>'}</span></span><div${extraContentInfo} class="input-group-content" id="input_group_content_${groupId}">`;
-                    if (presetArea) {
-                        presetHtml += `<div class="input-group ${openClass}"><span id="input_group_preset_${groupId}" class="input-group-header ${shrinkClass}">${symbol}${translateableHtml(escapeHtml(param.group.name))}</span><div class="input-group-content">`;
-                    }
-                }
-                lastGroup = groupName;
+        let allParams = gen_param_types.filter(areaData[2]);
+        let groupMap = {};
+        let pushGroup = (group) => {
+            let map = groupMap;
+            if (group.parent) {
+                let parent = pushGroup(group.parent);
+                map = parent.children;
             }
-            if (isPrompt(param) ? param.visible == isMain : true) {
-                let newData = getHtmlForParam(param, "input_");
-                html += newData.html;
-                if (newData.runnable) {
-                    runnables.push(newData.runnable);
-                }
+            if (!map[group.id]) {
+                map[group.id] = { group: group, children: {}, params: [] };
             }
-            if (isPrompt(param) ? isMain : true) {
-                let presetParam = JSON.parse(JSON.stringify(param));
-                presetParam.toggleable = true;
-                let presetData = getHtmlForParam(presetParam, "preset_input_");
-                presetHtml += presetData.html;
-                if (presetData.runnable) {
-                    runnables.push(presetData.runnable);
+            return map[group.id];
+        };
+        for (let param of allParams) {
+            let group = param.group ?? { id: '-ungrouped-', name: '-ungrouped-', priority: -99999999, parent: null };
+            pushGroup(group).params.push(param);
+        }
+        let groups = Object.values(groupMap).sort((a, b) => a.group.priority - b.group.priority);
+        function appendGroup(groupHolder) {
+            let group = groupHolder.group;
+            let groupId = group.id;
+            if (groupId != '-ungrouped-') {
+                let infoButton = '';
+                if (group.description) {
+                    html += `<div class="sui-popover sui-info-popover" id="popover_group_${groupId}"><b>${translateableHtml(escapeHtml(group.name))}</b>:<br>&emsp;${translateableHtml(safeHtmlOnly(group.description))}</div>`;
+                    infoButton = `<span class="auto-input-qbutton info-popover-button" onclick="doPopover('group_${groupId}', arguments[0])">?</span>`;
+                }
+                let shouldOpen = getCookie(`group_open_${groupId}`) || (group.open ? 'open' : 'closed');
+                if (shouldOpen == 'closed') {
+                    groupsClose.push(groupId);
+                }
+                if (group.toggles) {
+                    let shouldToggle = getCookie(`group_toggle_${groupId}`) || 'no';
+                    if (shouldToggle == 'yes') {
+                        groupsEnable.push(groupId);
+                    }
+                }
+                let symbol = group.can_shrink ? '<span class="auto-symbol">&#x2B9F;</span>' : '';
+                let shrinkClass = group.can_shrink ? 'input-group-shrinkable' : 'input-group-noshrink';
+                let extraSpanInfo = group.id == 'revision' ? ' style="display: none;"' : '';
+                let openClass = shouldOpen == 'closed' ? 'input-group-closed' : 'input-group-open';
+                let extraContentInfo = shouldOpen == 'closed' ? ' style="display: none;"' : '';
+                let toggler = getToggleHtml(group.toggles, `input_group_content_${groupId}`, escapeHtml(group.name), ' group-toggler-switch', 'doToggleGroup');
+                html += `<div class="input-group ${openClass}" id="auto-group-${groupId}"><span${extraSpanInfo} id="input_group_${groupId}" class="input-group-header ${shrinkClass}"><span class="header-label-wrap">${symbol}<span class="header-label">${translateableHtml(escapeHtml(group.name))}</span>${infoButton}<span class="header-label-spacer"></span><span class="header-label-counter"></span>${toggler || ''}</span></span><div${extraContentInfo} class="input-group-content" id="input_group_content_${groupId}">`;
+                if (presetArea) {
+                    presetHtml += `<div class="input-group ${openClass}"><span id="input_group_preset_${groupId}" class="input-group-header ${shrinkClass}">${symbol}${translateableHtml(escapeHtml(group.name))}</span><div class="input-group-content">`;
                 }
             }
+            for (let param of groupHolder.params.sort((a, b) => a.priority - b.priority)) {
+                if (isPrompt(param) ? param.visible == isMain : true) {
+                    let newData = getHtmlForParam(param, "input_");
+                    html += newData.html;
+                    if (newData.runnable) {
+                        runnables.push(newData.runnable);
+                    }
+                }
+                if (isPrompt(param) ? isMain : true) {
+                    let presetParam = JSON.parse(JSON.stringify(param));
+                    presetParam.toggleable = true;
+                    let presetData = getHtmlForParam(presetParam, "preset_input_");
+                    presetHtml += presetData.html;
+                    if (presetData.runnable) {
+                        runnables.push(presetData.runnable);
+                    }
+                }
+            }
+            for (let child of Object.values(groupHolder.children).sort((a, b) => a.group.priority - b.group.priority)) {
+                appendGroup(child);
+            }
+            if (groupId != '-ungrouped-') {
+                html += '</div></div>';
+                if (presetArea) {
+                    presetHtml += '</div></div>';
+                }
+            }
+        }
+        for (let group of groups) {
+            appendGroup(group);
         }
         area.innerHTML = html;
         if (presetArea) {
@@ -405,11 +437,15 @@ function genInputs(delay_final = false) {
         let inputAspectRatio = document.getElementById('input_aspectratio');
         let inputWidth = document.getElementById('input_width');
         let inputHeight = document.getElementById('input_height');
-        if (inputAspectRatio && inputWidth && inputHeight) {
+        let inputSideLength = document.getElementById('input_sidelength');
+        if (inputAspectRatio && inputWidth && inputHeight && inputSideLength) {
             let inputWidthParent = findParentOfClass(inputWidth, 'auto-slider-box');
             let inputWidthSlider = getRequiredElementById('input_width_rangeslider');
             let inputHeightParent = findParentOfClass(inputHeight, 'auto-slider-box');
             let inputHeightSlider = getRequiredElementById('input_height_rangeslider');
+            let inputSideLengthParent = findParentOfClass(inputSideLength, 'auto-slider-box');
+            let inputSideLengthSlider = getRequiredElementById('input_sidelength_rangeslider');
+            let inputSideLengthToggle = getRequiredElementById('input_sidelength_toggle');
             let resGroupLabel = findParentOfClass(inputWidth, 'input-group').querySelector('.header-label');
             let inputAspectRatioParent = findParentOfClass(inputAspectRatio, 'auto-dropdown-box');
             let inputAspectRatioParentStyles = window.getComputedStyle(inputAspectRatioParent);
@@ -430,6 +466,8 @@ function genInputs(delay_final = false) {
                     swapAspectRatioButton.style.display = 'block';
                     delete inputWidthParent.dataset.visible_controlled;
                     delete inputHeightParent.dataset.visible_controlled;
+                    inputSideLengthParent.style.display = 'none';
+                    inputSideLengthParent.dataset.visible_controlled = 'true';
                     aspect = describeAspectRatio(inputWidth.value, inputHeight.value);
                 }
                 else {
@@ -438,6 +476,8 @@ function genInputs(delay_final = false) {
                     swapAspectRatioButton.style.display = 'none';
                     inputWidthParent.dataset.visible_controlled = 'true';
                     inputHeightParent.dataset.visible_controlled = 'true';
+                    inputSideLengthParent.style.display = 'block';
+                    delete inputSideLengthParent.dataset.visible_controlled;
                     aspect = inputAspectRatio.value;
                 }
                 resGroupLabel.innerText = `${translate('Resolution')}: ${aspect} (${inputWidth.value}x${inputHeight.value})`;
@@ -448,10 +488,18 @@ function genInputs(delay_final = false) {
             inputAspectRatio.addEventListener('change', () => {
                 if (inputAspectRatio.value != "Custom") {
                     let aspectRatio = inputAspectRatio.value;
+                    let targetWidth = curModelWidth;
+                    let targetHeight = curModelHeight;
+                    let doAltLogic = true;
+                    if (inputSideLength.value && inputSideLengthToggle.checked) {
+                        targetWidth = inputSideLength.value;
+                        targetHeight = inputSideLength.value;
+                        doAltLogic = false;
+                    }
                     let width, height;
                     for (let ratio of aspectRatios) {
                         if (ratio.id == aspectRatio) {
-                            [width, height] = ratio.read(curModelWidth, curModelHeight);
+                            [width, height] = ratio.read(targetWidth, targetHeight, doAltLogic);
                             break;
                         }
                     }
@@ -462,6 +510,11 @@ function genInputs(delay_final = false) {
                 }
                 resTrick();
             });
+            for (let target of [inputSideLength, inputSideLengthSlider, inputSideLengthToggle]) {
+                target.addEventListener('change', () => {
+                    triggerChangeFor(inputAspectRatio);
+                });
+            }
             swapAspectRatioButton.addEventListener('click', (event) => {
                 event.preventDefault();
                 let tmpWidth = inputWidth.value;
@@ -643,8 +696,36 @@ function genInputs(delay_final = false) {
                     setDirectParamValue(param, cookie);
                 }
             }
+            let container = findParentOfClass(elem, 'auto-input');
+            let nameBlock = container.querySelector('.auto-input-name');
+            if (nameBlock) {
+                nameBlock.addEventListener('contextmenu', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    let isStarred = param.group.id == 'starred';
+                    new AdvancedPopover('param_name_context', [ { key: isStarred ? 'Unstar Parameter' : 'Star Parameter', action: () => {
+                        if (!paramConfig.param_edits.params[param.id]) {
+                            paramConfig.param_edits.params[param.id] = {};
+                        }
+                        if (isStarred) {
+                            delete paramConfig.param_edits.params[param.id].group;
+                            delete paramConfig.param_edits.params[param.id].advanced;
+                        }
+                        else {
+                            paramConfig.param_edits.params[param.id].group = 'starred';
+                            paramConfig.param_edits.params[param.id].advanced = false;
+                        }
+                        paramConfig.applyParamEdits(paramConfig.param_edits);
+                        genericRequest('SetParamEdits', { edits: paramConfig.param_edits }, data => {});
+                        setTimeout(() => {
+                            genInputs();
+                        }, 1);
+                    }}
+                    ], false, e.clientX, e.clientY, document.body, null);
+                });
+            }
             if (!param.do_not_save) {
-                elem.addEventListener('change', () => {
+                function getParamValue(param, elem) {
                     let val = null;
                     if (param.type == "boolean") {
                         val = elem.checked;
@@ -656,6 +737,10 @@ function genInputs(delay_final = false) {
                     else if (param.type != "image") {
                         val = elem.value;
                     }
+                    return val;
+                }
+                elem.addEventListener('change', () => {
+                    let val = getParamValue(param, elem);
                     if (val !== null) {
                         if (val == param.default) {
                             deleteCookie(`lastparam_input_${param.id}`);
@@ -665,23 +750,28 @@ function genInputs(delay_final = false) {
                         }
                     }
                 });
-            }
-            if (param.toggleable) {
-                let toggler = getRequiredElementById(`input_${param.id}_toggle`);
-                let cookie = getCookie(`lastparam_input_${param.id}_toggle`);
-                if (cookie) {
-                    toggler.checked = cookie == "true";
-                }
-                doToggleEnable(`input_${param.id}`);
-                if (!param.do_not_save) {
-                    toggler.addEventListener('change', () => {
-                        if (!toggler.checked) {
-                            deleteCookie(`lastparam_input_${param.id}`);
-                        }
-                        else {
-                            setCookie(`lastparam_input_${param.id}_toggle`, toggler.checked, getParamMemoryDays());
-                        }
-                    });
+                if (param.toggleable) {
+                    let toggler = getRequiredElementById(`input_${param.id}_toggle`);
+                    let cookie = getCookie(`lastparam_input_${param.id}_toggle`);
+                    if (cookie) {
+                        toggler.checked = cookie == "true";
+                    }
+                    doToggleEnable(`input_${param.id}`);
+                    if (!param.do_not_save) {
+                        toggler.addEventListener('change', () => {
+                            if (!toggler.checked) {
+                                deleteCookie(`lastparam_input_${param.id}`);
+                                deleteCookie(`lastparam_input_${param.id}_toggle`);
+                            }
+                            else {
+                                setCookie(`lastparam_input_${param.id}_toggle`, toggler.checked, getParamMemoryDays());
+                                let val = getParamValue(param, elem);
+                                if (val !== null && val != param.default) {
+                                    setCookie(`lastparam_input_${param.id}`, val, getParamMemoryDays());
+                                }
+                            }
+                        });
+                    }
                 }
             }
         }
@@ -771,7 +861,8 @@ function getGenInput(input_overrides = {}, input_preoverrides = {}) {
         if (type.feature_missing) {
             continue;
         }
-        if (type.group && type.group.toggles && !getRequiredElementById(`input_group_content_${type.group.id}_toggle`).checked) {
+        let group = type.original_group || type.group;
+        if (group && group.toggles && !getRequiredElementById(`input_group_content_${group.id}_toggle`).checked) {
             continue;
         }
         let elem = getRequiredElementById(`input_${type.id}`);
@@ -852,7 +943,7 @@ function refreshParameterValues(strong = true, callback = null) {
             }
         }
         updateAllModels(data.models);
-        allWildcards = data.wildcards;
+        wildcardHelpers.newWildcardList(data.wildcards);
         let promises = [Promise.resolve(true)];
         for (let extra of refreshParamsExtra) {
             let promise = extra();
@@ -872,6 +963,12 @@ function refreshParameterValues(strong = true, callback = null) {
                 }
                 if ((param.type == "dropdown" || param.type == "model") && values) {
                     let val = elem.value;
+                    let triggerChange = false;
+                    if (elem.dataset.wantsValue && values.includes(elem.dataset.wantsValue)) {
+                        val = elem.dataset.wantsValue;
+                        triggerChange = true;
+                        delete elem.dataset.wantsValue;
+                    }
                     let html = '';
                     let alt_names = param['value_names'];
                     for (let i = 0; i < values.length; i++) {
@@ -884,6 +981,9 @@ function refreshParameterValues(strong = true, callback = null) {
                     elem.innerHTML = html;
                     elem.value = val;
                     presetElem.innerHTML = html;
+                    if (triggerChange) {
+                        triggerChangeFor(elem);
+                    }
                 }
                 else if (param.type == "list" && values) {
                     let listOpts = [...elem.options].map(o => o.value);
@@ -925,6 +1025,7 @@ function setDirectParamValue(param, value, paramElem = null, forceDropdowns = fa
     else if (paramElem.tagName == "SELECT") {
         if (![...paramElem.querySelectorAll('option')].map(o => o.value).includes(value)) {
             if (!forceDropdowns) {
+                paramElem.dataset.wantsValue = value;
                 return;
             }
             paramElem.add(new Option(`${value} (Invalid)`, value, false, false));
@@ -949,11 +1050,14 @@ function setDirectParamValue(param, value, paramElem = null, forceDropdowns = fa
     }
 }
 
-function resetParamsToDefault(exclude = []) {
+function resetParamsToDefault(exclude = [], doDefaultPreset = true) {
     for (let cookie of listCookies('lastparam_')) {
         deleteCookie(cookie);
     }
     for (let cookie of listCookies('group_toggle_')) {
+        deleteCookie(cookie);
+    }
+    for (let cookie of listCookies('group_open_')) {
         deleteCookie(cookie);
     }
     localStorage.removeItem('last_comfy_workflow_input');
@@ -1004,7 +1108,7 @@ function resetParamsToDefault(exclude = []) {
     currentModelChanged();
     clearPresets();
     let defaultPreset = getPresetByTitle('default');
-    if (defaultPreset) {
+    if (defaultPreset && doDefaultPreset) {
         applyOnePreset(defaultPreset);
     }
     hideUnsupportableParams();
@@ -1073,7 +1177,8 @@ function hideUnsupportableParams() {
             let show = supported && param.visible;
             let paramToggler = document.getElementById(`input_${param.id}_toggle`);
             let isAltered = paramToggler ? paramToggler.checked : `${getInputVal(elem)}` != param.default;
-            if (param.group && param.group.toggles && !getRequiredElementById(`input_group_content_${param.group.id}_toggle`).checked) {
+            let group = param.original_group || param.group;
+            if (group && group.toggles && !getRequiredElementById(`input_group_content_${group.id}_toggle`).checked) {
                 isAltered = false;
             }
             if (box && box.style.display == 'none' && box.dataset.visible_controlled) {
@@ -1173,6 +1278,24 @@ function sortParameterList(params, top = [], otherParams = []) {
     let prims = params.filter(p => p.group == null && !p.always_first).sort(sortFunc);
     let others = params.filter(p => p.group != null && !p.always_first).sort(sortFunc);
     return first.concat(top).concat(prims).concat(otherParams).concat(others);
+}
+
+function buildParameterList(params, groups) {
+    let groupMap = {};
+    for (let group of groups) {
+        groupMap[group.id] = group;
+    }
+    for (let group of groups) {
+        if (group.parent) {
+            group.parent = groupMap[group.parent];
+        }
+    }
+    for (let param of params) {
+        if (param.group) {
+            param.group = groupMap[param.group];
+        }
+    }
+    return [sortParameterList(params), groupMap];
 }
 
 /** Returns a copy of the parameter name, cleaned for ID format input. */

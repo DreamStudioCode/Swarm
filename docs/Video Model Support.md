@@ -261,7 +261,7 @@ There's a full step by step guide for video model usage here: <https://github.co
 
 ![wan21_14b](https://github.com/user-attachments/assets/17ace901-bc5f-48d0-ab01-ed8984a1b1dc)
 
-*(Warn 2.1 - 14B Text2Video)*
+*(Wan 2.1 - 14B Text2Video)*
 
 ![wan21_13b](https://github.com/user-attachments/assets/51c40a08-9a05-4553-9785-67ae4fe8b2ac)
 
@@ -272,17 +272,17 @@ There's a full step by step guide for video model usage here: <https://github.co
 - [Wan 2.1](https://huggingface.co/Wan-AI/Wan2.1-T2V-1.3B), a video model series from Alibaba, is supported in SwarmUI.
     - Supports separate models for Text2Video or Image2Video.
 - Download the comfy-format Wan model from <https://huggingface.co/Comfy-Org/Wan_2.1_ComfyUI_repackaged/tree/main/split_files/diffusion_models>
-    - Or Kijai's versions <https://huggingface.co/Kijai/WanVideo_comfy/tree/main>
-    - For I2V 1.3B, use <https://huggingface.co/alibaba-pai/Wan2.1-Fun-1.3B-InP/blob/main/diffusion_pytorch_model.safetensors>  (rename the file when you save it to avoid confusion)
     - Favor the `fp8_scaled` models as the main choice, or `fp16` for the 1.3B.
+    - Or Kijai's versions <https://huggingface.co/Kijai/WanVideo_comfy/tree/main> (has a lot of other variants)
+    - For I2V 1.3B, you can use <https://huggingface.co/alibaba-pai/Wan2.1-Fun-1.3B-InP/blob/main/diffusion_pytorch_model.safetensors>  (rename the file when you save it to avoid confusion)
     - For Text2Video, pick either 1.3B (small) model, or 14B (large) model
     - For Image2Video, pick either 480p (640x640 res) or 720p (960x960 res) model, OR the new "Fun-Inp" models (1.3B or 14B)
         - These are not autodetected separately, 480p is assumed.
         - For 720p variant, you will want to click the `☰` hamburger menu on the model, then `Edit Metadata`, and set the `Resolution` to `960x960`
-        - The 720p model isn't bigger, it just supports higher resolutions. Subjective comments say the higher resolution isn't worth the performance loss.
+        - The 720p variant is not recommended. The 480p is actually capable of high resolutions just fine, and has better compatibility.
     - the 1.3B model is very small and can run on almost any modern GPU
     - the 14B versions are 10x larger and require around 10x more VRAM, requires nvidia xx90 tier models to run at decent speed
-    - The FLF2V Model <https://huggingface.co/Kijai/WanVideo_comfy/blob/main/Wan2_1-FLF2V-14B-720P_fp8_e4m3fn.safetensors> is an Image-To-Video model that requires an End Frame input as well
+    - The FLF2V Model ("First-Last Frame To Video") <https://huggingface.co/Kijai/WanVideo_comfy/blob/main/Wan2_1-FLF2V-14B-720P_fp8_e4m3fn.safetensors> is an Image-To-Video model that requires an End Frame input as well
     - save to `diffusion_models`
 - Or GGUF format for reduced VRAM requirements
     - For T2V 14B <https://huggingface.co/city96/Wan2.1-T2V-14B-gguf/tree/main>
@@ -299,12 +299,13 @@ There's a full step by step guide for video model usage here: <https://github.co
 - **Prompt:** Standard. Supports English and Chinese text.
     - They have an official reference negative prompt in Chinese, it is not required but may help: `色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走`
         - (This is just a word spam negative "bright colors, overexposed, static, blurred details, subtitles, ..." but in Chinese. It does help though.)
-- **FPS:** The model is trained for 16 FPS.
+- **FPS:** The base model is trained for 16 FPS. Some variants, such as CausVid, are trained for 24 FPS.
+    - Swarm will default to 16 FPS for Wan. You must manually select 24 FPS when using such a variant.
 - **Resolution:** The models are trained for `832x480`, which is a 16:9 equivalent for `640x640`
     - the 14B models can also do `1280x720`, which is a 16:9 equivalent for `960x960`
     - Other resolutions seem to work fine. Even the 1.3B, which is not trained for 960, can technically still do 960 just with a quality drop as it gets too large.
         - As a vid2vid gen, the model seem to be very good at generating very high res directly.
-- **Frame Count (Length):** you can select pretty freely, different values work fine. If unspecified, will default to `81` (5 seconds).
+- **Frame Count (Length):** you can select pretty freely, different values work fine. If unspecified, will default to `81` (5 seconds if at 16 fps).
     - Use 17 for one second, 33 for two, 49 for three, 65 for 4, 81 for 5.
     - Higher frame counts above 81 seem to become distorted - still work but quality degrades and glitching appears.
     - The Text2Video models seem to favor 81 frames (5 seconds) and exhibit some signs of quality degradation at very low values, the Image2Video models are much more malleable
@@ -321,3 +322,41 @@ There's a full step by step guide for video model usage here: <https://github.co
     - To run faster, use a "HighRes Fix" style setup, there's a guide to that here: https://www.reddit.com/r/StableDiffusion/comments/1j0znur/run_wan_faster_highres_fix_in_2025/
 - **Quality:**
     - The Wan models sometimes produce glitched content on the first or last few frames - under Advanced->`Other Fixes`->you can adjust `Trim Video Start Frames` (and `End`) to a small number (1 to 4) to cut the first/last few frames to dodge this.
+
+### Wan CausVid - High Speed 14B
+
+- Want to generate 14B videos way faster? Here's how:
+    - Pick one of the options below, and save it to your LoRAs folder. "Lightx2v" is the current best recommendation.
+        - Here's the v2 version <https://huggingface.co/Kijai/WanVideo_comfy/blob/main/Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors>
+        - Or the V1 version <https://huggingface.co/Kijai/WanVideo_comfy/blob/main/Wan21_CausVid_14B_T2V_lora_rank32.safetensors>
+            - V1 has some visual side effects (noise pattern on the video), whereas V2 seems to have motion delay (the first couple seconds of a video have little motion, requiring longer video gens)
+        - (Despite the T2V name, this works on I2V too)
+        - If you care what "CausVid" means, here's where it's from: <https://github.com/tianweiy/CausVid>
+        - If you want a 1.3B version, <https://huggingface.co/Kijai/WanVideo_comfy/blob/main/Wan21_CausVid_bidirect2_T2V_1_3B_lora_rank32.safetensors>
+        - There's also "FusionX", a merge of multiple accel loras, that works the same in concept (but expressly favors higher res, eg 720p), find files here: <https://huggingface.co/vrgamedevgirl84/Wan14BT2VFusioniX/tree/main/FusionX_LoRa>
+        - There's also the "Lightx2v" LoRA, a newer causvid variant <https://huggingface.co/Kijai/WanVideo_comfy/blob/main/Wan21_T2V_14B_lightx2v_cfg_step_distill_lora_rank32.safetensors>
+    - Set up a Wan gen with 14B as normal, but also set:
+        - **CFG Scale** to `1`
+            - If doing I2V, set **Video CFG** to `1`
+        - **Advanced Video** -> **Video FPS** to `24`
+        - **Steps** to `4` for fastest generation, `8` for high quality while still fast, or `12` if you really want to ensure max quality by letting the gen take a while
+            - If doing I2V, set **Video Steps** to `4`, `8`, or `12`
+        - **Sampler:** can be default (Euler), but `UniPC` might be a touch better
+        - **Scheduler:** not sure what's best atm, but default usually seems alright
+        - **Frame Count (Length):** supports the same ranges as regular Wan, but seems to extend happily to at least 96 frames (4 seconds at 24 fps), and possibly also 120 frames (5 seconds).
+            - Wan defaults to 81 in Swarm (3.3 seconds) so you may want to tweak this manually.
+            - Use 25 for one second, 49 for two, 73 for three, 97 for four, 121 for five, 145 for six.
+        - With Text2Video, you may want to set **Other Fixes** -> **Trim Video Start Frames** to about 8, to prevent first-frame-flash (there tends to be 2 latent frames, ie 8 real frames, in glitched quality)
+    - Note you still have to consider VRAM and res/frame count, as you will still get slow gens if you exceed your GPU's VRAM capacity. The net speed will still be faster, but not as impressive as compared to when you fit your GPU properly.
+    - Then generate as normal. You'll get a completed video in a fraction of the time with higher framerate quality, thanks to the CausVid lora.
+
+### Wan VACE
+
+- Wan VACE has initial support in SwarmUI.
+    - For **Reference Image** mode:
+        - Select your VACE model as your regular text2video base model
+        - Set the reference image as your Init Image
+        - Set Creativity to 1
+        - Generate as normal
+    - For **Control Video** mode:
+        - Not yet supported in main interface, use Comfy Workflow tab

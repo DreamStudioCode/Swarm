@@ -51,8 +51,8 @@ public class T2IModelClassSorter
         bool isFluxSchnell(JObject h) => (h.ContainsKey("double_blocks.0.img_attn.norm.key_norm.scale") && !h.ContainsKey("guidance_in.in_layer.bias")) // 'diffusion_models'
                 || (h.ContainsKey("model.diffusion_model.double_blocks.0.img_attn.norm.key_norm.scale") && !h.ContainsKey("model.diffusion_model.guidance_in.in_layer.bias")); // 'checkpoints'
         bool isFluxDev(JObject h) => (h.ContainsKey("double_blocks.0.img_attn.norm.key_norm.scale") && h.ContainsKey("guidance_in.in_layer.bias")) // 'diffusion_models'
-                || (h.ContainsKey("single_transformer_blocks.0.norm.linear.qweight") && h.ContainsKey("transformer_blocks.0.mlp_context_fc1.bias") && h.ContainsKey("transformer_blocks.0.mlp_context_fc1.wscales")) // Nunchaku
-                || (h.ContainsKey("model.diffusion_model.double_blocks.0.img_attn.norm.key_norm.scale") && h.ContainsKey("model.diffusion_model.guidance_in.in_layer.bias")); // 'checkpoints'
+                || (h.ContainsKey("single_transformer_blocks.0.norm.linear.qweight") && h.ContainsKey("transformer_blocks.0.mlp_context_fc1.bias") && (h.ContainsKey("transformer_blocks.0.mlp_context_fc1.wscales") || h.ContainsKey("transformer_blocks.0.mlp_context_fc1.wtscale")) // Nunchaku
+                || (h.ContainsKey("model.diffusion_model.double_blocks.0.img_attn.norm.key_norm.scale") && h.ContainsKey("model.diffusion_model.guidance_in.in_layer.bias"))); // 'checkpoints'
         bool isFluxLora(JObject h)
         {
             // some models only have some but not all blocks, so...
@@ -75,25 +75,29 @@ public class T2IModelClassSorter
         bool isSD35Lora(JObject h) => h.ContainsKey("transformer.transformer_blocks.0.attn.to_k.lora_A.weight") && !isFluxLora(h);
         bool isMochi(JObject h) => h.ContainsKey("model.diffusion_model.blocks.0.attn.k_norm_x.weight") || h.ContainsKey("diffusion_model.blocks.0.attn.k_norm_x.weight") || h.ContainsKey("blocks.0.attn.k_norm_x.weight");
         bool isMochiVae(JObject h) => h.ContainsKey("encoder.layers.4.layers.1.attn_block.attn.qkv.weight") || h.ContainsKey("layers.4.layers.1.attn_block.attn.qkv.weight") || h.ContainsKey("blocks.2.blocks.3.stack.5.weight") || h.ContainsKey("decoder.blocks.2.blocks.3.stack.5.weight");
-        bool isLtxv(JObject h) => h.ContainsKey("model.diffusion_model.adaln_single.emb.timestep_embedder.linear_1.bias");
+        bool isLtxv(JObject h) => h.ContainsKey("model.diffusion_model.adaln_single.emb.timestep_embedder.linear_1.bias") || h.ContainsKey("adaln_single.emb.timestep_embedder.linear_1.bias");
+        bool isLtxvVae(JObject h) => h.ContainsKey("decoder.conv_in.conv.bias") && h.ContainsKey("decoder.last_time_embedder.timestep_embedder.linear_1.bias");
         bool isSana(JObject h) => h.ContainsKey("attention_y_norm.weight") && h.ContainsKey("blocks.0.attn.proj.weight");
         bool isHunyuanVideo(JObject h) => h.ContainsKey("model.model.txt_in.individual_token_refiner.blocks.1.self_attn.qkv.weight") || h.ContainsKey("txt_in.individual_token_refiner.blocks.1.self_attn_qkv.weight");
         bool isHunyuanVideoSkyreelsImage2V(JObject h) => h.TryGetValue("img_in.proj.weight", out JToken jtok) && jtok["shape"].ToArray()[1].Value<long>() == 32;
         bool isHunyuanVideoNativeImage2V(JObject h) => h.TryGetValue("img_in.proj.weight", out JToken jtok) && jtok["shape"].ToArray()[1].Value<long>() == 33;
-        bool isHunyuanVideoVae(JObject h) => h.ContainsKey("decoder.conv_in.conv.bias");
+        bool isHunyuanVideoVae(JObject h) => h.ContainsKey("decoder.conv_in.conv.bias") && h.ContainsKey("decoder.mid.attn_1.k.bias");
         bool isHunyuanVideoLora(JObject h) => h.ContainsKey("transformer.single_blocks.9.modulation.linear.lora_B.weight") || h.ContainsKey("transformer.double_blocks.9.txt_mod.linear.lora_B.weight");
         bool isCosmos7b(JObject h) => h.TryGetValue("net.blocks.block0.blocks.0.adaLN_modulation.1.weight", out JToken jtok) && jtok["shape"].ToArray()[^1].Value<long>() == 4096;
         bool isCosmos14b(JObject h) => h.TryGetValue("net.blocks.block0.blocks.0.adaLN_modulation.1.weight", out JToken jtok) && jtok["shape"].ToArray()[^1].Value<long>() == 5120;
         bool isCosmosVae(JObject h) => h.ContainsKey("decoder.unpatcher3d._arange");
+        bool isCosmosPredict2_2B(JObject h) => h.ContainsKey("norm_out.linear_1.weight");
+        bool isCosmosPredict2_14B(JObject h) => h.ContainsKey("net.blocks.0.adaln_modulation_cross_attn.1.weight");
         bool isLumina2(JObject h) => h.ContainsKey("model.diffusion_model.cap_embedder.0.weight") || h.ContainsKey("cap_embedder.0.weight");
         bool tryGetWanTok(JObject h, out JToken tok) => h.TryGetValue("model.diffusion_model.blocks.0.cross_attn.k.bias", out tok) || h.TryGetValue("blocks.0.cross_attn.k.bias", out tok) || h.TryGetValue("lora_unet_blocks_0_cross_attn_k.lora_down.weight", out tok);
         bool isWan21_1_3b(JObject h) => tryGetWanTok(h, out JToken tok) && tok["shape"].ToArray()[0].Value<long>() == 1536;
         bool isWan21_14b(JObject h) => tryGetWanTok(h, out JToken tok) && tok["shape"].ToArray()[0].Value<long>() == 5120;
-        bool tryGetWanLoraTok(JObject h, out JToken tok) => h.TryGetValue("diffusion_model.blocks.0.cross_attn.k.lora_A.weight", out tok) || h.TryGetValue("blocks.0.cross_attn.k.lora_A.weight", out tok);
+        bool tryGetWanLoraTok(JObject h, out JToken tok) => h.TryGetValue("diffusion_model.blocks.0.cross_attn.k.lora_A.weight", out tok) || h.TryGetValue("blocks.0.cross_attn.k.lora_A.weight", out tok) || h.TryGetValue("diffusion_model.blocks.0.cross_attn.k.lora_down.weight", out tok) || h.TryGetValue("blocks.0.cross_attn.k.lora_down.weight", out tok) || h.TryGetValue("diffusion_model.blocks.1.cross_attn.k.lora_down.weight", out tok) || h.TryGetValue("blocks.1.cross_attn.k.lora_down.weight", out tok);
         bool isWan21_1_3bLora(JObject h) => tryGetWanLoraTok(h, out JToken tok) && tok["shape"].ToArray()[1].Value<long>() == 1536;
         bool isWan21_14bLora(JObject h) => tryGetWanLoraTok(h, out JToken tok) && tok["shape"].ToArray()[1].Value<long>() == 5120;
         bool isWanI2v(JObject h) => h.ContainsKey("model.diffusion_model.blocks.0.cross_attn.k_img.bias") || h.ContainsKey("blocks.0.cross_attn.k_img.bias");
         bool isWanflf2v(JObject h) => h.ContainsKey("model.diffusion_model.img_emb.emb_pos") || h.ContainsKey("img_emb.emb_pos");
+        bool isWanVace(JObject h) => h.ContainsKey("model.diffusion_model.vace_blocks.0.after_proj.bias") || h.ContainsKey("vace_blocks.0.after_proj.bias");
         bool isHiDream(JObject h) => h.ContainsKey("caption_projection.0.linear.weight");
         bool isHiDreamLora(JObject h) => h.ContainsKey("diffusion_model.double_stream_blocks.0.block.ff_i.shared_experts.w1.lora_A.weight");
         bool isChroma(JObject h) => h.ContainsKey("distilled_guidance_layer.in_proj.bias") && h.ContainsKey("double_blocks.0.img_attn.proj.bias");
@@ -295,6 +299,10 @@ public class T2IModelClassSorter
         {
             return false;
         }});
+        Register(new() { ID = "Flux.1-dev/kontext", CompatClass = "flux-1", Name = "Flux.1 Kontext Dev", StandardWidth = 1024, StandardHeight = 1024, IsThisModelOfClass = (m, h) =>
+        {
+            return false; // ???
+        }});
         Register(new() { ID = "Flux.1-dev/lora-depth", CompatClass = "flux-1", Name = "Flux.1 Depth LoRA", StandardWidth = 1024, StandardHeight = 1024, IsThisModelOfClass = (m, h) =>
         {
             return false;
@@ -315,11 +323,11 @@ public class T2IModelClassSorter
         Register(new() { ID = "wan-2_1-text2video/vae", CompatClass = "wan-21", Name = "Wan 2.1 VAE", StandardWidth = 640, StandardHeight = 640, IsThisModelOfClass = (m, h) => { return false; }});
         Register(new() { ID = "wan-2_1-text2video-1_3b", CompatClass = "wan-21-1_3b", Name = "Wan 2.1 Text2Video 1.3B", StandardWidth = 640, StandardHeight = 640, IsThisModelOfClass = (m, h) =>
         {
-            return isWan21_1_3b(h) && !isWanI2v(h);
+            return isWan21_1_3b(h) && !isWanI2v(h) && !isWanVace(h);
         }});
         Register(new() { ID = "wan-2_1-image2video-1_3b", CompatClass = "wan-21-1_3b", Name = "Wan 2.1 Image2Video 1.3B", StandardWidth = 640, StandardHeight = 640, IsThisModelOfClass = (m, h) =>
         {
-            return isWan21_1_3b(h) && isWanI2v(h);
+            return isWan21_1_3b(h) && isWanI2v(h) && !isWanVace(h);
         }});
         Register(new() { ID = "wan-2_1-text2video-1_3b/lora", CompatClass = "wan-21-1_3b", Name = "Wan 2.1 Text2Video 1.3B LoRA", StandardWidth = 640, StandardHeight = 640, IsThisModelOfClass = (m, h) =>
         {
@@ -327,7 +335,7 @@ public class T2IModelClassSorter
         }});
         Register(new() { ID = "wan-2_1-text2video-14b", CompatClass = "wan-21-14b", Name = "Wan 2.1 Text2Video 14B", StandardWidth = 960, StandardHeight = 960, IsThisModelOfClass = (m, h) =>
         {
-            return isWan21_14b(h) && !isWanI2v(h);
+            return isWan21_14b(h) && !isWanI2v(h) && !isWanVace(h);
         }});
         Register(new() { ID = "wan-2_1-text2video-14b/lora", CompatClass = "wan-21-14b", Name = "Wan 2.1 Text2Video 14B LoRA", StandardWidth = 960, StandardHeight = 960, IsThisModelOfClass = (m, h) =>
         {
@@ -335,11 +343,19 @@ public class T2IModelClassSorter
         }});
         Register(new() { ID = "wan-2_1-image2video-14b", CompatClass = "wan-21-14b", Name = "Wan 2.1 Image2Video 14B", StandardWidth = 640, StandardHeight = 640, IsThisModelOfClass = (m, h) =>
         {
-            return isWan21_14b(h) && isWanI2v(h) && !isWanflf2v(h);
+            return isWan21_14b(h) && isWanI2v(h) && !isWanflf2v(h) && !isWanVace(h);
         }});
         Register(new() { ID = "wan-2_1-flf2v-14b", CompatClass = "wan-21-14b", Name = "Wan 2.1 First/LastFrame2Video 14B", StandardWidth = 960, StandardHeight = 960, IsThisModelOfClass = (m, h) =>
         {
-            return isWan21_14b(h) && isWanI2v(h) && isWanflf2v(h);
+            return isWan21_14b(h) && isWanI2v(h) && isWanflf2v(h) && !isWanVace(h);
+        }});
+        Register(new() { ID = "wan-2_1-vace-14b", CompatClass = "wan-21-14b", Name = "Wan 2.1 Vace 14B", StandardWidth = 960, StandardHeight = 960, IsThisModelOfClass = (m, h) =>
+        {
+            return isWan21_14b(h) && !isWanflf2v(h) && isWanVace(h);
+        }});
+        Register(new() { ID = "wan-2_1-vace-1_3b", CompatClass = "wan-21-1_3b", Name = "Wan 2.1 Vace 1.3B", StandardWidth = 960, StandardHeight = 960, IsThisModelOfClass = (m, h) =>
+        {
+            return isWan21_1_3b(h) && !isWanflf2v(h) && isWanVace(h);
         }});
         // ====================== Hunyuan Video ======================
         Register(new() { ID = "hunyuan-video", CompatClass = "hunyuan-video", Name = "Hunyuan Video", StandardWidth = 720, StandardHeight = 720, IsThisModelOfClass = (m, h) =>
@@ -391,6 +407,15 @@ public class T2IModelClassSorter
         {
             return isCosmosVae(h);
         }});
+        // ====================== Nvidia Cosmos Predict2 ======================
+        Register(new() { ID = "nvidia-cosmos-predict2-t2i-2b", CompatClass = "nvidia-cosmos-predict2-t2i-2b", Name = "NVIDIA Cosmos Predict2 Text2Image 2B", StandardWidth = 1024, StandardHeight = 1024, IsThisModelOfClass = (m, h) =>
+        {
+            return isCosmosPredict2_2B(h);
+        }});
+        Register(new() { ID = "nvidia-cosmos-predict2-t2i-14b", CompatClass = "nvidia-cosmos-predict2-t2i-14b", Name = "NVIDIA Cosmos Predict2 Text2Image 14B", StandardWidth = 1024, StandardHeight = 1024, IsThisModelOfClass = (m, h) =>
+        {
+            return isCosmosPredict2_14B(h);
+        }});
         // ====================== Random Other Models ======================
         Register(new() { ID = "chroma", CompatClass = "chroma", Name = "Chroma", StandardWidth = 1024, StandardHeight = 1024, IsThisModelOfClass = (m, h) =>
         {
@@ -403,6 +428,10 @@ public class T2IModelClassSorter
         Register(new() { ID = "lightricks-ltx-video", CompatClass = "lightricks-ltx-video", Name = "Lightricks LTX Video", StandardWidth = 768, StandardHeight = 512, IsThisModelOfClass = (m, h) =>
         {
             return isLtxv(h);
+        }});
+        Register(new() { ID = "lightricks-ltx-video/vae", CompatClass = "lightricks-ltx-video", Name = "Lightricks LTX Video VAE", StandardWidth = 768, StandardHeight = 512, IsThisModelOfClass = (m, h) =>
+        {
+            return isLtxvVae(h);
         }});
         Register(new() { ID = "nvidia-sana-1600", CompatClass = "nvidia-sana-1600", Name = "NVIDIA Sana 1600M", StandardWidth = 1024, StandardHeight = 1024, IsThisModelOfClass = (m, h) =>
         {

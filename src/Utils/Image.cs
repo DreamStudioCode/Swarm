@@ -3,7 +3,6 @@
 using SixLabors.ImageSharp;
 using System.IO;
 using SixLabors.ImageSharp.Metadata.Profiles.Exif;
-using ISImage = SixLabors.ImageSharp.Image;
 using Newtonsoft.Json.Linq;
 using SixLabors.ImageSharp.Processing;
 using FreneticUtilities.FreneticExtensions;
@@ -11,6 +10,10 @@ using SixLabors.ImageSharp.Formats.Png;
 using SixLabors.ImageSharp.Formats.Webp;
 using SixLabors.ImageSharp.Formats.Jpeg;
 using SixLabors.ImageSharp.PixelFormats;
+
+using ISImage = SixLabors.ImageSharp.Image;
+using ISImage32 = SixLabors.ImageSharp.Image<SixLabors.ImageSharp.PixelFormats.Rgba32>;
+using ISImageFrame32 = SixLabors.ImageSharp.ImageFrame<SixLabors.ImageSharp.PixelFormats.Rgba32>;
 
 /// <summary>Helper to represent an image file cleanly and quickly.</summary>
 public class Image
@@ -92,11 +95,14 @@ public class Image
     /// <summary>Gets an ImageSharp <see cref="ISImage"/> for this image.</summary>
     public ISImage ToIS => ISImage.Load(ImageData);
 
+    /// <summary>Used for <see cref="ISImgToPngBytes(ISImage)"/>.</summary>
+    public static PngEncoder FastPngEncoder = new() { CompressionLevel = PngCompressionLevel.Level1 };
+
     /// <summary>Helper to convert an ImageSharp image to png bytes.</summary>
     public static byte[] ISImgToPngBytes(ISImage img)
     {
         using MemoryStream stream = new();
-        img.SaveAsPng(stream);
+        img.SaveAsPng(stream, FastPngEncoder);
         return stream.ToArray();
     }
 
@@ -149,6 +155,63 @@ public class Image
         return new Image(ISImgToJpgBytes(img), Type, "jpg");
     }
 
+    /// <summary>Returns a simplified webp animation for preview purposes. Returns null if the input was not animated.</summary>
+    public Image ToWebpPreviewAnim()
+    {
+        if (Type != ImageType.ANIMATION)
+        {
+            return null;
+        }
+        ISImage isimg = ToIS;
+        if (isimg.Frames.Count <= 1)
+        {
+            return null;
+        }
+        int timeTotal = 0;
+        int timeAccum = 166;
+        int maxFrame = isimg.Frames.Count;
+        using ISImage32 oldImage = isimg.CloneAs<Rgba32>();
+        int targetWidth = isimg.Width, targetHeight = isimg.Height;
+        if (targetWidth > 256 || targetHeight > 256)
+        {
+            float factor = 256f / Math.Min(targetWidth, targetHeight);
+            targetWidth = (int)(targetWidth * factor);
+            targetHeight = (int)(targetHeight * factor);
+        }
+        using ISImage32 newImage = new(targetWidth, targetHeight);
+        for (int i = 0; i < maxFrame; i++)
+        {
+            ISImageFrame32 frame = oldImage.Frames[i];
+            int timeMs = Extension == "webp" ? (int)frame.Metadata.GetWebpMetadata().FrameDelay : frame.Metadata.GetGifMetadata().FrameDelay * 10;
+            timeTotal += timeMs;
+            timeAccum += timeMs;
+            if (timeAccum > 99)
+            {
+                if (frame.Width != targetWidth || frame.Height != targetHeight)
+                {
+                    ISImage32 frameImage = new(frame.Width, frame.Height);
+                    frameImage.Frames.AddFrame(frame);
+                    frameImage.Frames.RemoveFrame(0);
+                    frameImage.Mutate(i => i.Resize(targetWidth, targetHeight));
+                    frame = frameImage.Frames[0];
+                }
+                frame.Metadata.GetWebpMetadata().FrameDelay = (uint)timeAccum;
+                newImage.Frames.AddFrame(frame);
+                timeAccum = 0;
+            }
+            if (timeTotal > 5000)
+            {
+                break;
+            }
+        }
+        newImage.Frames.RemoveFrame(0);
+        newImage.Metadata.GetWebpMetadata().RepeatCount = 0;
+        using MemoryStream saveStream = new();
+        newImage.SaveAsWebp(saveStream, new WebpEncoder() { Quality = 50 });
+        saveStream.Seek(0, SeekOrigin.Begin);
+        return new(saveStream.ToArray(), ImageType.ANIMATION, "webp");
+    }
+
     /// <summary>Returns a metadata-format of the image.</summary>
     public string ToMetadataFormat()
     {
@@ -191,20 +254,12 @@ public class Image
     {
         /// <summary>PNG: Lossless, big file.</summary>
         PNG,
-        /// <summary>JPEG: Lossy, (100% quality), small file.</summary>
+        /// <summary>JPEG: Lossy, small file.</summary>
         JPG,
-        /// <summary>JPEG: Lossy, (90% quality), small file.</summary>
-        JPG90,
-        /// <summary>JPEG: Lossy, (bad 75% quality), small file.</summary>
-        JPG75,
         /// <summary>Webp: Lossless.</summary>
         WEBP_LOSSLESS,
-        /// <summary>Webp: lossy 100% quality.</summary>
-        WEBP_100,
-        /// <summary>Webp: lossy 90% quality.</summary>
-        WEBP_90,
-        /// <summary>Webp: lossy 75% quality.</summary>
-        WEBP_75
+        /// <summary>Webp: lossy.</summary>
+        WEBP
     }
 
     /// <summary>Returns the metadata from this image, or null if none.</summary>
@@ -218,14 +273,25 @@ public class Image
             {
                 return pngMetadata;
             }
+            string output = null;
             if (img.Metadata?.ExifProfile?.TryGetValue(ExifTag.Model, out var data) ?? false)
             {
-                return data.Value;
+                output = data.Value;
             }
             if (img.Metadata?.ExifProfile?.TryGetValue(ExifTag.UserComment, out var data2) ?? false)
             {
-                return data2.Value.Text;
+                output = data2.Value.Text;
             }
+            if (output is not null && output.Length > 0)
+            {
+                // Special fix for ImageSharp not parsing BigEndian unicode, so detect inverted strings (slightly hack) and flip them
+                byte[] encoded = Encoding.Unicode.GetBytes(output);
+                if (encoded[0] == 0 && encoded[1] != 0)
+                {
+                    output = Encoding.BigEndianUnicode.GetString(encoded);
+                }
+            }
+            return output;
         }
         catch (ArgumentNullException ex)
         {
@@ -247,18 +313,19 @@ public class Image
         {
             "PNG" => "png",
             "JPG" => "jpg",
-            "JPG90" => "jpg",
+            "JPG90" => "jpg", // NOTE: Legacy (0.9.6) format variants with built-in quality selector
             "JPG75" => "jpg",
             "WEBP_LOSSLESS" => "webp",
             "WEBP_100" => "webp",
             "WEBP_90" => "webp",
             "WEBP_75" => "webp",
+            "WEBP" => "webp",
             _ => throw new ArgumentException("Unknown format: " + format, nameof(format)),
         };
     }
 
     /// <summary>Converts an image to the specified format, and the specific metadata text.</summary>
-    public Image ConvertTo(string format, string metadata = null, int dpi = 0)
+    public Image ConvertTo(string format, string metadata = null, int dpi = 0, int quality = 100)
     {
         if (Type != ImageType.IMAGE)
         {
@@ -295,15 +362,16 @@ public class Image
                 PngEncoder encoder = new()
                 {
                     TextCompressionThreshold = int.MaxValue,
-                    BitDepth = img.PixelType.BitsPerPixel > 32 ? PngBitDepth.Bit16 : PngBitDepth.Bit8
+                    BitDepth = img.PixelType.BitsPerPixel > 32 ? PngBitDepth.Bit16 : PngBitDepth.Bit8,
+                    CompressionLevel = PngCompressionLevel.Level1
                 };
                 img.SaveAsPng(ms, encoder);
                 ext = "png";
                 break;
             case "JPG":
-                img.SaveAsJpeg(ms, new JpegEncoder() { Quality = 100 });
+                img.SaveAsJpeg(ms, new JpegEncoder() { Quality = quality });
                 break;
-            case "JPG90":
+            case "JPG90": // NOTE: Legacy (0.9.6) format variants with built-in quality selector
                 img.SaveAsJpeg(ms, new JpegEncoder() { Quality = 90 });
                 break;
             case "JPG75":
@@ -311,19 +379,23 @@ public class Image
                 break;
             case "WEBP_LOSSLESS":
                 ext = "webp";
-                img.SaveAsWebp(ms, new WebpEncoder() { NearLossless = true, Quality = 100 });
+                img.SaveAsWebp(ms, new WebpEncoder() { NearLossless = true, FileFormat = WebpFileFormatType.Lossless, Quality = 100 });
+                break;
+            case "WEBP":
+                ext = "webp";
+                img.SaveAsWebp(ms, new WebpEncoder() { NearLossless = false, FileFormat = WebpFileFormatType.Lossy, Quality = quality });
                 break;
             case "WEBP_100":
                 ext = "webp";
-                img.SaveAsWebp(ms, new WebpEncoder() { NearLossless = false, Quality = 100 });
+                img.SaveAsWebp(ms, new WebpEncoder() { NearLossless = false, FileFormat = WebpFileFormatType.Lossy, Quality = 100 });
                 break;
             case "WEBP_90":
                 ext = "webp";
-                img.SaveAsWebp(ms, new WebpEncoder() { NearLossless = false, Quality = 90 });
+                img.SaveAsWebp(ms, new WebpEncoder() { NearLossless = false, FileFormat = WebpFileFormatType.Lossy, Quality = 90 });
                 break;
             case "WEBP_75":
                 ext = "webp";
-                img.SaveAsWebp(ms, new WebpEncoder() { NearLossless = false, Quality = 75 });
+                img.SaveAsWebp(ms, new WebpEncoder() { NearLossless = false, FileFormat = WebpFileFormatType.Lossy, Quality = 75 });
                 break;
             default:
                 throw new SwarmReadableErrorException($"User setting for image format is '{format}', which is invalid");

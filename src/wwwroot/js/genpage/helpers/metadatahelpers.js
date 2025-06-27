@@ -107,7 +107,13 @@ function interpretMetadata(metadata) {
         else {
             let lines = metadata.split('\n');
             if (lines.length > 1) {
-                metadata = upvertAutoWebuiMetadataToSwarm(metadata);
+                try {
+                    metadata = upvertAutoWebuiMetadataToSwarm(metadata);
+                }
+                catch (e) {
+                    console.error(`Error parsing metadata '${metadata}': ${e}`);
+                    metadata = null;
+                }
             }
             else {
                 // ???
@@ -187,8 +193,12 @@ function formatMetadata(metadata) {
                     let title = '';
                     let keyTitle = '';
                     let added = '';
+                    let extras = '';
                     if (key.includes('model') || key.includes('lora') || key.includes('embedding')) {
                         added += ' param_view_block_model';
+                    }
+                    if (key.includes('prompt')) {
+                        extras = `<button title="Click to copy" class="basic-button prompt-copy-button" onclick="copyText('${escapeHtmlNoBr(escapeJsString(`${val}`))}');doNoticePopover('Copied!', 'notice-pop-green');">&#x29C9;</button>`;
                     }
                     let param = getParamById(key);
                     if (param) {
@@ -208,7 +218,7 @@ function formatMetadata(metadata) {
                         result += `</span>, `;
                     }
                     else {
-                        result += `<span class="param_view_block tag-text tag-type-${hash}${added}"><span class="param_view_name" title="${escapeHtml(keyTitle)}">${escapeHtml(key)}</span>: <span class="param_view tag-text-soft tag-type-${hash}" title="${escapeHtml(title)}">${escapeHtml(`${val}`)}</span></span>, `;
+                        result += `<span class="param_view_block tag-text tag-type-${hash}${added}"><span class="param_view_name" title="${escapeHtmlNoBr(keyTitle)}">${escapeHtml(key)}</span>: <span class="param_view tag-text-soft tag-type-${hash}" title="${escapeHtmlNoBr(title)}">${escapeHtml(`${val}`)}</span>${extras}</span>, `;
                     }
                 }
             }

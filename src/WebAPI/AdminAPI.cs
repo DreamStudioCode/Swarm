@@ -100,7 +100,14 @@ public static class AdminAPI
         if (t == typeof(float)) { return (float)val; }
         if (t == typeof(bool)) { return (bool)val; }
         if (t == typeof(string)) { return (string)val; }
-        if (t == typeof(List<string>)) { return ((JArray)val).Select(v => (string)v).ToList(); }
+        if (t == typeof(List<string>))
+        {
+            if (val is JArray jarr)
+            {
+                return jarr.Select(v => (string)v).ToList();
+            }
+            return ((string)val).Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).ToList();
+        }
         return null;
     }
     [API.APIDescription("Returns a list of the server settings, will full metadata.",
@@ -497,7 +504,7 @@ public static class AdminAPI
             {
                 if (commits[i].Length > 5)
                 {
-                    string showOutput = await Utilities.RunGitProcess("show --no-patch --format=%h^%ci^%s HEAD");
+                    string showOutput = await Utilities.RunGitProcess($"show --no-patch --format=%h^%ci^%s {commits[i]}");
                     string[] parts = showOutput.SplitFast('^', 2);
                     DateTimeOffset date = DateTimeOffset.Parse(parts[1].Trim()).ToUniversalTime();
                     string dateFormat = $"{date:yyyy-MM-dd HH:mm:ss}";

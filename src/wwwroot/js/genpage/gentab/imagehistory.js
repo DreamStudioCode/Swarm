@@ -2,17 +2,21 @@
 function listImageHistoryFolderAndFiles(path, isRefresh, callback, depth) {
     let sortBy = localStorage.getItem('image_history_sort_by') ?? 'Name';
     let reverse = localStorage.getItem('image_history_sort_reverse') == 'true';
+    let allowAnims = localStorage.getItem('image_history_allow_anims') != 'false';
     let sortElem = document.getElementById('image_history_sort_by');
     let sortReverseElem = document.getElementById('image_history_sort_reverse');
+    let allowAnimsElem = document.getElementById('image_history_allow_anims');
     let fix = null;
     if (sortElem) {
         sortBy = sortElem.value;
         reverse = sortReverseElem.checked;
+        allowAnims = allowAnimsElem.checked;
     }
-    else { // first call happens before headers are added built atm
+    else { // first call happens before headers are built atm
         fix = () => {
             let sortElem = document.getElementById('image_history_sort_by');
             let sortReverseElem = document.getElementById('image_history_sort_reverse');
+            let allowAnimsElem = document.getElementById('image_history_allow_anims');
             sortElem.value = sortBy;
             sortReverseElem.checked = reverse;
             sortElem.addEventListener('change', () => {
@@ -21,6 +25,10 @@ function listImageHistoryFolderAndFiles(path, isRefresh, callback, depth) {
             });
             sortReverseElem.addEventListener('change', () => {
                 localStorage.setItem('image_history_sort_reverse', sortReverseElem.checked);
+                imageHistoryBrowser.update();
+            });
+            allowAnimsElem.addEventListener('change', () => {
+                localStorage.setItem('image_history_allow_anims', allowAnimsElem.checked);
                 imageHistoryBrowser.update();
             });
         }
@@ -36,7 +44,7 @@ function listImageHistoryFolderAndFiles(path, isRefresh, callback, depth) {
         data.files = preFiles.concat(postFiles);
         let mapped = data.files.map(f => {
             let fullSrc = `${prefix}${f.src}`;
-            return { 'name': fullSrc, 'data': { 'src': `${getImageOutPrefix()}/${fullSrc}`, 'fullsrc': fullSrc, 'name': f.src, 'metadata': f.metadata } };
+            return { 'name': fullSrc, 'data': { 'src': `${getImageOutPrefix()}/${fullSrc}`, 'fullsrc': fullSrc, 'name': f.src, 'metadata': interpretMetadata(f.metadata) } };
         });
         callback(folders, mapped);
         if (fix) {
@@ -62,7 +70,7 @@ function buttonsForImage(fullsrc, src, metadata) {
             label: 'Copy Raw Metadata',
             title: `Copies the raw form of the image's metadata to your clipboard (usually JSON text).`,
             onclick: (e) => {
-                navigator.clipboard.writeText(metadata);
+                copyText(metadata);
                 doNoticePopover('Copied!', 'notice-pop-green');
             }
         });
@@ -91,21 +99,24 @@ function buttonsForImage(fullsrc, src, metadata) {
                     if (e) {
                         e.remove();
                     }
-                    else {
-                        let historySection = getRequiredElementById('imagehistorybrowser-content');
-                        let div = historySection.querySelector(`.image-block[data-name="${fullsrc}"]`);
-                        if (div) {
-                            div.remove();
-                        }
-                        div = getRequiredElementById('current_image_batch').querySelector(`.image-block[data-src="${src}"]`);
-                        if (div) {
-                            div.remove();
-                        }
+                    let historySection = getRequiredElementById('imagehistorybrowser-content');
+                    let div = historySection.querySelector(`.image-block[data-name="${fullsrc}"]`);
+                    if (div) {
+                        div.remove();
+                    }
+                    div = historySection.querySelector(`.image-block[data-name="${src}"]`);
+                    if (div) {
+                        div.remove();
+                    }
+                    div = getRequiredElementById('current_image_batch').querySelector(`.image-block[data-src="${src}"]`);
+                    if (div) {
+                        div.remove();
                     }
                     let currentImage = document.getElementById('current_image_img');
                     if (currentImage && currentImage.dataset.src == src) {
                         forceShowWelcomeMessage();
                     }
+                    imageFullView.close();
                 });
             }
         });
@@ -129,8 +140,10 @@ function describeImage(image) {
     let formattedMetadata = formatMetadata(image.data.metadata);
     let description = image.data.name + "\n" + formattedMetadata;
     let name = image.data.name;
+    let allowAnims = localStorage.getItem('image_history_allow_anims') != 'false';
+    let allowAnimToggle = allowAnims ? '' : '&noanim=true';
     let dragImage = image.data.src.endsWith('.html') ? 'imgs/html.jpg' : `${image.data.src}`;
-    let imageSrc = image.data.src.endsWith('.html') ? 'imgs/html.jpg' : `${image.data.src}?preview=true`;
+    let imageSrc = image.data.src.endsWith('.html') ? 'imgs/html.jpg' : `${image.data.src}?preview=true${allowAnimToggle}`;
     let searchable = description;
     let detail_list = [escapeHtml(image.data.name), formattedMetadata.replaceAll('<br>', '&emsp;')];
     return { name, description, buttons, 'image': imageSrc, 'dragimage': dragImage, className: parsedMeta.is_starred ? 'image-block-starred' : '', searchable, display: name, detail_list };
@@ -158,7 +171,7 @@ function selectImageInHistory(image, div) {
 }
 
 let imageHistoryBrowser = new GenPageBrowserClass('image_history', listImageHistoryFolderAndFiles, 'imagehistorybrowser', 'Thumbnails', describeImage, selectImageInHistory,
-    `<label for="image_history_sort_by">Sort:</label> <select id="image_history_sort_by"><option>Name</option><option>Date</option></select> <input type="checkbox" id="image_history_sort_reverse"> <label for="image_history_sort_reverse">Reverse</label>`);
+    `<label for="image_history_sort_by">Sort:</label> <select id="image_history_sort_by"><option>Name</option><option>Date</option></select> <input type="checkbox" id="image_history_sort_reverse"> <label for="image_history_sort_reverse">Reverse</label> &emsp; <input type="checkbox" id="image_history_allow_anims" checked autocomplete="off"> <label for="image_history_allow_anims">Allow Animation</label>`);
 
 function storeImageToHistoryWithCurrentParams(img) {
     let data = getGenInput();

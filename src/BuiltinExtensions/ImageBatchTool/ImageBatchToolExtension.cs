@@ -34,30 +34,30 @@ public class ImageBatchToolExtension : Extension
         // TODO: Strict path validation / user permission confirmation.
         if (input_folder.Length < 5 || output_folder.Length < 5)
         {
-            await socket.SendJson(new JObject() { ["error"] = "Input or output folder looks invalid, please fill it in carefully." }, API.WebsocketTimeout);
+            await socket.SendAndReportError($"ImageBatchRun request from {session.User.UserID}", "Input or output folder looks invalid, please fill it in carefully.", API.WebsocketTimeout);
             return null;
         }
         input_folder = Path.GetFullPath(input_folder);
         output_folder = Path.GetFullPath(output_folder);
         if (!Directory.Exists(input_folder))
         {
-            await socket.SendJson(new JObject() { ["error"] = "Input folder does not exist" }, API.WebsocketTimeout);
+            await socket.SendAndReportError($"ImageBatchRun request from {session.User.UserID}, for folder '{input_folder}'", "Input folder does not exist", API.WebsocketTimeout);
             return null;
         }
         if (input_folder == output_folder)
         {
-            await socket.SendJson(new JObject() { ["error"] = "Input and output folder cannot be the same" }, API.WebsocketTimeout);
+            await socket.SendAndReportError($"ImageBatchRun request from {session.User.UserID}, for folder '{input_folder}'", "Input and output folder cannot be the same", API.WebsocketTimeout);
             return null;
         }
         string[] imageFiles = [.. Directory.EnumerateFiles(input_folder).Where(f => f.EndsWith(".png") || f.EndsWith(".jpg") || f.EndsWith(".jpeg") || f.EndsWith(".webp"))];
         if (imageFiles.Length == 0)
         {
-            await socket.SendJson(new JObject() { ["error"] = "Input folder does not contain any images" }, API.WebsocketTimeout);
+            await socket.SendAndReportError($"ImageBatchRun request from {session.User.UserID}, for folder '{input_folder}'", "Input folder does not contain any images", API.WebsocketTimeout);
             return null;
         }
         if (!init_image && !revision && !controlnet)
         {
-            await socket.SendJson(new JObject() { ["error"] = "Image batch needs to supply the images to at least one parameter." }, API.WebsocketTimeout);
+            await socket.SendAndReportError($"ImageBatchRun request from {session.User.UserID}, for folder '{input_folder}'", "Image batch needs to supply the images to at least one parameter.", API.WebsocketTimeout);
             return null;
         }
         Directory.CreateDirectory(output_folder);
@@ -206,9 +206,14 @@ public class ImageBatchToolExtension : Extension
                 }
                 int curGen = Interlocked.Increment(ref genId);
                 string diffCode = curGen == 1 ? "" : $"-{curGen}";
-                File.WriteAllBytes($"{output_folder}/{preExt}{diffCode}.{ext}", image.Img.ImageData);
+                string actualFile = $"{output_folder}/{preExt}{diffCode}";
+                File.WriteAllBytes($"{actualFile}.{ext}", image.Img.ImageData);
+                if (!ImageMetadataTracker.ExtensionsWithMetadata.Contains(ext) && !string.IsNullOrWhiteSpace(metadata))
+                {
+                    File.WriteAllBytes($"{actualFile}.swarm.json", metadata.EncodeUTF8());
+                }
                 string img = session.GetImageB64(image.Img);
-                output(new JObject() { ["image"] = img, ["batch_index"] = $"{imageIndex}", ["metadata"] = string.IsNullOrWhiteSpace(metadata) ? null : metadata });
+                output(new JObject() { ["image"] = img, ["batch_index"] = $"{imageIndex}", ["request_id"] = $"{baseParams.UserRequestId}", ["metadata"] = string.IsNullOrWhiteSpace(metadata) ? null : metadata });
                 WebhookManager.SendEveryGenWebhook(param, img, image.Img);
             }));
         }

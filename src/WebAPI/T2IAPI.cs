@@ -291,7 +291,20 @@ public static class T2IAPI
             {
                 noSave = true;
             }
-            (string url, string filePath) = noSave ? (session.GetImageB64(image.Img), null) : session.SaveImage(image.Img, actualIndex, thisParams, metadata);
+            string url, filePath;
+            if (noSave)
+            {
+                Image img = image.Img;
+                if (session.User.Settings.FileFormat.ReformatTransientImages && image.ActualImageTask is not null)
+                {
+                    img = image.ActualImageTask.Result;
+                }
+                (url, filePath) = (session.GetImageB64(img), null);
+            }
+            else
+            {
+                (url, filePath) = session.SaveImage(image, actualIndex, thisParams, metadata);
+            }
             if (url == "ERROR")
             {
                 setError($"Server failed to save an image.");
@@ -314,7 +327,7 @@ public static class T2IAPI
                 imageSet.Add(image);
             }
             WebhookManager.SendEveryGenWebhook(thisParams, url, image.Img);
-            output(new JObject() { ["image"] = url, ["batch_index"] = $"{actualIndex}", ["metadata"] = string.IsNullOrWhiteSpace(metadata) ? null : metadata });
+            output(new JObject() { ["image"] = url, ["batch_index"] = $"{actualIndex}", ["request_id"] = $"{thisParams.UserRequestId}", ["metadata"] = string.IsNullOrWhiteSpace(metadata) ? null : metadata });
         }
         for (int i = 0; i < images && !claim.ShouldCancel; i++)
         {
@@ -375,7 +388,7 @@ public static class T2IAPI
         }
         long finalTime = Environment.TickCount64;
         T2IEngine.ImageOutput[] griddables = [.. imageSet.Where(i => i.IsReal)];
-        if (griddables.Length < session.User.Settings.MaxImagesInMiniGrid && griddables.Length > 1 && griddables.All(i => i.Img.Type == Image.ImageType.IMAGE))
+        if (griddables.Length <= session.User.Settings.MaxImagesInMiniGrid && griddables.Length > 1 && griddables.All(i => i.Img.Type == Image.ImageType.IMAGE))
         {
             ISImage[] imgs = [.. griddables.Select(i => i.Img.ToIS)];
             int columns = (int)Math.Ceiling(Math.Sqrt(imgs.Length));
@@ -402,8 +415,8 @@ public static class T2IAPI
             Image gridImg = new(grid);
             long genTime = Environment.TickCount64 - timeStart;
             user_input.ExtraMeta["generation_time"] = $"{genTime / 1000.0:0.00} total seconds (average {(finalTime - timeStart) / griddables.Length / 1000.0:0.00} seconds per image)";
-            (gridImg, string metadata) = user_input.SourceSession.ApplyMetadata(gridImg, user_input, imgs.Length);
-            T2IEngine.ImageOutput gridOutput = new() { Img = gridImg, GenTimeMS = genTime };
+            (Task<Image> gridImageTask, string metadata) = user_input.SourceSession.ApplyMetadata(gridImg, user_input, imgs.Length);
+            T2IEngine.ImageOutput gridOutput = new() { Img = gridImg, ActualImageTask = gridImageTask, GenTimeMS = genTime };
             saveImage(gridOutput, -1, user_input, metadata);
         }
         T2IEngine.PostBatchEvent?.Invoke(new(user_input, [.. griddables]));
@@ -455,9 +468,10 @@ public static class T2IAPI
         }
         user_input.ApplySpecialLogic();
         Logs.Info($"User {session.User.UserID} stored an image to history.");
-        (img, string metadata) = user_input.SourceSession.ApplyMetadata(img, user_input, 1);
-        (string path, _) = session.SaveImage(img, 0, user_input, metadata);
-        return new() { ["images"] = new JArray() { new JObject() { ["image"] = path, ["batch_index"] = "0", ["metadata"] = metadata } } };
+        (Task<Image> imgTask, string metadata) = user_input.SourceSession.ApplyMetadata(img, user_input, 1);
+        T2IEngine.ImageOutput outputImage = new() { Img = img, ActualImageTask = imgTask };
+        (string path, _) = session.SaveImage(outputImage, 0, user_input, metadata);
+        return new() { ["images"] = new JArray() { new JObject() { ["image"] = path, ["batch_index"] = "0", ["request_id"] = $"{user_input.UserRequestId}", ["metadata"] = metadata } } };
     }
 
     public static HashSet<string> ImageExtensions = ["png", "jpg", "html", "gif", "webm", "mp4", "webp", "mov"];
@@ -562,6 +576,19 @@ public static class T2IAPI
                 }
             });
             List<ImageHistoryHelper> files = [.. filesConc.Values.SelectMany(f => f).Take(limit)];
+            HashSet<string> included = [.. files.Select(f => f.Name)];
+            for (int i = 0; i < files.Count; i++)
+            {
+                if (!files[i].Name.StartsWith("Starred/"))
+                {
+                    string starPath = $"Starred/{(session.User.Settings.StarNoFolders ? files[i].Name.Replace("/", "") : files[i].Name)}";
+                    if (included.Contains(starPath))
+                    {
+                        files[i] = files[i] with { Name = null };
+                    }
+                }
+            }
+            files = [.. files.Where(f => f.Name is not null)];
             sortList(files);
             long timeEnd = Environment.TickCount64;
             Logs.Verbose($"Listed {files.Count} images in {(timeEnd - timeStart) / 1000.0:0.###} seconds.");
@@ -644,7 +671,7 @@ public static class T2IAPI
             return new JObject() { ["error"] = "That file does not exist, cannot delete." };
         }
         string standardizedPath = Path.GetFullPath(path);
-        Session.RecentlyDeletedFilenames[standardizedPath] = standardizedPath;
+        Session.RecentlyBlockedFilenames[standardizedPath] = standardizedPath;
         Action<string> deleteFile = Program.ServerSettings.Paths.RecycleDeletedImages ? Utilities.SendFileToRecycle : File.Delete;
         deleteFile(path);
         string fileBase = path.BeforeLast('.');
@@ -750,6 +777,7 @@ public static class T2IAPI
         """
             // see `ListT2IParams` for details
             "list": [...],
+            "groups": [...],
             "models": [...],
             "wildcards": [...],
             "param_edits": [...]
@@ -809,22 +837,26 @@ public static class T2IAPI
                 "feature_flag": "flagname", // or null
                 "toggleable": true,
                 "priority": 0,
-                "group":
-                {
-                    "name": "Group Name Here",
-                    "id": "groupidhere",
-                    "toggles": true,
-                    "open": false,
-                    "priority": 0,
-                    "description": "group description here",
-                    "advanced": false,
-                    "can_shrink": true
-                },
+                "group": "idhere", // or null
                 "always_retain": false,
                 "do_not_save": false,
                 "do_not_preview": false,
                 "view_type": "big", // dependent on type
                 "extra_hidden": false
+            }
+        ],
+        "groups":
+        [
+            {
+                "name": "Group Name Here",
+                "id": "groupidhere",
+                "toggles": true,
+                "open": false,
+                "priority": 0,
+                "description": "group description here",
+                "advanced": false,
+                "can_shrink": true,
+                "parent": "idhere" // or null
             }
         ],
         "models":
@@ -846,9 +878,21 @@ public static class T2IAPI
         {
             modelData[handler.ModelType] = new JArray(handler.ListModelNamesFor(session).Order().ToArray());
         }
+        T2IParamType[] types = [.. T2IParamTypes.Types.Values.Where(p => p.Permission is null || session.User.HasPermission(p.Permission))];
+        Dictionary<string, T2IParamGroup> groups = new(64);
+        foreach (T2IParamType type in types)
+        {
+            T2IParamGroup group = type.Group;
+            while (group is not null)
+            {
+                groups[group.ID] = group;
+                group = group.Parent;
+            }
+        }
         return new JObject()
         {
-            ["list"] = new JArray(T2IParamTypes.Types.Values.Where(p => p.Permission is null || session.User.HasPermission(p.Permission)).Select(v => v.ToNet(session)).ToList()),
+            ["list"] = new JArray(types.Select(v => v.ToNet(session)).ToList()),
+            ["groups"] = new JArray(groups.Values.OrderBy(g => g.OrderPriority).Select(g => g.ToNet(session)).ToList()),
             ["models"] = modelData,
             ["wildcards"] = new JArray(WildcardsHelper.ListFiles),
             ["param_edits"] = string.IsNullOrWhiteSpace(session.User.Data.RawParamEdits) ? null : JObject.Parse(session.User.Data.RawParamEdits)

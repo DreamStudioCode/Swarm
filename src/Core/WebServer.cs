@@ -46,11 +46,31 @@ public class WebServer
     /// <summary>Minimum ASP.NET Log Level.</summary>
     public static LogLevel LogLevel;
 
+    /// <summary>Like a <see cref="Lazy{T}"/>, but lets you dynamically re-call the getter if you need to.</summary>
+    public class LazyOrReusable<T>(Func<T> getter)
+    {
+        public Func<T> Getter = getter;
+
+        public T Value;
+
+        public T GetLazy()
+        {
+            if (Value is null)
+            {
+                lock (this)
+                {
+                    Value ??= Getter();
+                }
+            }
+            return Value;
+        }
+    }
+
     /// <summary>Extra file content added by extensions.</summary>
-    public Dictionary<string, string> ExtensionSharedFiles = [];
+    public Dictionary<string, LazyOrReusable<string>> ExtensionSharedFiles = [];
 
     /// <summary>Extra binary file content added by extensions.</summary>
-    public Dictionary<string, Lazy<byte[]>> ExtensionAssets = [];
+    public Dictionary<string, LazyOrReusable<byte[]>> ExtensionAssets = [];
 
     /// <summary>Extra content for the page header. Automatically set based on extensions.</summary>
     public static HtmlString PageHeaderExtra = new("");
@@ -110,6 +130,11 @@ public class WebServer
         // it creates a persistent filewatcher which locks up hard. So, forcibly disable it. Which it should be disabled anyway. Obviously.
         Environment.SetEnvironmentVariable("ASPNETCORE_hostBuilder:reloadConfigOnChange", "false");
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions() { WebRootPath = "src/wwwroot" });
+        builder.WebHost.ConfigureKestrel(options =>
+        {
+            options.Limits.MaxRequestHeadersTotalSize = 1024 * 1024;
+            options.Limits.MaxRequestHeaderCount = 200;
+        });
         timer.Check("[Web] WebApp builder prep");
         builder.Services.AddRazorPages();
         builder.Services.AddResponseCompression();
@@ -202,7 +227,7 @@ public class WebServer
             string path = context.Request.Path.Value.ToLowerFast();
             if (referrer.StartsWith("comfybackenddirect/") && !path.StartsWith("/comfybackenddirect/"))
             {
-                Logs.Debug($"ComfyBackendDirect call was misrouted, rerouting to '{context.Request.Path}'");
+                Logs.Debug($"ComfyBackendDirect call via Referrer '{referrer}' was misrouted, rerouting to 'ComfyBackendDirect{context.Request.Path}'");
                 context.Response.Redirect($"/ComfyBackendDirect{context.Request.Path}");
                 return;
             }
@@ -284,13 +309,13 @@ public class WebServer
             foreach (string script in e.ScriptFiles)
             {
                 string fname = $"ExtensionFile/{e.ExtensionName}/{script}";
-                ExtensionSharedFiles.Add(fname, File.ReadAllText($"{e.FilePath}{script}"));
+                ExtensionSharedFiles.Add(fname, new (() => File.ReadAllText($"{e.FilePath}{script}")));
                 scripts.Append($"<script src=\"{fname}?vary={Utilities.VaryID}\"></script>\n");
             }
             foreach (string css in e.StyleSheetFiles)
             {
                 string fname = $"ExtensionFile/{e.ExtensionName}/{css}";
-                ExtensionSharedFiles.Add(fname, File.ReadAllText($"{e.FilePath}{css}"));
+                ExtensionSharedFiles.Add(fname, new (() => File.ReadAllText($"{e.FilePath}{css}")));
                 stylesheets.Append($"<link rel=\"stylesheet\" href=\"{fname}?vary={Utilities.VaryID}\" />");
             }
             foreach (string file in e.OtherAssets)
@@ -381,17 +406,25 @@ public class WebServer
     public async Task ViewExtensionScript(HttpContext context)
     {
         string requested = context.Request.Path.Value[1..];
-        if (ExtensionSharedFiles.TryGetValue(requested, out string script))
+        if (ExtensionSharedFiles.TryGetValue(requested, out LazyOrReusable<string> script))
         {
             context.Response.ContentType = Utilities.GuessContentType(requested);
             context.Response.StatusCode = 200;
-            await context.Response.WriteAsync(script);
+#if DEBUG
+            await context.Response.WriteAsync(script.Getter());
+#else
+            await context.Response.WriteAsync(script.GetLazy());
+#endif
         }
-        else if (ExtensionAssets.TryGetValue(requested, out Lazy<byte[]> data))
+        else if (ExtensionAssets.TryGetValue(requested, out LazyOrReusable<byte[]> data))
         {
             context.Response.ContentType = Utilities.GuessContentType(requested);
             context.Response.StatusCode = 200;
-            await context.Response.Body.WriteAsync(data.Value);
+#if DEBUG
+            await context.Response.Body.WriteAsync(data.Getter());
+#else
+            await context.Response.Body.WriteAsync(data.GetLazy());
+#endif
         }
         else
         {
@@ -518,11 +551,26 @@ public class WebServer
         {
             if (context.Request.Query.TryGetValue("preview", out StringValues previewToken) && $"{previewToken}" == "true" && user.Settings.ImageHistoryUsePreviews)
             {
-                data = ImageMetadataTracker.GetOrCreatePreviewFor(path);
-                if (data is not null)
+                ImageMetadataTracker.ImagePreviewEntry entry = ImageMetadataTracker.GetOrCreatePreviewFor(path);
+                if (entry is not null)
                 {
+                    data = entry.PreviewData;
                     contentType = "image/jpg";
+                    if (entry.SimplifiedData is not null)
+                    {
+                        contentType = "image/webp";
+                        if (!Program.ServerSettings.UI.AllowAnimatedPreviews || (context.Request.Query.TryGetValue("noanim", out StringValues noanimToken) && $"{noanimToken}" == "true"))
+                        {
+                            data = entry.SimplifiedData;
+                            contentType = "image/jpg";
+                        }
+                    }
                 }
+            }
+            string pathNorm = Path.GetFullPath(path);
+            if (data is null && Session.StillSavingFiles.TryGetValue(pathNorm, out Task<byte[]> cacheData))
+            {
+                data = await cacheData;
             }
             data ??= await File.ReadAllBytesAsync(path);
         }

@@ -65,10 +65,12 @@ function createSpan(id, classes, html = null) {
  */
 function createDiv(id, classes, html = null) {
     let div = document.createElement('div');
-    if (id != null) {
+    if (id) {
         div.id = id;
     }
-    div.className = classes;
+    if (classes) {
+        div.className = classes;
+    }
     if (html) {
         div.innerHTML = html;
     }
@@ -963,4 +965,24 @@ function splitWithTail(str, splitter, limit) {
 /** Async function to sleep for a given number of milliseconds. */
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/** Copies text to the clipboard, including compensation for the very stupid secure-context rule
+ * (browsers will refuse to let you use a lot of features over LAN, which makes no sense at all,
+ * they were trying to push for HTTPS adoption, but that doesn't work on LAN so wtf??). */
+function copyText(text) {
+    if (navigator.clipboard) {
+        navigator.clipboard.writeText(text);
+    }
+    else {
+        let temp = document.createElement('textarea');
+        temp.style.position = 'absolute';
+        temp.style.opacity = '0';
+        temp.style.left = '-999999px';
+        temp.value = text;
+        document.body.appendChild(temp);
+        temp.select();
+        document.execCommand('copy');
+        document.body.removeChild(temp);
+    }
 }

@@ -54,6 +54,9 @@
         - If your wildcards won't change but your seed is changing, check if you've accidentally enabled the `Wildcard Seed` parameter. Some users have done this by accident.
     - You can exclude certain values like so: `<wildcard:animals,not=cat,dog>`
         - This can be combined with [Variables](#variables), eg `a photo of a <setvar[animal]:<wildcard:animals>> playing with a <wildcard:animals,not=<var:animal>>`
+    - You can type eg `<wildcard:animals:` with a colon at the end, to then get a search in your prompt box for autocompletions of the values inside.
+        - For example, you can type `<wildcard:animals:do` and `dog` will pop up as an option.
+        - Note that is a purely frontend function: it's a UI convenience trick for users who want to grab specific lines from wildcards easily. Do not submit prompts with a stray `:`.
 
 ## Variables
 
@@ -128,7 +131,7 @@
         - To control the creativity/threshold with a yolo model just append `,<creativity>,<threshold>`, for example `<segment:yolo-face_yolov8m-seg_60.pt-1,0.8,0.25>` sets a `0.8` creativity and `0.25` threshold.
             - Note the default "confidence threshold" for Yolo models is `0.25`, which is different than is often used with ClipSeg, and does not have a "max threshold" like ClipSeg does.
         - If you have a yolo model with multiple supported classes, you can filter specific classes by appending `:<classes>:` to the model name where `<classes>` is a comma-separated list of class IDs or names, e.g., `<segment:yolo-modelnamehere:0,apple,2:,0.8,0.25>`
-    - There's an advanced parameter under `Regional Prompting` named `Segment Model` to customize the base model used for segment processing
+    - There's an advanced parameter under `Segment Refining` named `Segment Model` to customize the base model used for segment processing
     - There's also a parameter named `Save Segment Mask` to save a preview copy of the generated mask
 
 ## Clear (Transparency)
