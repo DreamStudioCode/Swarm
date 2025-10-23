@@ -1,13 +1,13 @@
-import torch
-import struct
+import torch, struct, json
 from io import BytesIO
-import latent_preview
-import comfy
+import latent_preview, comfy
 from server import PromptServer
 from comfy.model_base import SDXL, SVD_img2vid, Flux, WAN21, Chroma
 from comfy import samplers
 import numpy as np
 from math import ceil
+from latent_preview import TAESDPreviewerImpl
+from comfy_execution.utils import get_executing_context
 
 def slerp(val, low, high):
     low_norm = low / torch.norm(low, dim=1, keepdim=True)
@@ -40,26 +40,49 @@ def swarm_fixed_noise(seed, latent_image, var_seed, var_seed_strength):
         noises.append(noise)
     return torch.stack(noises, dim=0)
 
+def get_preview_metadata():
+    executing_context = get_executing_context()
+    prompt_id = None
+    node_id = None
+    if executing_context is not None:
+        prompt_id = executing_context.prompt_id
+        node_id = executing_context.node_id
+    if prompt_id is None:
+        prompt_id = PromptServer.instance.last_prompt_id
+    if node_id is None:
+        node_id = PromptServer.instance.last_node_id
+    return {"node_id": node_id, "prompt_id": prompt_id, "display_node_id": node_id, "parent_node_id": node_id, "real_node_id": node_id} # display_node_id, parent_node_id, real_node_id? comfy_execution/progress.py has this.
+
 def swarm_send_extra_preview(id, image):
     server = PromptServer.instance
+    metadata = get_preview_metadata()
+    metadata["mime_type"] = "image/jpeg"
+    metadata["id"] = id
+    metadata_json = json.dumps(metadata).encode('utf-8')
     bytesIO = BytesIO()
-    num_data = 1 + (id * 16)
-    header = struct.pack(">I", num_data)
-    bytesIO.write(header)
     image.save(bytesIO, format="JPEG", quality=90, compress_level=4)
-    preview_bytes = bytesIO.getvalue()
-    server.send_sync(1, preview_bytes, sid=server.client_id)
+    image_bytes = bytesIO.getvalue()
+    combined_data = bytearray()
+    combined_data.extend(struct.pack(">I", len(metadata_json)))
+    combined_data.extend(metadata_json)
+    combined_data.extend(image_bytes)
+    server.send_sync(9999123, combined_data, sid=server.client_id)
 
 def swarm_send_animated_preview(id, images):
     server = PromptServer.instance
     bytesIO = BytesIO()
-    num_data = 3 + (id * 16)
-    header = struct.pack(">I", num_data)
-    bytesIO.write(header)
     images[0].save(bytesIO, save_all=True, duration=int(1000.0/6), append_images=images[1 : len(images)], lossless=False, quality=60, method=0, format='WEBP')
     bytesIO.seek(0)
-    preview_bytes = bytesIO.getvalue()
-    server.send_sync(1, preview_bytes, sid=server.client_id)
+    image_bytes = bytesIO.getvalue()
+    metadata = get_preview_metadata()
+    metadata["mime_type"] = "image/webp"
+    metadata["id"] = id
+    metadata_json = json.dumps(metadata).encode('utf-8')
+    combined_data = bytearray()
+    combined_data.extend(struct.pack(">I", len(metadata_json)))
+    combined_data.extend(metadata_json)
+    combined_data.extend(image_bytes)
+    server.send_sync(9999123, combined_data, sid=server.client_id)
 
 def calculate_sigmas_scheduler(model, scheduler_name, steps, sigma_min, sigma_max, rho):
     model_sampling = model.get_model_object("model_sampling")
@@ -76,8 +99,10 @@ def make_swarm_sampler_callback(steps, device, model, previews):
     def callback(step, x0, x, total_steps):
         pbar.update_absolute(step + 1, total_steps, None)
         if previewer:
+            if (step == 0 or (step < 3 and x0.ndim == 5 and x0.shape[1] > 8)) and not isinstance(previewer, TAESDPreviewerImpl):
+                x0 = x0.clone().cpu() # Sync copy to CPU for first few steps to prevent reading old data, more steps for videos. Future steps allow comfy to do its async non_blocky stuff.
             if x0.ndim == 5:
-                # mochi shape is [batch, channels, backwards time, width, height], for previews needs to be swapped to [forwards time, channels, width, height]
+                # video shape is [batch, channels, backwards time, width, height], for previews needs to be swapped to [forwards time, channels, width, height]
                 x0 = x0[0].permute(1, 0, 2, 3)
                 x0 = torch.flip(x0, [0])
             def do_preview(id, index):
@@ -86,11 +111,14 @@ def make_swarm_sampler_callback(steps, device, model, previews):
             if previews == "iterate":
                 do_preview(0, step % x0.shape[0])
             elif previews == "animate":
-                images = []
-                for i in range(x0.shape[0]):
-                    preview_img = previewer.decode_latent_to_preview_image("JPEG", x0[i:i+1])
-                    images.append(preview_img[1])
-                swarm_send_animated_preview(0, images)
+                if x0.shape[0] == 1:
+                    do_preview(0, 0)
+                else:
+                    images = []
+                    for i in range(x0.shape[0]):
+                        preview_img = previewer.decode_latent_to_preview_image("JPEG", x0[i:i+1])
+                        images.append(preview_img[1])
+                    swarm_send_animated_preview(0, images)
             elif previews == "default":
                 for i in range(x0.shape[0]):
                     preview_img = previewer.decode_latent_to_preview_image("JPEG", x0[i:i+1])
@@ -129,7 +157,7 @@ AYS_NOISE_LEVELS = {
 def split_latent_tensor(latent_tensor, tile_size=1024, scale_factor=8):
     """Generate tiles for a given latent tensor, considering the scaling factor."""
     latent_tile_size = tile_size // scale_factor  # Adjust tile size for latent space
-    _, _, height, width = latent_tensor.shape
+    height, width = latent_tensor.shape[-2:]
 
     # Determine the number of tiles needed
     num_tiles_x = ceil(width / latent_tile_size)
@@ -163,7 +191,7 @@ def split_latent_tensor(latent_tensor, tile_size=1024, scale_factor=8):
             y_start = round(y_start)
 
             # Crop the tile from the latent tensor
-            tile_tensor = latent_tensor[:, :, y_start:y_start + latent_tile_size, x_start:x_start + latent_tile_size]
+            tile_tensor = latent_tensor[..., y_start:y_start + latent_tile_size, x_start:x_start + latent_tile_size]
             tiles.append(((x_start, y_start, x_start + latent_tile_size, y_start + latent_tile_size), tile_tensor))
 
     return tiles
@@ -191,19 +219,19 @@ def stitch_latent_tensors(original_size, tiles, scale_factor=8):
         tile_height = lower - upper
         feather = tile_width // 8  # Assuming feather size is consistent with the example
 
-        mask = torch.ones(tile.shape[0], tile.shape[1], tile.shape[2], tile.shape[3])
+        mask = torch.ones_like(tile)
 
         if not first_tile_in_row:  # Left feathering for tiles other than the first in the row
             for t in range(feather):
-                mask[:, :, :, t:t+1] *= (1.0 / feather) * (t + 1)
+                mask[..., :, t:t+1] *= (1.0 / feather) * (t + 1)
 
         if upper != 0:  # Top feathering for all tiles except the first row
             for t in range(feather):
-                mask[:, :, t:t+1, :] *= (1.0 / feather) * (t + 1)
+                mask[..., t:t+1, :] *= (1.0 / feather) * (t + 1)
 
         # Apply the feathering mask
-        combined_area = tile * mask + result[:, :, upper:lower, left:right] * (1.0 - mask)
-        result[:, :, upper:lower, left:right] = combined_area
+        combined_area = tile * mask + result[..., upper:lower, left:right] * (1.0 - mask)
+        result[..., upper:lower, left:right] = combined_area
 
     return result
 
@@ -276,7 +304,7 @@ class SwarmKSampler:
             elif isinstance(model.model, Chroma):
                 model_type = "Chroma"
             else:
-                print(f"Unknown model type: {type(model.model)}, defaulting to SD1")
+                print(f"AlignYourSteps: Unknown model type: {type(model.model)}, defaulting to SD1")
                 model_type = "SD1"
             sigmas = AYS_NOISE_LEVELS[model_type][:]
             if (steps + 1) != len(sigmas):

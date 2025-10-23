@@ -9,6 +9,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Primitives;
 using Newtonsoft.Json.Linq;
 using SwarmUI.Accounts;
+using SwarmUI.Media;
 using SwarmUI.Text2Image;
 using SwarmUI.Utils;
 using SwarmUI.WebAPI;
@@ -120,6 +121,10 @@ public class WebServer
         RegisterTheme(new("eyesear_white", "Eyesear White (Legacy)", ["css/themes/eyesear_white.css"], false));
         RegisterTheme(new("swarmpunk", "Swarm Punk", ["css/themes/modern.css", "css/themes/swarmpunk.css"], true));
         RegisterTheme(new("beweish", "Beweish", ["css/themes/modern.css", "css/themes/beweish.css"], true));
+        RegisterTheme(new("ctp_mocha", "Catppuccin Mocha", ["css/themes/modern.css", "css/themes/ctp_mocha.css"], true));
+        RegisterTheme(new("ctp_macchiato", "Catppuccin Macchiato", ["css/themes/modern.css", "css/themes/ctp_macchiato.css"], true));
+        RegisterTheme(new("ctp_frappe", "Catppuccin Frappé", ["css/themes/modern.css", "css/themes/ctp_frappe.css"], true));
+        RegisterTheme(new("ctp_latte", "Catppuccin Latte", ["css/themes/modern.css", "css/themes/ctp_latte.css"], false));
     }
 
     /// <summary>Main prep, called by <see cref="Program"/>, generally should not be touched externally.</summary>
@@ -134,6 +139,7 @@ public class WebServer
         {
             options.Limits.MaxRequestHeadersTotalSize = 1024 * 1024;
             options.Limits.MaxRequestHeaderCount = 200;
+            options.Limits.MaxRequestBodySize = 100 * 1024 * 1024;
         });
         timer.Check("[Web] WebApp builder prep");
         builder.Services.AddRazorPages();
@@ -228,13 +234,15 @@ public class WebServer
             if (referrer.StartsWith("comfybackenddirect/") && !path.StartsWith("/comfybackenddirect/"))
             {
                 Logs.Debug($"ComfyBackendDirect call via Referrer '{referrer}' was misrouted, rerouting to 'ComfyBackendDirect{context.Request.Path}'");
-                context.Response.Redirect($"/ComfyBackendDirect{context.Request.Path}");
+                context.Response.StatusCode = StatusCodes.Status307TemporaryRedirect;
+                context.Response.Headers.Location = $"/ComfyBackendDirect{context.Request.Path}";
                 return;
             }
             else if (path.StartsWith("/assets/"))
             {
                 Logs.Debug($"ComfyBackendDirect assets call was misrouted and improperly referrered, rerouting to '{context.Request.Path}'");
-                context.Response.Redirect($"/ComfyBackendDirect{context.Request.Path}");
+                context.Response.StatusCode = StatusCodes.Status307TemporaryRedirect;
+                context.Response.Headers.Location = $"/ComfyBackendDirect{context.Request.Path}";
                 return;
             }
             if (Program.ServerSettings.Network.EnableSpecialDevForwarding)
@@ -545,6 +553,7 @@ public class WebServer
             await context.YieldJsonOutput(null, 400, Utilities.ErrorObj(userError, "bad_path"));
             return;
         }
+        path = UserImageHistoryHelper.GetRealPathFor(user, path, root: root);
         byte[] data = null;
         string contentType = Utilities.GuessContentType(path);
         try
@@ -621,12 +630,12 @@ public class WebServer
         }
         async Task yieldResult(string imageData)
         {
-            Image img = Image.FromDataString(imageData);
-            context.Response.ContentType = img.MimeType();
+            ImageFile img = ImageFile.FromDataString(imageData);
+            context.Response.ContentType = img.Type.MimeType;
             context.Response.StatusCode = 200;
-            context.Response.ContentLength = img.ImageData.Length;
+            context.Response.ContentLength = img.RawData.Length;
             context.Response.Headers.CacheControl = $"private, max-age=2";
-            await context.Response.Body.WriteAsync(img.ImageData, Program.GlobalProgramCancel);
+            await context.Response.Body.WriteAsync(img.RawData, Program.GlobalProgramCancel);
             await context.Response.CompleteAsync();
         }
         if (!user.IsAllowedModel(name))

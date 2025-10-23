@@ -1,3 +1,19 @@
+/** Collection of helper functions and data related to models. */
+class ModelsHelpers {
+
+    constructor() {
+        this.imageBlockElem = getRequiredElementById('edit_model_image_block');
+        let imageHtml = makeImageInput(null, 'edit_model_image', null, 'Image', 'Image', true, false);
+        this.imageBlockElem.innerHTML = imageHtml;
+        this.imageElem = getRequiredElementById('edit_model_image');
+        this.enableImageElem = getRequiredElementById('edit_model_image_toggle');
+    }
+}
+
+/** Collection of helper functions and data related to models, just an instance of {@link ModelsHelpers}. */
+let modelsHelpers = new ModelsHelpers();
+
+//////////// TODO: Merge all the below into the class above (or multiple separate classes)
 
 let models = {};
 let cur_model = null;
@@ -7,7 +23,6 @@ let curModelCompatClass = '';
 let curModelSpecialFormat = '';
 let curModelMenuModel = null;
 let curModelMenuBrowser = null;
-let loraWeightPref = {};
 let nativelySupportedModelExtensions = ["safetensors", "sft", "engine", "gguf"];
 let modelIconUrlCache = {};
 let starredModels = null;
@@ -130,25 +145,9 @@ function editModel(model, browser) {
     }
     curModelMenuModel = model;
     curModelMenuBrowser = browser;
-    let imageInput = getRequiredElementById('edit_model_image');
-    imageInput.innerHTML = '';
-    let enableImage = getRequiredElementById('edit_model_enable_image');
-    enableImage.checked = false;
-    enableImage.disabled = true;
-    let curImg = document.getElementById('current_image_img');
-    if (curImg && curImg.tagName == 'IMG') {
-        let newImg = curImg.cloneNode(true);
-        newImg.id = 'edit_model_image_img';
-        newImg.style.maxWidth = '100%';
-        newImg.style.maxHeight = '';
-        newImg.removeAttribute('width');
-        newImg.removeAttribute('height');
-        imageInput.appendChild(newImg);
-        if (!model.preview_image || model.preview_image == 'imgs/model_placeholder.jpg') {
-            enableImage.checked = true;
-        }
-        enableImage.disabled = false;
-    }
+    clearImageFileInput(modelsHelpers.imageElem);
+    modelsHelpers.enableImageElem.checked = false;
+    triggerChangeFor(modelsHelpers.enableImageElem);
     editModelFillTechnicalInfo(model);
     getRequiredElementById('edit_model_civitai_url').value = getCivitUrlGuessFor(model);
     getRequiredElementById('edit_model_civitai_info').innerText = '';
@@ -172,7 +171,24 @@ function editModel(model, browser) {
     }
     getRequiredElementById('edit_model_is_negative').checked = model.is_negative_embedding || false;
     getRequiredElementById('edit_model_is_negative_div').style.display = model.architecture && model.architecture.endsWith('/textual-inversion') ? 'block' : 'none';
-    $('#edit_model_modal').modal('show');
+    getRequiredElementById('edit_model_lora_default_weight').value = model.lora_default_weight || '';
+    getRequiredElementById('edit_model_lora_default_weight_div').style.display = model.architecture && model.architecture.endsWith('/lora') ? 'block' : 'none';
+    getRequiredElementById('edit_model_lora_default_confinement').value = model.lora_default_confinement || '';
+    getRequiredElementById('edit_model_lora_default_confinement_div').style.display = model.architecture && model.architecture.endsWith('/lora') ? 'block' : 'none';
+    let run = () => {
+        triggerChangeFor(modelsHelpers.enableImageElem);
+        $('#edit_model_modal').modal('show');
+    };
+    let curImg = document.getElementById('current_image_img');
+    if (curImg && curImg.tagName == 'IMG') {
+        setImageFileDirect(modelsHelpers.imageElem, curImg.src, 'cur', 'cur', () => {
+            modelsHelpers.enableImageElem.checked = false;
+            run();
+        });
+    }
+    else {
+        run();
+    }
 }
 
 function edit_model_load_civitai() {
@@ -218,17 +234,10 @@ function edit_model_load_civitai() {
             }
         }
         if (img) {
-            let imageInput = getRequiredElementById('edit_model_image');
-            imageInput.innerHTML = '';
-            let newImg = document.createElement('img');
-            newImg.src = img;
-            newImg.id = 'edit_model_image_img';
-            newImg.style.maxWidth = '100%';
-            newImg.style.maxHeight = '';
-            imageInput.appendChild(newImg);
-            let enableImage = getRequiredElementById('edit_model_enable_image');
-            enableImage.checked = true;
-            enableImage.disabled = false;
+            setImageFileDirect(modelsHelpers.imageElem, img, 'cur', 'cur', () => {
+                modelsHelpers.enableImageElem.checked = false;
+                triggerChangeFor(modelsHelpers.enableImageElem);
+            });
         }
         info.innerText = 'Loaded.';
     }, curModelMenuModel.name, false);
@@ -253,6 +262,8 @@ function save_edit_model() {
         data[val] = getRequiredElementById(`edit_model_${val}`).value;
     }
     data['is_negative_embedding'] = (model.architecture || '').endsWith('/textual-inversion') ? getRequiredElementById('edit_model_is_negative').checked : false;
+    data['lora_default_weight'] = (model.architecture || '').endsWith('/lora') ? getRequiredElementById('edit_model_lora_default_weight').value : '';
+    data['lora_default_confinement'] = (model.architecture || '').endsWith('/lora') ? getRequiredElementById('edit_model_lora_default_confinement').value : '';
     data.subtype = curModelMenuBrowser.subType;
     function complete() {
         genericRequest('EditModelMetadata', data, data => {
@@ -260,15 +271,22 @@ function save_edit_model() {
         });
         $('#edit_model_modal').modal('hide');
     }
-    if (getRequiredElementById('edit_model_enable_image').checked) {
-        imageToData(getRequiredElementById('edit_model_image').getElementsByTagName('img')[0].src, (dataURL) => {
-            data['preview_image'] = dataURL;
-            complete();
-        }, true);
+    if (modelsHelpers.enableImageElem.checked) {
+        let imageVal = getInputVal(modelsHelpers.imageElem);
+        if (imageVal) {
+            data['preview_image_metadata'] = currentMetadataVal;
+            imageToData(imageVal, (dataURL) => {
+                data['preview_image'] = dataURL;
+                complete();
+            }, true);
+            return;
+        }
+        else {
+            data['preview_image'] = 'clear';
+            delete data['preview_image_metadata'];
+        }
     }
-    else {
-        complete();
-    }
+    complete();
 }
 
 function cleanModelName(name) {
@@ -317,16 +335,22 @@ class ModelBrowserWrapper {
         this.browser = new GenPageBrowserClass(container, this.listModelFolderAndFiles.bind(this), id, format, this.describeModel.bind(this), this.selectModel.bind(this), extraHeader);
         this.promptBox = getRequiredElementById('alt_prompt_textbox');
         this.models = {};
+        this.browser.refreshHandler = (callback) => {
+            refreshParameterValues(true, subType == 'Wildcards' ? 'wildcards' : null, callback);
+        };
+        this.modelDescribeCallbacks = [];
     }
 
     sortModelLocal(a, b, files) {
-        let aCorrect = isModelArchCorrect(a);
-        let bCorrect = isModelArchCorrect(b);
-        if (aCorrect && !bCorrect) {
-            return -1;
-        }
-        if (!aCorrect && bCorrect) {
-            return 1;
+        if (this.subType != 'Stable-Diffusion') {
+            let aCorrect = isModelArchCorrect(a);
+            let bCorrect = isModelArchCorrect(b);
+            if (aCorrect && !bCorrect) {
+                return -1;
+            }
+            if (!aCorrect && bCorrect) {
+                return 1;
+            }
         }
         let aStarred = this.isStarred(a.name);
         let bStarred = this.isStarred(b.name);
@@ -464,6 +488,24 @@ class ModelBrowserWrapper {
         this.browser.update();
     }
 
+    createCopyableTriggerPhrase(phrase) {
+        let copyPhrase = phrase;
+        if (getUserSetting('ui.copytriggerphrasewithtrailingcomma', false) && !phrase.endsWith(',')) {
+          copyPhrase += ', ';
+        }
+        let safePhrase = escapeHtmlNoBr(escapeJsString(phrase));
+        let safeCopyPhrase = escapeHtmlNoBr(escapeJsString(copyPhrase));
+        return `${safePhrase}<button title="Click to copy" class="basic-button trigger-phrase-copy-button" onclick="copyText('${safeCopyPhrase}');doNoticePopover('Copied!', 'notice-pop-green');">&#x29C9;</button>`;
+    }
+
+    formatTriggerPhrases(val) {
+        let phrases = val.split(';').map(phrase => phrase.trim()).filter(phrase => phrase.length > 0);
+        if (phrases.length > 128) {
+            phrases = phrases.slice(0, 128);
+        }
+        return phrases.map(phrase => this.createCopyableTriggerPhrase(phrase)).join('');
+    }
+
     describeModel(model) {
         let description = '';
         let buttons = [];
@@ -486,8 +528,12 @@ class ModelBrowserWrapper {
                 if (!refinerInput) {
                     return;
                 }
-                forceSetDropdownValue(refinerInput, model.data.name);
-                let toggler = document.getElementById('input_group_content_refiner_toggle');
+                let name = model.data.name;
+                if (name.endsWith('.safetensors')) {
+                    name = name.substring(0, name.length - '.safetensors'.length);
+                }
+                forceSetDropdownValue(refinerInput, name);
+                let toggler = document.getElementById('input_group_content_refineupscale_toggle');
                 if (toggler && !toggler.checked) {
                     toggler.click();
                     toggleGroupOpen(toggler, true);
@@ -498,7 +544,12 @@ class ModelBrowserWrapper {
                 if (!input) {
                     return;
                 }
-                forceSetDropdownValue(input, model.data.name);
+                let name = model.data.name;
+                if (name.endsWith('.safetensors')) {
+                    name = name.substring(0, name.length - '.safetensors'.length);
+                }
+                forceSetDropdownValue(input, name);
+                triggerChangeFor(input);
                 let toggler = document.getElementById('input_group_content_imagetovideo_toggle');
                 if (toggler && !toggler.checked) {
                     toggler.click();
@@ -521,6 +572,17 @@ class ModelBrowserWrapper {
                 { label: 'Add To Negative', onclick: () => embedAddToPrompt(model.data, 'alt_negativeprompt_textbox') },
                 { label: 'Remove All Usages', onclick: () => { embedClearFromPrompt(model.data, 'alt_prompt_textbox'); embedClearFromPrompt(model.data, 'alt_negativeprompt_textbox'); } }
             ];
+        }
+        else if (this.subType == 'LoRA') {
+            buttons = [{ label: 'Add To Prompt', onclick: () => {
+                let promptBox = getRequiredElementById('alt_prompt_textbox');
+                let name = model.data.name;
+                if (name.endsWith('.safetensors')) {
+                    name = name.substring(0, name.length - '.safetensors'.length);
+                }
+                promptBox.value += ` <lora:${name}>`;
+                triggerChangeFor(promptBox);
+            }}];
         }
         let isStarred = this.isStarred(model.data.name);
         let starButton = { label: isStarred ? 'Unstar' : 'Star', onclick: () => { this.toggleStar(model.data.name); } };
@@ -552,22 +614,36 @@ class ModelBrowserWrapper {
             let match = wildcardHelpers.matchWildcard(this.promptBox.value, model.data.name);
             let isSelected = match && match.length > 0;
             let className = isSelected ? 'model-selected' : '';
-            let searchable = `${model.data.name}, ${description}`;
-            return { name, description, buttons, className, searchable, 'image': model.data.image, display, detail_list };
+            let searchable = `${model.data.name}, ${name}, ${raw}`;
+            let result = { name, description, buttons, className, searchable, 'image': model.data.image, display, detail_list };
+            for (let callback of this.modelDescribeCallbacks) {
+                callback(result, model);
+            }
+            return result;
         }
         let isCorrect = this.subType == 'Stable-Diffusion' || isModelArchCorrect(model.data);
         let interject = '';
         if (!isCorrect && this.subType != 'Stable-Diffusion') {
             interject = `<b>(Incompatible with current model!)</b><br>`;
         }
+        let searchableAdded = '';
         if (model.data.is_supported_model_format) {
-            let getLine = (label, val) => `<b>${label}:</b> <span>${val == null ? "(Unset)" : safeHtmlOnly(val)}</span><br>`;
+            let getLine = (label, val) => {
+                let content = val == null ? '(Unset)' : (label == 'Trigger Phrase' ? this.formatTriggerPhrases(val) : safeHtmlOnly(val));
+                return `<b>${label}:</b> <span>${content}</span><br>`;
+            };
             let getOptLine = (label, val) => val ? getLine(label, val) : '';
             if (this.subType == 'LoRA' || this.subType == 'Stable-Diffusion') {
                 interject += `${getLine("Resolution", `${model.data.standard_width}x${model.data.standard_height}`)}`;
             }
             if (!model.data.local) {
                 interject += `<b>(This model is only available on some backends.)</b><br>`;
+            }
+            searchableAdded = `${display}, ${isStarred ? 'starred' : 'unstarred'}, Title: ${model.data.title}, Resolution: ${model.data.standard_width}x${model.data.standard_height}, Author: ${model.data.author}, Type: ${model.data.class}, Usage Hint: ${model.data.usage_hint}, Trigger Phrase: ${model.data.trigger_phrase}, Description: ${model.data.description}`;
+            if (this.subType == 'LoRA') {
+                let confinementName = model.data.lora_default_confinement == '' ? '' : loraHelper.confinementNames[model.data.lora_default_confinement];
+                interject += `${getOptLine("Default LoRA Weight", model.data.lora_default_weight)}${getOptLine("Default LoRA Confinement", confinementName)}`;
+                searchableAdded += `, Default LoRA Weight: ${model.data.lora_default_weight}, Default LoRA Confinement: ${confinementName}`;
             }
             description = `<span class="model_filename">${isStarred ? 'Starred: ' : ''}${escapeHtml(display)}</span><br>${getLine("Title", model.data.title)}${getOptLine("Author", model.data.author)}${getLine("Type", model.data.class)}${interject}${getOptLine('Trigger Phrase', model.data.trigger_phrase)}${getOptLine('Usage Hint', model.data.usage_hint)}${getLine("Description", model.data.description)}<br>`;
             let cleanForDetails = (val) => val == null ? '(Unset)' : safeHtmlOnly(val).replaceAll('<br>', '&emsp;');
@@ -590,8 +666,12 @@ class ModelBrowserWrapper {
             detail_list.push(`(Metadata only available for 'safetensors' models.)`, `<b>WARNING:</b> 'ckpt' pickle files can contain malicious code! Use with caution.`);
         }
         let className = this.getClassFor(model, isCorrect);
-        let searchable = `${model.data.name}, ${description}, ${model.data.license}, ${model.data.architecture||'no-arch'}, ${model.data.usage_hint}, ${model.data.trigger_phrase}, ${model.data.merged_from}, ${model.data.tags}`;
-        return { name, description, buttons, 'image': model.data.preview_image, className, searchable, display, detail_list };
+        let searchable = `${model.data.name}, ${searchableAdded}, ${model.data.license}, ${model.data.architecture||'no-arch'}, ${model.data.usage_hint}, ${model.data.trigger_phrase}, ${model.data.merged_from}, ${model.data.tags}`;
+        let result = { name, description, buttons, 'image': model.data.preview_image, className, searchable, display, detail_list };
+        for (let callback of this.modelDescribeCallbacks) {
+            callback(result, model);
+        }
+        return result;
     }
 
     isSelected(name) {
@@ -699,7 +779,7 @@ class ModelBrowserWrapper {
 
 let sdModelBrowser = new ModelBrowserWrapper('Stable-Diffusion', ['', 'inpaint', 'tensorrt', 'depth', 'canny', 'kontext'], 'model_list', 'modelbrowser', (model) => { directSetModel(model.data); });
 let sdVAEBrowser = new ModelBrowserWrapper('VAE', ['vae'], 'vae_list', 'sdvaebrowser', (vae) => { directSetVae(vae.data); });
-let sdLoraBrowser = new ModelBrowserWrapper('LoRA', ['lora', 'lora-depth', 'lora-canny'], 'lora_list', 'sdlorabrowser', (lora) => { toggleSelectLora(cleanModelName(lora.data.name)); });
+let sdLoraBrowser = new ModelBrowserWrapper('LoRA', ['lora', 'lora-depth', 'lora-canny'], 'lora_list', 'sdlorabrowser', (lora) => { loraHelper.selectLora(lora.data); });
 let sdEmbedBrowser = new ModelBrowserWrapper('Embedding', ['embedding', 'textual-inversion'], 'embedding_list', 'sdembedbrowser', (embed) => { selectEmbedding(embed.data); });
 let sdControlnetBrowser = new ModelBrowserWrapper('ControlNet', ['controlnet', 'control-lora', 'controlnet-alimamainpaint'], 'controlnet_list', 'sdcontrolnetbrowser', (controlnet) => { setControlNet(controlnet.data); });
 let wildcardsBrowser = new ModelBrowserWrapper('Wildcards', [], 'wildcard_list', 'wildcardsbrowser', (wildcard) => { wildcardHelpers.selectWildcard(wildcard.data); }, `<button id="wildcards_list_create_new_button" class="refresh-button" onclick="wildcardHelpers.createNewWildcardButton()">Create New Wildcard</button>`);
@@ -775,103 +855,6 @@ function initialModelListLoad() {
     for (let browser of allModelBrowsers) {
         browser.browser.navigate('');
     }
-}
-
-function reapplyLoraWeights() {
-    let valSet = [...getRequiredElementById('input_loras').selectedOptions].map(option => option.value);
-    let weightVal = getRequiredElementById('input_loraweights').value;
-    if (!weightVal) {
-        return;
-    }
-    let weights = weightVal.split(',');
-    if (weights.length != valSet.length) {
-        console.log(`Ignoring invalid LoRA weights value. Have ${valSet.length} LoRAs (${JSON.stringify(valSet)}), but ${weights.length} weights (${weightVal})`);
-        return;
-    }
-    let viewable = [...getRequiredElementById('current_lora_list_view').children];
-    for (let i = 0; i < valSet.length; i++) {
-        loraWeightPref[valSet[i]] = weights[i];
-        let entry = viewable.filter(elem => elem.dataset.lora_name == valSet[i]);
-        if (entry.length == 1) {
-            entry[0].querySelector('.lora-weight-input').value = weights[i];
-        }
-    }
-}
-
-function updateLoraWeights(doChange = true) {
-    let valSet = [...getRequiredElementById('input_loras').selectedOptions].map(option => option.value);
-    let inputWeights = getRequiredElementById('input_loraweights');
-    inputWeights.value = valSet.map(lora => loraWeightPref[lora] || 1).join(',');
-    if (doChange) {
-        inputWeights.dispatchEvent(new Event('change'));
-    }
-}
-
-function updateLoraList() {
-    let view = getRequiredElementById('current_lora_list_view');
-    let loraElem = document.getElementById('input_loras');
-    if (!loraElem) {
-        return;
-    }
-    let currentLoras = [...loraElem.selectedOptions].map(option => option.value);
-    view.innerHTML = '';
-    for (let lora of currentLoras) {
-        let div = createDiv(null, 'preset-in-list');
-        div.dataset.lora_name = lora;
-        div.innerText = cleanModelName(lora);
-        let weightInput = document.createElement('input');
-        weightInput.className = 'lora-weight-input';
-        weightInput.type = 'number';
-        let weightsParam = gen_param_types.find(p => p.id == 'loraweights');
-        weightInput.min = weightsParam ? weightsParam.min : -10;
-        weightInput.max = weightsParam ? weightsParam.max : 10;
-        weightInput.step = weightsParam ? weightsParam.step : 0.1;
-        weightInput.value = loraWeightPref[lora] || 1;
-        weightInput.addEventListener('change', () => {
-            loraWeightPref[lora] = weightInput.value;
-            updateLoraWeights();
-        });
-        weightInput.addEventListener('input', () => {
-            loraWeightPref[lora] = weightInput.value;
-            updateLoraWeights(false);
-        });
-        let removeButton = createDiv(null, 'preset-remove-button');
-        removeButton.innerHTML = '&times;';
-        removeButton.title = "Remove this LoRA";
-        removeButton.addEventListener('click', () => {
-            toggleSelectLora(lora);
-            updateLoraList();
-            sdLoraBrowser.rebuildSelectedClasses();
-        });
-        div.appendChild(weightInput);
-        div.appendChild(removeButton);
-        view.appendChild(div);
-    }
-    getRequiredElementById('current_loras_wrapper').style.display = currentLoras.length > 0 ? 'inline-block' : 'none';
-    getRequiredElementById('lora_info_slot').innerText = ` (${currentLoras.length})`;
-    setTimeout(() => {
-        genTabLayout.reapplyPositions();
-    }, 1);
-}
-
-function toggleSelectLora(lora) {
-    let loraInput = document.getElementById('input_loras');
-    if (!loraInput) {
-        showError("Cannot set LoRAs currently. Are you using a custom workflow? LoRAs only work in the default mode.");
-        return;
-    }
-    let selected = [...loraInput.selectedOptions].map(option => option.value);
-    if (selected.includes(lora)) {
-        selected = selected.filter(l => l != lora);
-    }
-    else {
-        selected.push(lora);
-    }
-    $(loraInput).val(selected);
-    $(loraInput).trigger('change');
-    loraInput.dispatchEvent(new Event('change'));
-    updateLoraWeights();
-    updateLoraList();
 }
 
 function directSetVae(vae) {

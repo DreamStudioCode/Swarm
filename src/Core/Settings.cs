@@ -1,5 +1,6 @@
 ﻿using FreneticUtilities.FreneticDataSyntax;
 using SwarmUI.Backends;
+using SwarmUI.Media;
 using SwarmUI.Utils;
 using System.Reflection;
 
@@ -86,6 +87,9 @@ public class Settings : AutoConfiguration
 
         [ConfigComment("If true, critical GPU errors (eg CUDA operation not permitted, or nvidia-smi crash) will cause SwarmUI to entirely restart itself.\nThis primarily exists as a workaround for an nvidia-docker bug (docker randomly uses GPU, so do full restart to get the GPU back)\nbut may be useful to other configs.\nIf false, GPU errors will be logged and nothing further will happen.")]
         public bool RestartOnGpuCriticalError = false;
+
+        [ConfigComment("Number of minutes to silently wait for git operations to run.\nIf this duration is reached, a warning is logged and 1 more minute is allowed.\nAfter that final minute runs out, the git process is backgrounded and ignored (it may still be running, but Swarm will stop waiting for it).\nSetting this timeout too low may cause still-running slow processes to glitch or conflict.\nSetting this timeout too high may cause Swarm to freeze up any time git doesn't properly shut down.\nFor most users, the default (1 minute before warn, 1 minute extra) is more than enough, as git extremely rarely needs more than a minute to run.")]
+        public int GitTimeoutMinutes = 1;
     }
 
     /// <summary>Settings related to authorization.</summary>
@@ -130,7 +134,7 @@ public class Settings : AutoConfiguration
         [ConfigComment("Can be enabled to cache certain backend data.\nFor example, with ComfyUI backends this will add an extended cache on the object_info data.\nDefaults to false.")]
         public bool DoBackendDataCache = false;
 
-        [ConfigComment("If true, Swarm may use GPU-specific optimizations.\nIf false, Swarm will not try to optimize anything in a way specific to the GPU(s) you have.\nSome very minor quality changes may result.\nIf you encounter error that are solved by turning this off, please report that as a bug immediately.\nDefaults to 'true'. Should be left as 'true' in almost all circumstances.")]
+        [ConfigComment("If true, Swarm may use GPU-specific optimizations.\nIf false, Swarm will not try to optimize anything in a way specific to the GPU(s) you have.\nSome very minor quality changes may result.\nIf you encounter errors that are solved by turning this off, please report that as a bug immediately.\nDefaults to 'true'. Should be left as 'true' in almost all circumstances.")]
         public bool AllowGpuSpecificOptimizations = true;
 
         [ConfigComment("How many models can be loaded in a model list at once.\nPast this count, the list will simply be cut off.\nUse sub-folder organization to prevent issues.")]
@@ -169,6 +173,9 @@ public class Settings : AutoConfiguration
         [ConfigComment("Preference for order of backend selection when loading a new model.\n'Last Used' will load the model on the last backend to load a model. This tends to distribute work between GPUs fairly.\n'First Free' will load the model on the first free backend. This tends to cause frequent model reloading on your first backend, and underuse of others.\nDefaults to Last Used.")]
         [ManualSettingsOptions(ManualNames = ["Last Used", "First Free"], Vals = ["last_used", "first_free"])]
         public string ModelLoadOrderPreference = "last_used";
+
+        [ConfigComment("If true, presume all backends can fast-load.\nFor example, if you have multiple local comfy instances, allow them all to boot up at the same time.")]
+        public bool AllBackendsLoadFast = false;
     }
 
     /// <summary>Settings related to networking and the webserver.</summary>
@@ -238,6 +245,8 @@ public class Settings : AutoConfiguration
         public int DownloadToRootID = 0;
 
         public string ActualModelRoot => Utilities.CombinePathWithAbsolute(Environment.CurrentDirectory, ModelRoot.Split(';')[0]);
+
+        public IEnumerable<string> ActualModelRoots => ModelRoot.Split(';').Select(r => Utilities.CombinePathWithAbsolute(Environment.CurrentDirectory, r));
 
         [ConfigComment("The model folder to use within 'ModelRoot'.\nDefaults to 'Stable-Diffusion'.\n'checkpoints' should be used for matching pre-existing ComfyUI model directories.\nAbsolute paths work too (usually do not use an absolute path, use just a folder name).\nUse a semicolon ';' to split multiple paths.")]
         public string SDModelFolder = "Stable-Diffusion";
@@ -329,7 +338,7 @@ public class Settings : AutoConfiguration
         public class FileFormatData : AutoConfiguration
         {
             [ConfigComment("What format to save images in.\nDefault is '.png', but '.jpg' is recommended to save some filespace.")]
-            [SettingsOptions(Impl = typeof(SettingsOptionsAttribute.ForEnum<Image.ImageFormat>))]
+            [SettingsOptions(Impl = typeof(SettingsOptionsAttribute.ForEnum<ImageFile.ImageFormat>))]
             public string ImageFormat = "PNG";
 
             [ConfigComment("Quality for JPEG and WEBP formats (1-100). Other formats are ignored.\nDefault is 100, recommended 70-90.")]
@@ -338,10 +347,14 @@ public class Settings : AutoConfiguration
             [ConfigComment("Whether to store metadata into saved images.\nDefaults enabled.")]
             public bool SaveMetadata = true;
 
+            [ConfigComment("If not set to 'false', encodes metadata into the pixels of the image itself.\nThis can bypass services that strip normal metadata.\n'Alpha' uses the alpha channel. 'RGB' uses color channels.\nAlpha method Noticeably increases file size of PNG images, but not Webp.\nWebp and PNG are supported with the exception of lossy Webp with RGB stealth metadata.\nCurrently SwarmUI cannot read stealth metadata.")]
+            [ManualSettingsOptions(Vals = ["false", "Alpha", "RGB"])]
+            public string StealthMetadata = "false";
+
             [ConfigComment("If set to non-0, adds DPI metadata to saved images.\n'72' is a good value for compatibility with some external software.")]
             public int DPI = 0;
 
-            [ConfigComment("If set to true, a '.swarm.json' file will be saved alongside images with the image metadata easily viewable.\nThis can work even if saving in the image is disabled. Defaults disabled.")]
+            [ConfigComment("If enabled, a '.swarm.json' file will be saved alongside images with the image metadata easily viewable.\nThis can work even if saving in the image is disabled. Defaults disabled.")]
             public bool SaveTextFileMetadata = false;
 
             [ConfigComment("Images that are transient/temporary (not saved to file) generally are better off not being converted between image formats, or having metadata added.\nHowever, if you want to make the conversion and metadata apply anyway, you can enable this option.\nIf you use 'Do Not Save' param frequently but manually save images, you may want this.")]
@@ -353,17 +366,38 @@ public class Settings : AutoConfiguration
 
         public class UserUIData : AutoConfiguration
         {
-            [ConfigComment("If true, hold ALT and press left/right arrows to move 'tags' in a prompt - that is, your currently selected comma-separated section will be moved left or right relative to other comma-separated sections.")]
+            [ConfigComment("If enabled, you can hold ALT and press left/right arrows to move 'tags' in a prompt - that is, your currently selected comma-separated section will be moved left or right relative to other comma-separated sections.")]
             public bool TagMoveHotkeyEnabled = false;
+
+            [ConfigComment("If enabled, when pressing delete on an image, ask if you're sure before doing that (bypass by holding shift).\nIf unchecked, there won't be any check.\nDefaults enabled.")]
+            public bool CheckIfSureBeforeDelete = true;
+
+            [ConfigComment("Comma-separated list of fields to display in the preset Details view.\nUse 'name' for the preset name, 'path' for the full preset path, 'description' for the description, or 'params' for the param list.\nIf unset, will act as 'path,description,params'")]
+            public string PresetListDetailsFields = "";
+
+            [ConfigComment("If enabled, trigger phrases are copied with a trailing comma added.\nIf disabled, trigger phrases are copied as-is without any trailing comma.\nThis is useful when copying them to prompts.")]
+            public bool CopyTriggerPhraseWithTrailingComma = false;
+
+            [ConfigComment("If true, when you interrupt generation, any incomplete generations will be removed from the batch view.\nIf false, they will linger in the batch view with an X mark indicated they were started but not finished.\nIn both cases, they will not save to file.")]
+            public bool RemoveInterruptedGens = false;
         }
 
         [ConfigComment("Settings related to the user interface, entirely contained to the frontend.")]
         public UserUIData UI = new();
 
+        public class ParamParsingData : AutoConfiguration
+        {
+            [ConfigComment("Whether LoRAs can be added to a generation multiple times.\nIf false, the firstmost usage of a LoRA will be kept and others will be discarded.")]
+            public bool AllowLoraStacking = true;
+        }
+
+        [ConfigComment("Settings related to the parsing of generation parameters.")]
+        public ParamParsingData ParamParsing = new();
+
         [ConfigComment("Whether your image output files save to server data drive or not.\nDisabling this can make some systems misbehave, and makes the Image History do nothing.")]
         public bool SaveFiles = true;
 
-        [ConfigComment("If true, folders will be discarded from starred image paths.")]
+        [ConfigComment("If enabled, folders will be discarded from starred image paths.\nIf disabled, entire original image path will be replicated beneath the star folder.")]
         public bool StarNoFolders = false;
 
         [ConfigComment("List of role IDs applied to this user. Defaults to owner (for local/accountless usage).")]
@@ -543,6 +577,9 @@ public class Settings : AutoConfiguration
     {
         [ConfigComment("Optionally specify a (raw HTML) welcome message here. If specified, will override the automatic welcome messages.")]
         public string OverrideWelcomeMessage = "";
+
+        [ConfigComment("Optionally specify a (raw HTML) welcome message here. If specified, will be added to the standard welcome message.")]
+        public string ExtraWelcomeInfo = "";
 
         [ConfigComment("Animated previews make the image history nicer when you've generated videos, but may negatively impact performance.\nIf having image history loaded with videos generated is negatively affecting your experience, disable this checkbox.\nAfter editing this setting, use the Reset All Metadata button in the Utilities tab.")]
         public bool AllowAnimatedPreviews = true;

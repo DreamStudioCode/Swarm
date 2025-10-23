@@ -57,7 +57,7 @@ There are several alternate AMD backend options that work better than DirectML:
 
 The message `AssertionError: Torch not compiled with CUDA enabled` means that python dependencies of Swarm's comfy backend have been mangled. This most often happens when custom nodes or packages have poorly built requirements files. You'll see issues like this most frequently if you often allow Comfy Manager to install nodepacks.
 
-**So how do I fix it?** The concept is easy, just the details vary. You need to reinstall torch, which means you need to trigger a pip install of: `torch torchvision torchaudio -U --index-url https://download.pytorch.org/whl/cu126` (the cu126 is CUDA version and may change over time, refer to [PyTorch's Website](https://pytorch.org/get-started/locally/) for updated index-url options). Note the usage of `-U` to tell pip to upgrade/replace the existing torch. To see how to install pip packages, refer to [I need to install something with pip](#i-need-to-install-something-with-pip) below.
+**So how do I fix it?** The concept is easy, just the details vary. You need to reinstall torch, which means you need to trigger a pip install of: `torch torchvision torchaudio -U --index-url https://download.pytorch.org/whl/cu128` (the cu128 is CUDA version and may change over time, refer to [PyTorch's Website](https://pytorch.org/get-started/locally/) for updated index-url options). Note the usage of `-U` to tell pip to upgrade/replace the existing torch. To see how to install pip packages, refer to [I need to install something with pip](#i-need-to-install-something-with-pip) below.
 
 ### fatal: detected dubious ownership in repository at '...'
 
@@ -104,8 +104,11 @@ If you're an advanced user familiar with command line usage and/or with a custom
 The easiest way to reinstall, is just:
 - Close SwarmUI
 - Rename the Swarm folder to `Old_SwarmUI`
-- run the installer again, fully, til you get to a working Generate tab
+- run the installer again, fully, until you get to a working Generate tab
+- close SwarmUI
 - copy/move over any files you want from Old to new.
+    - Notably, you probably want to move back in: `Data`, `Models`, `Output`
+- Then relaunch SwarmUI
 
 However, if you want an "in-place reinstall":
 - Close SwarmUI

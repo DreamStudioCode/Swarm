@@ -18,8 +18,8 @@
         <div id="text_prompt_segment_other_inputs"></div>
     </div>
     <div class="modal-footer">
-        <button type="button" class="btn btn-primary basic-button translate" onclick="$('#text_prompt_segment_modal').modal('hide')">Cancel</button>
-        <button type="button" class="btn btn-secondary basic-button translate" onclick="promptPlusButton.segmentModalSubmit()">Add</button>
+        <button type="button" class="btn btn-secondary basic-button translate" onclick="$('#text_prompt_segment_modal').modal('hide')">Cancel</button>
+        <button type="button" class="btn btn-primary basic-button translate" onclick="promptPlusButton.segmentModalSubmit()">Add</button>
     </div>
 @WebUtil.ModalFooter()
 @WebUtil.ModalHeader("text_prompt_region_modal", "Add Prompt Syntax: Regional Prompt")
@@ -40,8 +40,8 @@
         <div id="text_prompt_region_other_inputs"></div>
     </div>
     <div class="modal-footer">
-        <button type="button" class="btn btn-primary basic-button translate" onclick="$('#text_prompt_region_modal').modal('hide')">Cancel</button>
-        <button type="button" class="btn btn-secondary basic-button translate" onclick="promptPlusButton.regionModalSubmit()">Add</button>
+        <button type="button" class="btn btn-secondary basic-button translate" onclick="$('#text_prompt_region_modal').modal('hide')">Cancel</button>
+        <button type="button" class="btn btn-primary basic-button translate" onclick="promptPlusButton.regionModalSubmit()">Add</button>
     </div>
 @WebUtil.ModalFooter()
 
@@ -136,7 +136,7 @@
             }
         </select></div>
         <div>Prediction Type: <select id="edit_model_prediction_type" class="modal_text_extra translate" placeholder="Model Type">
-            <option value="">Unspecified</option><option value="v">V-Prediction</option><option value="epsilon">Epsilon</option><option value="x0">x0</option><option value="lcm">LCM</option><option value="v-zsnr">VPred ZSNR</option>
+            <option value="">Unspecified</option><option value="v">V-Prediction</option><option value="epsilon">Epsilon</option><option value="x0">x0</option><option value="lcm">LCM</option><option value="v-zsnr">VPred ZSNR</option><option value="sd3">SD3 (Rectified Flow)</option>
         </select></div>
         <div>Standard Resolution: <input type="text" id="edit_model_resolution" class="modal_text_extra translate" placeholder="Resolution, eg 1024x1024" /></div>
         <div>License: <input type="text" id="edit_model_license" class="modal_text_extra translate" placeholder="Model License" /></div>
@@ -146,11 +146,16 @@
         <div>Usage Hint: <input type="text" id="edit_model_usage_hint" class="modal_text_extra translate" placeholder="Model Usage Hint" /></div>
         <div>Trigger Phrase: <input type="text" id="edit_model_trigger_phrase" class="modal_text_extra translate" placeholder="Model Trigger Phrase" /></div>
         <div id="edit_model_is_negative_div">Is Negative Embedding: <span class="form-check form-switch display-inline-block"><input type="checkbox" id="edit_model_is_negative" class="slider-toggle form-check-input" title="If checked, embedding is for Negative Prompts. Otherwise, for the main prompt." /></span></div>
+        <div id="edit_model_lora_default_weight_div">Default LoRA Weight: <input type="number" min="-10" max="10" step="0.05" id="edit_model_lora_default_weight" class="modal_text_extra translate" placeholder="Default LoRA Weight" /></div>
+        <div id="edit_model_lora_default_confinement_div">Default LoRA Confinement: <select id="edit_model_lora_default_confinement" class="modal_text_extra translate" placeholder="Default LoRA Confinement">
+            <option value="0">Global</option>
+            <option value="5">Base</option>
+            <option value="1">Refiner</option>
+            <option value="2">Video</option>
+            <option value="3">VideoSwap</option>
+        </select></div>
         Description: <textarea class="auto-text auto-text-block translate" id="edit_model_description" rows="3" placeholder="Model description text..."></textarea>
-        <span class="form-check form-switch display-inline-block">
-            <input class="form-check-input translate" type="checkbox" id="edit_model_enable_image" title="Enable/disable image" onclick="doToggleEnable('edit_model_image')"> Use Image
-        </span>
-        <div id="edit_model_image" class="new_preset_image"></div>
+        <div id="edit_model_image_block"></div>
     </div>
     <div class="modal-footer">
         <button type="button" class="btn btn-primary basic-button translate" onclick="save_edit_model()">Save</button>
@@ -161,13 +166,12 @@
     <div class="modal-body">
         <p class="translate">Wildcards are lists of random prompt segments. One entry per line. Prompt sub-syntax is allowed (eg you can link another wildcard, or use <code>&lt;random:...&gt;</code>, or <code>&lt;preset:...&gt;</code> or anything else you want).</p>
         <p class="translate">Prefix a line with <code>#</code> to make it a comment (ie won't be counted as an option).</p>
-        Options: <textarea class="auto-text auto-text-block" id="edit_wildcard_contents" rows="15" placeholder="Wildcard options (1 per line)"></textarea>
-        <span class="form-check form-switch display-inline-block">
-            <input class="form-check-input translate" type="checkbox" id="edit_wildcard_enable_image" title="Enable/disable image" onclick="doToggleEnable('edit_wildcard_image')"> Use Image
-        </span>
-        <div id="edit_wildcard_image" class="new_preset_image"></div>
+        <p>Use Experimental Editor? <input type="checkbox" id="edit_wildcard_experimental_editor" onchange="wildcardHelpers.toggleExperimentalEditor()" /></p>
+        <div id="edit_wildcard_editor_spot"></div>
+        <div id="edit_wildcard_image_block"></div>
     </div>
     <div class="modal-footer">
+    <span id="edit_wildcard_modal_error" class="modal_error_bottom"></span>
         <button type="button" class="btn btn-primary basic-button translate" onclick="wildcardHelpers.saveEditWildcard()">Save</button>
         <button type="button" class="btn btn-secondary basic-button translate" onclick="$('#edit_wildcard_modal').modal('hide')">Cancel</button>
     </div>
@@ -281,10 +285,7 @@
 @WebUtil.ModalHeader("add_preset_modal", """<span id="new_preset_modal_title">Create New Preset</span>: <input type="text" id="new_preset_name" placeholder="Preset Name" />""")
     <div class="modal-body">
         <textarea class="auto-text auto-text-block translate" id="preset_description" rows="3" placeholder="Preset description text..."></textarea>
-        <span class="form-check form-switch display-inline-block">
-            <input class="form-check-input translate" type="checkbox" id="new_preset_enable_image" title="Enable/disable image" onclick="doToggleEnable('new_preset_image')"> Use Image
-        </span>
-        <div id="new_preset_image" class="new_preset_image"></div>
+        <div id="new_preset_image_block"></div>
         <hr>
         <h5 class="translate">Parameters in the Preset</h5>
         <p class="translate">Select the checkbox next to inputs you want included in the preset.<br>By default this will override values entirely. For text inputs, use <code>{value}</code> to include the current UI value instead of overriding.</p>

@@ -87,7 +87,7 @@ function buttonsForImage(fullsrc, src, metadata) {
     buttons.push({
         label: 'Download',
         title: 'Downloads this image to your PC.',
-        href: src,
+        href: escapeHtmlForUrl(src),
         is_download: true
     });
     if (permissions.hasPermission('user_delete_image') && !isDataImage) {
@@ -95,6 +95,9 @@ function buttonsForImage(fullsrc, src, metadata) {
             label: 'Delete',
             title: 'Deletes this image from the server.',
             onclick: (e) => {
+                if (!uiImprover.lastShift && getUserSetting('ui.checkifsurebeforedelete', true) && !confirm('Are you sure you want to delete this image?\nHold shift to bypass.')) {
+                    return;
+                }
                 genericRequest('DeleteImage', {'path': fullsrc}, data => {
                     if (e) {
                         e.remove();
@@ -110,7 +113,7 @@ function buttonsForImage(fullsrc, src, metadata) {
                     }
                     div = getRequiredElementById('current_image_batch').querySelector(`.image-block[data-src="${src}"]`);
                     if (div) {
-                        div.remove();
+                        removeImageBlockFromBatch(div);
                     }
                     let currentImage = document.getElementById('current_image_img');
                     if (currentImage && currentImage.dataset.src == src) {
@@ -144,9 +147,10 @@ function describeImage(image) {
     let allowAnimToggle = allowAnims ? '' : '&noanim=true';
     let dragImage = image.data.src.endsWith('.html') ? 'imgs/html.jpg' : `${image.data.src}`;
     let imageSrc = image.data.src.endsWith('.html') ? 'imgs/html.jpg' : `${image.data.src}?preview=true${allowAnimToggle}`;
-    let searchable = description;
+    let searchable = `${image.data.name}, ${image.data.metadata}, ${image.data.fullsrc}`;
     let detail_list = [escapeHtml(image.data.name), formattedMetadata.replaceAll('<br>', '&emsp;')];
-    return { name, description, buttons, 'image': imageSrc, 'dragimage': dragImage, className: parsedMeta.is_starred ? 'image-block-starred' : '', searchable, display: name, detail_list };
+    let aspectRatio = parsedMeta.sui_image_params?.width && parsedMeta.sui_image_params?.height ? parsedMeta.sui_image_params.width / parsedMeta.sui_image_params.height : null;
+    return { name, description, buttons, 'image': imageSrc, 'dragimage': dragImage, className: parsedMeta.is_starred ? 'image-block-starred' : '', searchable, display: name, detail_list, aspectRatio };
 }
 
 function selectImageInHistory(image, div) {

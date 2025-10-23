@@ -299,12 +299,13 @@ There's a full step by step guide for video model usage here: <https://github.co
 - **Prompt:** Standard. Supports English and Chinese text.
     - They have an official reference negative prompt in Chinese, it is not required but may help: `色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走`
         - (This is just a word spam negative "bright colors, overexposed, static, blurred details, subtitles, ..." but in Chinese. It does help though.)
-- **FPS:** The base model is trained for 16 FPS. Some variants, such as CausVid, are trained for 24 FPS.
-    - Swarm will default to 16 FPS for Wan. You must manually select 24 FPS when using such a variant.
+- **FPS:** The original Wan 2.1 base model is trained for 16 FPS. Most variants, including Wan 2.2-5B, CausVid, Lightx2v, Lightning, etc, are trained for 24 FPS.
+    - Swarm will default to 24 FPS for Wan. You must manually select 16 FPS when using the original Wan 2.1 base.
 - **Resolution:** The models are trained for `832x480`, which is a 16:9 equivalent for `640x640`
-    - the 14B models can also do `1280x720`, which is a 16:9 equivalent for `960x960`
+    - the 14B models are trained also for `1280x720`, which is a 16:9 equivalent for `960x960`
     - Other resolutions seem to work fine. Even the 1.3B, which is not trained for 960, can technically still do 960 just with a quality drop as it gets too large.
         - As a vid2vid gen, the model seem to be very good at generating very high res directly.
+    - Any aspect ratio is fine.
 - **Frame Count (Length):** you can select pretty freely, different values work fine. If unspecified, will default to `81` (5 seconds if at 16 fps).
     - Use 17 for one second, 33 for two, 49 for three, 65 for 4, 81 for 5.
     - Higher frame counts above 81 seem to become distorted - still work but quality degrades and glitching appears.
@@ -316,17 +317,19 @@ There's a full step by step guide for video model usage here: <https://github.co
 - **Sampler and Scheduler:** Standard, eg Euler + Simple
     - You can experiment with changing these around, some may be better than others
 - **Sigma Shift:** range of 8 to 12 suggested. Default is `8`.
-- **Performance:** To be filled in once optimizations are complete.
-    - If you see generations completing but then freezing or dying at the end, the advanced `VAE Tiling` parameters may help fix that.
+- **Performance:**
+    - Wan 14B is pretty slow unless you have top-end hardware (4090/5090). With topend hardware and all the best speed optimizations... it's still generally going to run in the "minutes per video" range.
+    - If you see generations completing but then freezing or dying at the end, the advanced `VAE Tiling` parameters may help fix that. Ignore the temporal tiling (the Wan VAE is implicitly temporally tiled).
     - The Image2Video models are much more performance-intensive than the Text2Video models
-    - To run faster, use a "HighRes Fix" style setup, there's a guide to that here: https://www.reddit.com/r/StableDiffusion/comments/1j0znur/run_wan_faster_highres_fix_in_2025/
+    - The lightning/causvid/lightx2v models make Wan much faster, see [the section below](#wan-causvid---high-speed-14b)
+    - To run faster, use a "HighRes Fix" style setup, there's a guide to that here: <https://www.reddit.com/r/StableDiffusion/comments/1j0znur/run_wan_faster_highres_fix_in_2025/>
 - **Quality:**
     - The Wan models sometimes produce glitched content on the first or last few frames - under Advanced->`Other Fixes`->you can adjust `Trim Video Start Frames` (and `End`) to a small number (1 to 4) to cut the first/last few frames to dodge this.
 
 ### Wan CausVid - High Speed 14B
 
 - Want to generate 14B videos way faster? Here's how:
-    - Pick one of the options below, and save it to your LoRAs folder. "Lightx2v" is the current best recommendation.
+    - Pick one of the options below, and save it to your LoRAs folder. "Lightx2v" is the current best recommendation for Wan 2.1.
         - Here's the v2 version <https://huggingface.co/Kijai/WanVideo_comfy/blob/main/Wan21_CausVid_14B_T2V_lora_rank32_v2.safetensors>
         - Or the V1 version <https://huggingface.co/Kijai/WanVideo_comfy/blob/main/Wan21_CausVid_14B_T2V_lora_rank32.safetensors>
             - V1 has some visual side effects (noise pattern on the video), whereas V2 seems to have motion delay (the first couple seconds of a video have little motion, requiring longer video gens)
@@ -338,17 +341,38 @@ There's a full step by step guide for video model usage here: <https://github.co
     - Set up a Wan gen with 14B as normal, but also set:
         - **CFG Scale** to `1`
             - If doing I2V, set **Video CFG** to `1`
-        - **Advanced Video** -> **Video FPS** to `24`
         - **Steps** to `4` for fastest generation, `8` for high quality while still fast, or `12` if you really want to ensure max quality by letting the gen take a while
             - If doing I2V, set **Video Steps** to `4`, `8`, or `12`
         - **Sampler:** can be default (Euler), but `UniPC` might be a touch better
         - **Scheduler:** not sure what's best atm, but default usually seems alright
-        - **Frame Count (Length):** supports the same ranges as regular Wan, but seems to extend happily to at least 96 frames (4 seconds at 24 fps), and possibly also 120 frames (5 seconds).
+        - **Frame Count (Length):** supports the same ranges as regular Wan, but seems to extend happily to at least 97 frames (4 seconds at 24 fps), and possibly also 121 frames (5 seconds).
             - Wan defaults to 81 in Swarm (3.3 seconds) so you may want to tweak this manually.
             - Use 25 for one second, 49 for two, 73 for three, 97 for four, 121 for five, 145 for six.
         - With Text2Video, you may want to set **Other Fixes** -> **Trim Video Start Frames** to about 8, to prevent first-frame-flash (there tends to be 2 latent frames, ie 8 real frames, in glitched quality)
     - Note you still have to consider VRAM and res/frame count, as you will still get slow gens if you exceed your GPU's VRAM capacity. The net speed will still be faster, but not as impressive as compared to when you fit your GPU properly.
     - Then generate as normal. You'll get a completed video in a fraction of the time with higher framerate quality, thanks to the CausVid lora.
+
+### Wan For Image Generation
+
+- You can use Wan T2V as an image generation model too!
+- Just set **Text2Video Frames** to `1`
+- This works for all Wan T2V variants (2.1 1.3B, 2.1 14B, 2.2 14B, 2.2 5B, ...)
+- This is compatible with Lightx2v/Lightning LoRAs.
+- Some parameter adjustments may be needed
+    - Notably, setting **Sigma Shift** to `1` or `2` seems to improve quality significantly.
+    - Wan may be overly resolution and aspect sensitive when generating images
+        - For example, 3:4 or 2:3 at side length 1280 might make pretty great portraits on some Wan variants, but swap to 9:16 or to default side length on the same model and it looks terrible.
+
+### Wan Phantom
+
+- Wan Phantom is supported in SwarmUI.
+    - It lets you add reference images to a video generation.
+    - Download the phantom 14B base model here <https://huggingface.co/Kijai/WanVideo_comfy/blob/main/Phantom-Wan-14B_fp8_e4m3fn.safetensors>
+        - Or as a gguf <https://huggingface.co/QuantStack/Phantom_Wan_14B-GGUF/blob/main/Phantom_Wan_14B-Q4_K_M.gguf>
+        - Save to `diffusion_models`
+    - It works like Wan-14B-Text2Video, but with image inputs. This is not i2v, this is a "reference" image (you prompt it for how your images get added into the video)
+    - Add images to the prompt box (drag in or paste in). You can use just one, or multiple (up to 6 supposedly).
+    - Your first input image determines the resolution of the input image set. 512x512 seems to be fine, 1024 is good too. Avoid very high res inputs as it will cost extra VRAM.
 
 ### Wan VACE
 
@@ -360,3 +384,52 @@ There's a full step by step guide for video model usage here: <https://github.co
         - Generate as normal
     - For **Control Video** mode:
         - Not yet supported in main interface, use Comfy Workflow tab
+
+### Wan 2.2
+
+- Wan 2.2 is natively supported in SwarmUI
+    - Wan 2.2 is better in some regards (notably photorealistic video quality), but not all, compared to Wan 2.1. Notably, it is more complicated to set up. If you're new, start with Wan 2.1, and try an upgrade to 2.2 after you're familiar with the basics.
+    - You can download the standard version of the model(s) from here <https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/tree/main/split_files/diffusion_models>
+        - Or, there's a collection of GGUF files here: <https://huggingface.co/collections/QuantStack/wan22-ggufs-6887ec891bdea453a35b95f3>
+        - There's a **14B T2V (Text To Video)**, in a high+low noise pair
+            - You're expected to run the high noise as a base and the low noise as a refiner, with:
+                - **RefinerMethod** as `StepSwap`, and
+                - **RefinerControlPercentage** as `0.5` (or higher if preferred, cannot go lower)
+            - Reference **CFG** range is `5`
+        - There's a **14B I2V (Image To Video)**, in a high+low noise pair
+            - You're expected to run the high noise as a base and the low noise as a refiner
+                - In the **Image To Video** params:
+                    - Set the regular **Video Model** to the high noise model,
+                    - and set the advanced **Video Swap Model** to the low noise model,
+                    - and leave **Video Swap Percent** at `0.5` (or higher if preferred, cannot go lower)
+            - Reference **CFG** range is `3.5`
+            - This also supports the `Video End Frame` input to create a video that moves between two known places
+        - For both 14B types:
+            - **FPS** is `16`, but loras or even parameter adjustments can change it to a more normal-looking `24`.
+                - Swarm will default to `24`, but if your videos "feel sped up", change the FPS parameter to `16`.
+            - Sigma shift may be worth experimenting with. The default is 8, but a wide range of values are functional.
+                - Some users recommend `1.5` for T2V
+        - There's a **5B T/I2V (single model that does both text and image to video)** as well
+            - It has its own VAE. Will be autodownloaded.
+            - No funky model pair like the 14b has, just a straight single model
+            - Reference **CFG** is `3.5`
+            - Native **FPS** of `24`
+        - There are some Wan 2.2 Lightx2v models available
+            - Notably this pair: <https://huggingface.co/Kijai/WanVideo_comfy/tree/main/LoRAs/Wan22-Lightning>
+                - There's also an enhanced I2V Lightning High LoRA: <https://huggingface.co/Kijai/WanVideo_comfy/tree/main/LoRAs/Wan22_Lightx2v>
+            - You use a separate High and Low variant together
+            - There are two ways to set the pair loras...
+                - Option 1: via the UI
+                    - Click "Edit Metadata" on the model, find "Default Confinement", select the appropriate confinement, and hit Save
+                        - For T2V high this is "Base", for T2V Low this is "Refiner", for I2V High this is "Video", for I2V Low this is "VideoSwap"
+                    - Then just select both loras as normal
+                - Option 2: in the prompt
+                    - For T2V Use with this at the end of your prompt: `<base> <lora:Wan2.2-Lightning_T2V-A14B-4steps-lora_HIGH_fp16>   <refiner> <lora:Wan2.2-Lightning_T2V-A14B-4steps-lora_LOW_fp16>` (adapt the lora filenames to whatever specific filenames you have locally)
+                        - You can use your LoRA browser tab at the top, find the LoRA, and click the `☰` hamburger menu and then `Add To Prompt`
+                    - For I2V, use `<video> <lora:...i2v-high>   <videoswap> <lora:...i2v-low>` and of course use the i2v loras
+                        - the I2V Lightning LoRA appears to target 16 fps
+                    - Because this is wonky, once you get it working, it is recommended that you make a Preset with the Prompt set like `{value} <base> ... <refiner> ...` to make it easy to click straight into this behavior rather than doing it manually every time. You can also select the models, CFG, etc. in the preset to have it all ready in one click.
+        - You can use the Wan 2.1 Lightx2v or other causvid-likes (see [CausVid Section Above](#wan-causvid---high-speed-14b)) on the Wan 2.2 14B (not on the 5B)
+            - For I2V, this seems to "just work"
+            - For T2V, this has some visual oddities but does still mostly work
+        - Wan 2.2 has an official prompting guide book: <https://alidocs.dingtalk.com/i/nodes/EpGBa2Lm8aZxe5myC99MelA2WgN7R35y>

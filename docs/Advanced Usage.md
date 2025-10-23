@@ -23,9 +23,9 @@
 - This is only for experienced sys-admins, not for normal people.
 - You should not host publicly without an authentication layer in front.
     - Some Swarm API routes can be used maliciously, such as the routes that forward raw ComfyUI access.
+    - Multi-user-support with Swarm-provided authentication handling is available in an initial experimental form, but you should still have a barrier in front until it is validated. See [Sharing Your Swarm](/docs/Sharing%20Your%20Swarm.md) for more info on user accounts.
 - Apache2/Nginx reverse-proxy setups can be built with an authentication layer easily enough if you know what you're doing.
 - Ensure your instance has https (eg use LetsEncrypt certbot, which grants free https keys), raw http hosting may cause issues.
-- Multi-user-support with Swarm-provided authentication handling is available in an initial experimental form, but you should still have a barrier in front until it is validated
 
 ## Custom Workflows (ComfyUI)
 
@@ -73,7 +73,7 @@ Triton is a Linux-only AI acceleration library that you can hack into working on
     - Copy over the contents of the `Include` folder too
 - Go back to the command line inside the `dlbackend\comfy`
     - `.\python_embeded\python.exe -s -m pip install triton-windows`
-    - `.\python_embeded\python.exe -s -m pip install sageattention`
+    - `.\python_embeded\python.exe -s -m pip install sageattention` or use of these wheels <https://github.com/woct0rdho/SageAttention/releases>
 - Launch SwarmUI
     - Go to Server->Backends, edit the Comfy Self Start backend
     - Under `ExtraArgs`, add `--use-sage-attention`

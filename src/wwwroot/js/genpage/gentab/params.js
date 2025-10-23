@@ -103,7 +103,7 @@ function getHtmlForParam(param, prefix) {
                     let pElem = getRequiredElementById(`${prefix}${param.id}`);
                     textPromptAddKeydownHandler(pElem);
                     textPromptInputHandle(pElem);
-                } : (param.view_type == 'big' ? () => dynamicSizeTextBox(getRequiredElementById(`${prefix}${param.id}`, 32)): null);
+                } : (param.view_type == 'big' ? () => dynamicSizeTextBox(getRequiredElementById(`${prefix}${param.id}`), 32, 50): null);
                 return {html: makeTextInput(param.feature_flag, `${prefix}${param.id}`, param.id, param.name, param.description, param.default, param.view_type, param.description, param.toggleable, false, !param.no_popover) + pop, runnable: runnable};
             case 'decimal':
             case 'integer':
@@ -410,17 +410,19 @@ function genInputs(delay_final = false) {
                 doToggleGroup(`input_group_content_${group}`);
             }
         }
+        let dependsHandled = [];
         for (let param of gen_param_types) {
             if (param.toggleable) {
                 doToggleEnable(`input_${param.id}`);
                 doToggleEnable(`preset_input_${param.id}`);
             }
-            if (param.group && param.group.toggles) {
-                let elem = document.getElementById(`input_${param.id}`);
-                if (elem) {
-                    let groupId = param.group.id;
-                    let groupToggler = document.getElementById(`input_group_content_${groupId}_toggle`);
-                    if (groupToggler) {
+            let elem = document.getElementById(`input_${param.id}`);
+            if (elem) {
+                let group = param.group;
+                while (group) {
+                    let groupId = group.id;
+                    if (group.toggles) {
+                        let groupToggler = document.getElementById(`input_group_content_${groupId}_toggle`);
                         function autoActivate() {
                             groupToggler.checked = true;
                             doToggleGroup(`input_group_content_${groupId}`);
@@ -431,6 +433,17 @@ function genInputs(delay_final = false) {
                             elem.addEventListener('change', autoActivate);
                         }, 1);
                     }
+                    group = group.parent;
+                }
+            }
+            if (param.depend_non_default && !dependsHandled.includes(param.depend_non_default)) {
+                dependsHandled.push(param.depend_non_default);
+                let otherParam = gen_param_types.find(p => p.id == param.depend_non_default);
+                let other = document.getElementById(`input_${otherParam.id}`);
+                if (other) {
+                    other.addEventListener('change', () => {
+                        scheduleParamUnsupportUpdate();
+                    });
                 }
             }
         }
@@ -574,16 +587,16 @@ function genInputs(delay_final = false) {
             });
             tweakNegativePromptBox();
         }
-        let inputLoras = document.getElementById('input_loras');
-        if (inputLoras) {
-            inputLoras.addEventListener('change', () => {
-                updateLoraList();
-                sdLoraBrowser.rebuildSelectedClasses();
-            });
-        }
-        let inputLoraWeights = document.getElementById('input_loraweights');
-        if (inputLoraWeights) {
-            inputLoraWeights.addEventListener('change', reapplyLoraWeights);
+        for (let loraParam of ['loras', 'loraweights', 'lorasectionconfinement']) {
+            let input = document.getElementById(`input_${loraParam}`);
+            if (input) {
+                input.addEventListener('change', () => {
+                    loraHelper.loadFromParams();
+                    if (loraParam == 'loras') {
+                        sdLoraBrowser.rebuildSelectedClasses();
+                    }
+                });
+            }
         }
         let inputBatchSize = document.getElementById('input_batchsize');
         let shouldResetBatch = getUserSetting('resetbatchsizetoone', false);
@@ -808,17 +821,13 @@ function genInputs(delay_final = false) {
         if (videoGroup && !currentBackendFeatureSet.includes('frameinterps')) {
             videoGroup.append(createDiv(`video_install_frameinterps`, 'keep_group_visible', `<button class="basic-button" onclick="installFeatureById('frame_interpolation', 'video_install_frameinterps')">Install Frame Interpolation</button>`));
         }
-        let advancedSamplingGroup = document.getElementById('input_group_content_advancedsampling');
-        if (advancedSamplingGroup && !currentBackendFeatureSet.includes('teacache')) {
-            advancedSamplingGroup.append(createDiv(`advancedsampling_install_teacache`, 'keep_group_visible', `<button class="basic-button" onclick="installFeatureById('teacache', 'advancedsampling_install_teacache')">Install TeaCache</button>`));
-        }
         for (let runnable of postParamBuildSteps) {
             runnable();
         }
         hideUnsupportableParams();
         let loras = document.getElementById('input_loras');
         if (loras) {
-            reapplyLoraWeights();
+            loraHelper.loadFromParams();
         }
         if (imageEditor.active) {
             imageEditor.doParamHides();
@@ -854,7 +863,7 @@ function toggle_advanced_checkbox_manual() {
 function getGenInput(input_overrides = {}, input_preoverrides = {}) {
     let input = JSON.parse(JSON.stringify(input_preoverrides));
     let extraMetadata = {};
-    for (let type of gen_param_types) {
+    paramLoop: for (let type of gen_param_types) {
         if (type.toggleable && !getRequiredElementById(`input_${type.id}_toggle`).checked) {
             continue;
         }
@@ -862,8 +871,11 @@ function getGenInput(input_overrides = {}, input_preoverrides = {}) {
             continue;
         }
         let group = type.original_group || type.group;
-        if (group && group.toggles && !getRequiredElementById(`input_group_content_${group.id}_toggle`).checked) {
-            continue;
+        while (group) {
+            if (group.toggles && !getRequiredElementById(`input_group_content_${group.id}_toggle`).checked) {
+                continue paramLoop;
+            }
+            group = group.parent;
         }
         let elem = getRequiredElementById(`input_${type.id}`);
         let parent = findParentOfClass(elem, 'auto-input');
@@ -889,6 +901,18 @@ function getGenInput(input_overrides = {}, input_preoverrides = {}) {
                 }
             }
         }
+    }
+    for (let type of gen_param_types) {
+        if (type.depend_non_default) {
+            let otherParam = gen_param_types.find(p => p.id == type.depend_non_default);
+            let otherElem = document.getElementById(`input_${otherParam.id}`);
+            if (otherParam && otherElem && !otherElem.dataset.has_data && !(otherParam.id in input_overrides) && (!(otherParam.id in input) || input[otherParam.id] == otherParam.default)) {
+                delete input[type.id];
+            }
+        }
+    }
+    if (input['aspectratio'] == 'Custom') {
+        delete input['sidelength'];
     }
     if (!input['vae'] || input['vae'] == 'Automatic') {
         input['automaticvae'] = true;
@@ -929,8 +953,8 @@ function getGenInput(input_overrides = {}, input_preoverrides = {}) {
     return input;
 }
 
-function refreshParameterValues(strong = true, callback = null) {
-    genericRequest('TriggerRefresh', {strong: strong}, data => {
+function refreshParameterValues(strong = true, refreshType = null, callback = null) {
+    genericRequest('TriggerRefresh', {strong: strong, refreshType: refreshType}, data => {
         loadUserData();
         if (!gen_param_types) {
             return;
@@ -1052,7 +1076,9 @@ function setDirectParamValue(param, value, paramElem = null, forceDropdowns = fa
 
 function resetParamsToDefault(exclude = [], doDefaultPreset = true) {
     for (let cookie of listCookies('lastparam_')) {
-        deleteCookie(cookie);
+        if (!exclude.includes(cookie.substring('lastparam_'.length))) {
+            deleteCookie(cookie);
+        }
     }
     for (let cookie of listCookies('group_toggle_')) {
         deleteCookie(cookie);
@@ -1070,6 +1096,7 @@ function resetParamsToDefault(exclude = [], doDefaultPreset = true) {
         if (param.id != 'model' && !exclude.includes(param.id)) {
             let id = `input_${param.id}`;
             let elem = document.getElementById(id);
+            doTrigger = true;
             if (elem != null) {
                 setDirectParamValue(param, param.default, elem, false, false);
                 if (param.toggleable) {
@@ -1081,24 +1108,27 @@ function resetParamsToDefault(exclude = [], doDefaultPreset = true) {
                     triggerChangeFor(toggler);
                     continue;
                 }
-                if (param.group && param.group.toggles) {
-                    let toggler = document.getElementById(`input_group_content_${param.group.id}_toggle`);
-                    if (toggler) {
-                        if (!toggler.checked) {
-                            continue;
+                let group = param.group;
+                while (group) {
+                    if (group.toggles) {
+                        let toggler = document.getElementById(`input_group_content_${group.id}_toggle`);
+                        if (toggler) {
+                            if (!toggler.checked) {
+                                doTrigger = false;
+                            }
+                            else {
+                                toggler.checked = false;
+                                doToggleGroup(`input_group_content_${group.id}`);
+                                doTrigger = false;
+                            }
                         }
-                        toggler.checked = false;
-                        doToggleGroup(`input_group_content_${param.group.id}`);
-                        continue;
                     }
+                    group = group.parent;
                 }
-                triggerChangeFor(elem);
+                if (doTrigger) {
+                    triggerChangeFor(elem);
+                }
             }
-        }
-    }
-    for (let param of gen_param_types) {
-        let id = `input_${param.id}`;
-        if (param.id != 'model' && !exclude.includes(param.id) && document.getElementById(id) != null) {
         }
     }
     let aspect = document.getElementById('input_aspectratio');
@@ -1148,10 +1178,6 @@ function hideUnsupportableParams() {
     if (videoFrameInterpInstallButton && currentBackendFeatureSet.includes('frameinterps')) {
         videoFrameInterpInstallButton.remove();
     }
-    let teaCacheInstallButton = document.getElementById('advancedsampling_install_teacache');
-    if (teaCacheInstallButton && currentBackendFeatureSet.includes('teacache')) {
-        teaCacheInstallButton.remove();
-    }
     let filter = getRequiredElementById('main_inputs_filter').value.toLowerCase();
     let hideUnaltered = filter.includes('<unaltered>');
     if (hideUnaltered) {
@@ -1194,6 +1220,19 @@ function hideUnsupportableParams() {
             if (!filterShow) {
                 show = false;
             }
+            if (param.depend_non_default) {
+                let otherParam = gen_param_types.find(p => p.id == param.depend_non_default);
+                let other = document.getElementById(`input_${param.depend_non_default}`);
+                if (other && !other.dataset.has_data) {
+                    let otherToggler = document.getElementById(`input_${otherParam.id}_toggle`);
+                    if (otherToggler && !otherToggler.checked) {
+                        show = false;
+                    }
+                    if (!otherToggler && getInputVal(other) == otherParam.default) {
+                        show = false;
+                    }
+                }
+            }
             if (param.advanced && supported && filterShow) {
                 advancedCount++;
             }
@@ -1201,15 +1240,17 @@ function hideUnsupportableParams() {
                 box.style.display = show ? '' : 'none';
             }
             box.dataset.disabled = supported ? 'false' : 'true';
-            if (param.group) {
-                let groupData = groups[param.group.id] || { visible: 0, data: param.group, altered: 0 };
-                groups[param.group.id] = groupData;
+            group = param.group;
+            while (group) {
+                let groupData = groups[group.id] || { visible: 0, data: group, altered: 0 };
+                groups[group.id] = groupData;
                 if (show) {
                     groupData.visible++;
                     if (isAltered) {
                         groupData.altered++;
                     }
                 }
+                group = group.parent;
             }
         }
     }
@@ -1300,6 +1341,9 @@ function buildParameterList(params, groups) {
 
 /** Returns a copy of the parameter name, cleaned for ID format input. */
 function cleanParamName(name) {
+    if (name == null) {
+        return null;
+    }
     return name.toLowerCase().replaceAll(/[^a-z]/g, '');
 }
 
@@ -1401,4 +1445,22 @@ function getParamById(id) {
         param = rawGenParamTypesFromServer.find(p => p.id == id);
     }
     return param;
+}
+
+/** Adds a button to the given group to install a feature. */
+function addInstallButton(groupId, featureId, installId, buttonText) {
+    postParamBuildSteps.push(() => {
+        let targetGroup = document.getElementById(`input_group_content_${groupId}`);
+        if (targetGroup && !currentBackendFeatureSet.includes(featureId)) {
+            targetGroup.append(createDiv(`${groupId}_${installId}_install_button`, 'keep_group_visible', `<button class="basic-button" onclick="installFeatureById('${installId}', '${groupId}_${installId}_install_button')">${buttonText}</button>`));
+        }
+    });
+    hideParamCallbacks.push(() => {
+        if (currentBackendFeatureSet.includes(featureId)) {
+            let installButton = document.getElementById(`${groupId}_${installId}_install_button`);
+            if (installButton) {
+                installButton.remove();
+            }
+        }
+    });
 }

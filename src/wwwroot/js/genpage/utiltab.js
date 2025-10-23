@@ -306,7 +306,7 @@ class ModelDownloaderUtil {
                     metadata['modelspec.author'] = rawData.creator.username;
                 }
                 if (rawVersion.trainedWords) {
-                    metadata['modelspec.trigger_phrase'] = rawVersion.trainedWords.join(", ");
+                    metadata['modelspec.trigger_phrase'] = rawVersion.trainedWords.join("; ");
                 }
                 if (rawData.tags) {
                     metadata['modelspec.tags'] = rawData.tags.join(", ");
@@ -320,7 +320,7 @@ class ModelDownloaderUtil {
                 callback(rawData, rawVersion, metadata, modelType, file.downloadUrl, img, imgs.map(x => x.url), null);
             }
             if (imgs.length > 0) {
-                imageToData(imgs[0].url, img => applyMetadata(img));
+                imageToData(imgs[0].url, img => applyMetadata(img), true);
             }
             else {
                 let videos = rawVersion.images ? rawVersion.images.filter(img => img.type == 'video') : [];
@@ -388,7 +388,7 @@ class ModelDownloaderUtil {
             let parts = splitWithTail(url.substring(this.hfPrefix.length), '/', 5); // org, repo, 'blob', branch, filepath
             if (parts.length < 5) {
                 this.urlStatusArea.innerText = "URL appears to be a huggingface link, but not a specific file. Please use the path of a specific file inside the repo.";
-                this.button.disabled = false;
+                this.button.disabled = true;
                 return;
             }
             if (parts[4].endsWith('?download=true')) {
@@ -397,7 +397,7 @@ class ModelDownloaderUtil {
             }
             if (!parts[4].endsWith('.safetensors') && !parts[4].endsWith('.sft')) {
                 this.urlStatusArea.innerText = "URL appears to be a huggingface link, but not a safetensors file. Only safetensors can be auto-downloaded.";
-                this.button.disabled = false;
+                this.button.disabled = true;
                 return;
             }
             if (parts[2] == 'blob') {
@@ -454,7 +454,7 @@ class ModelDownloaderUtil {
                         <br><b>Date</b>: ${escapeHtml(rawVersion.createdAt)}`
                         + `<br><b>Model description</b>: ${safeHtmlOnly(rawData.description)}`
                         + (rawVersion.description ? `<br><b>Version description</b>: ${safeHtmlOnly(rawVersion.description)}` : '')
-                        + (rawVersion.trainedWords ? `<br><b>Trained words</b>: ${escapeHtml(rawVersion.trainedWords.join(", "))}` : '');
+                        + (rawVersion.trainedWords ? `<br><b>Trained words</b>: ${escapeHtml(rawVersion.trainedWords.join("; "))}` : '');
                     this.metadataZone.dataset.raw = `${JSON.stringify(metadata, null, 2)}`;
                     if (img) {
                         this.metadataZone.dataset.image = img;
@@ -481,7 +481,7 @@ class ModelDownloaderUtil {
                                         imgs[ind] = img;
                                         this.metadataZone.dataset.image = img;
                                         imgElem.src = img;
-                                    });
+                                    }, true);
                                 }
                             };
                             prevButton.onclick = () => { imgIndex--; updateImage(); };
@@ -827,7 +827,6 @@ class ModelMetadataScanner {
                             'description': model.description || '',
                             'standard_width': model.standard_width || 0,
                             'standard_height': model.standard_height || 0,
-                            'usage_hint': model.usage_hint || '',
                             'date': model.date || '',
                             'license': model.license || '',
                             'trigger_phrase': model.trigger_phrase || '',
@@ -836,7 +835,9 @@ class ModelMetadataScanner {
                             'tags': model.tags ? model.tags.join(', ') : null,
                             'preview_image': model.preview_image == "imgs/model_placeholder.jpg" ? null : model.preview_image,
                             'preview_image_metadata': null,
-                            'is_negative_embedding': model.is_negative_embedding
+                            'is_negative_embedding': model.is_negative_embedding,
+                            'lora_default_weight': model.lora_default_weight || '',
+                            'lora_default_confinement': model.lora_default_confinement || ''
                         };
                         genericRequest('EditModelMetadata', newMetadata, data => {
                             updated++;

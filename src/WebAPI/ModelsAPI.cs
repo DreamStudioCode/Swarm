@@ -4,6 +4,7 @@ using Newtonsoft.Json.Linq;
 using SwarmUI.Accounts;
 using SwarmUI.Backends;
 using SwarmUI.Core;
+using SwarmUI.Media;
 using SwarmUI.Text2Image;
 using SwarmUI.Utils;
 using System.IO;
@@ -419,7 +420,7 @@ public static class ModelsAPI
         input.Set(T2IParamTypes.Seed, Random.Shared.Next(int.MaxValue));
         input.Set(T2IParamTypes.Prompt, prompt);
         input.Set(T2IParamTypes.NegativePrompt, "");
-        input.PreparsePromptLikes();
+        input.ApplyLateSpecialLogic();
         return new JObject() { ["result"] = input.Get(T2IParamTypes.Prompt) };
     }
 
@@ -427,7 +428,7 @@ public static class ModelsAPI
     public static async Task<JObject> EditWildcard(Session session,
         [API.APIParameter("Exact filepath name of the wildcard.")] string card,
         [API.APIParameter("Newline-separated string listing of wildcard options.")] string options,
-        [API.APIParameter("Image-data-string of a preview, or null to not change.")] string preview_image = null,
+        [API.APIParameter("Image-data-string of a preview, 'clear' to remove, or null to not change.")] string preview_image = null,
         [API.APIParameter("Optional raw text of metadata to inject to the preview image.")] string preview_image_metadata = null)
     {
         card = Utilities.StrictFilenameClean(card);
@@ -439,10 +440,21 @@ public static class ModelsAPI
         string folder = Path.GetDirectoryName(path);
         Directory.CreateDirectory(folder);
         File.WriteAllBytes(path, StringConversionHelper.UTF8Encoding.GetBytes(options));
+        string imgPath = $"{WildcardsHelper.Folder}/{card}.jpg";
         if (!string.IsNullOrWhiteSpace(preview_image))
         {
-            Image img = Image.FromDataString(preview_image).ToMetadataJpg(preview_image_metadata);
-            File.WriteAllBytes($"{WildcardsHelper.Folder}/{card}.jpg", img.ImageData);
+            if (preview_image == "clear")
+            {
+                if (File.Exists(imgPath))
+                {
+                    File.Delete(imgPath);
+                }
+            }
+            else
+            {
+                ImageFile img = ImageFile.FromDataString(preview_image).ToMetadataJpg(preview_image_metadata);
+                File.WriteAllBytes(imgPath, img.RawData);
+            }
         }
         WildcardsHelper.WildcardFiles[card.ToLowerFast()] = new WildcardsHelper.Wildcard() { Name = card };
         Interlocked.Increment(ref ModelEditID);
@@ -464,9 +476,11 @@ public static class ModelsAPI
         [API.APIParameter("New model `trigger_phrase` metadata value.")] string trigger_phrase,
         [API.APIParameter("New model `prediction_type` metadata value.")] string prediction_type,
         [API.APIParameter("New model `tags` metadata value (comma-separated list).")] string tags,
-        [API.APIParameter("New model `preview_image` metadata value (image-data-string format, or null to not change).")] string preview_image = null,
+        [API.APIParameter("New model `preview_image` metadata value (image-data-string format, 'clear' to remove, or null to not change).")] string preview_image = null,
         [API.APIParameter("Optional raw text of metadata to inject to the preview image.")] string preview_image_metadata = null,
         [API.APIParameter("New model `is_negative_embedding` metadata value.")] bool is_negative_embedding = false,
+        [API.APIParameter("New model `lora_default_weight` metadata value.")] string lora_default_weight = "",
+        [API.APIParameter("New model `lora_default_confinement` metadata value.")] string lora_default_confinement = "",
         [API.APIParameter("The model's sub-type, eg `Stable-Diffusion`, `LoRA`, etc.")] string subtype = "Stable-Diffusion")
     {
         using ManyReadOneWriteLock.ReadClaim claim = Program.RefreshLock.LockRead();
@@ -501,11 +515,19 @@ public static class ModelsAPI
             actualModel.Metadata ??= new();
             if (!string.IsNullOrWhiteSpace(preview_image))
             {
-                Image img = Image.FromDataString(preview_image).ToMetadataJpg(preview_image_metadata);
-                if (img is not null)
+                if (preview_image == "clear")
                 {
-                    actualModel.PreviewImage = img.AsDataString();
-                    actualModel.Metadata.PreviewImage = actualModel.PreviewImage;
+                    actualModel.PreviewImage = "imgs/model_placeholder.jpg";
+                    actualModel.Metadata.PreviewImage = null;
+                }
+                else
+                {
+                    ImageFile img = ImageFile.FromDataString(preview_image).ToMetadataJpg(preview_image_metadata);
+                    if (img is not null)
+                    {
+                        actualModel.PreviewImage = img.AsDataString();
+                        actualModel.Metadata.PreviewImage = actualModel.PreviewImage;
+                    }
                 }
             }
             actualModel.Metadata.Author = author;
@@ -515,14 +537,17 @@ public static class ModelsAPI
             actualModel.Metadata.TriggerPhrase = trigger_phrase;
             actualModel.Metadata.Tags = string.IsNullOrWhiteSpace(tags) ? null : tags.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
             actualModel.Metadata.IsNegativeEmbedding = is_negative_embedding;
+            actualModel.Metadata.LoraDefaultWeight = lora_default_weight;
+            actualModel.Metadata.LoraDefaultConfinement = lora_default_confinement;
             actualModel.Metadata.PredictionType = string.IsNullOrWhiteSpace(prediction_type) ? null : prediction_type;
         }
         handler.ResetMetadataFrom(actualModel);
-        _ = Utilities.RunCheckedTask(() => actualModel.ResaveModel());
+        _ = Utilities.RunCheckedTask(() => actualModel.ResaveModel(), "model resave");
         Interlocked.Increment(ref ModelEditID);
         return new JObject() { ["success"] = true };
     }
 
+    public static AsciiMatcher TokenTextLimiter = new(AsciiMatcher.BothCaseLetters + AsciiMatcher.Digits + " -_.,/");
 
     [API.APIDescription("Downloads a model to the server, with websocket progress updates.\nNote that this does not trigger a model refresh itself, you must do that after a 'success' reply.", "")]
     public static async Task<JObject> DoModelDownloadWS(Session session, WebSocket ws,
@@ -549,6 +574,7 @@ public static class ModelsAPI
         }
         string originalUrl = url;
         url = url.Before('#');
+        Dictionary<string, string> headers = [];
         if (url.StartsWith("https://civitai.com/"))
         {
             string civitaiApiKey = session.User.GetGenericData("civitai_api", "key");
@@ -556,9 +582,18 @@ public static class ModelsAPI
             {
                 if (!url.Contains("?token=") && !url.Contains("&token="))
                 {
-                    url += (url.Contains('?') ? "&token=" : "?token=") + civitaiApiKey;
+                    url += (url.Contains('?') ? "&token=" : "?token=") + TokenTextLimiter.TrimToMatches(civitaiApiKey);
                     Logs.Debug($"Added Civitai API Key to download request. Original URL: {originalUrl}");
                 }
+            }
+        }
+        else if (url.StartsWith("https://huggingface.co/"))
+        {
+            string hfApiKey = session.User.GetGenericData("huggingface_api", "key");
+            if (!string.IsNullOrEmpty(hfApiKey))
+            {
+                headers["Authorization"] = $"Bearer {TokenTextLimiter.TrimToMatches(hfApiKey)}";
+                Logs.Debug($"Added HuggingFace API Key to download request.");
             }
         }
         try
@@ -584,7 +619,7 @@ public static class ModelsAPI
                     ["overall_percent"] = 0.2,
                     ["per_second"] = perSec
                 }, API.WebsocketTimeout).Wait();
-            }, canceller, originalUrl);
+            }, canceller, originalUrl, headers: headers);
             Task listenForSignal = Utilities.RunCheckedTask(async () =>
             {
                 while (true)

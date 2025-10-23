@@ -19,6 +19,7 @@ using SwarmUI.Text2Image;
 using System.Net.Sockets;
 using Microsoft.VisualBasic.FileIO;
 using Microsoft.AspNetCore.Cryptography.KeyDerivation;
+using SwarmUI.Media;
 
 namespace SwarmUI.Utils;
 
@@ -48,6 +49,17 @@ public static class Utilities
                 QuickGC();
             }
         };
+        if (Program.RequireControlPingEveryMS > 0)
+        {
+            Program.SlowTickEvent += () =>
+            {
+                if (Program.TimeLastRemoteControlPing + Program.RequireControlPingEveryMS < Environment.TickCount64)
+                {
+                    Logs.Error($"`require_control_within` is set, and a ping has not been received in the last {(Environment.TickCount64 - Program.TimeLastRemoteControlPing) / 1000} seconds, SwarmUI will now shut down due to lack of remote control.");
+                    Program.Shutdown();
+                }
+            };
+        }
         new Thread(TickLoop).Start();
     }
 
@@ -479,12 +491,12 @@ public static class Utilities
         return content;
     }
 
-    public static MultipartFormDataContent MultiPartFormContentDiscordImage(Image image, JObject jobj)
+    public static MultipartFormDataContent MultiPartFormContentDiscordFile(MediaFile file, JObject jobj)
     {
         MultipartFormDataContent content = [];
-        ByteArrayContent imageContent = new(image.ImageData);
-        imageContent.Headers.ContentType = new MediaTypeHeaderValue(image.MimeType());
-        content.Add(imageContent, "file", $"image.{image.Extension}");
+        ByteArrayContent fileContent = new(file.RawData);
+        fileContent.Headers.ContentType = new MediaTypeHeaderValue(file.Type.MimeType);
+        content.Add(fileContent, "file", $"image.{file.Type.Extension}");
         content.Add(JSONContent(jobj), "payload_json");
         return content;
     }
@@ -606,7 +618,7 @@ public static class Utilities
     }
 
     /// <summary>Runs a task async with an exception check.</summary>
-    public static Task RunCheckedTask(Action action)
+    public static Task RunCheckedTask(Action action, string sourceId = "unlabeled")
     {
         return Task.Run(() =>
         {
@@ -616,12 +628,12 @@ public static class Utilities
             }
             catch (Exception ex)
             {
-                Logs.Error($"Internal error in async task: {ex.ReadableString()}");
+                Logs.Error($"Internal error in async task ({sourceId}): {ex.ReadableString()}");
             }
         });
     }
 
-    public static Task RunCheckedTask(Func<Task> action)
+    public static Task RunCheckedTask(Func<Task> action, string sourceId = "unlabeled")
     {
         return Task.Run(async () =>
         {
@@ -631,7 +643,7 @@ public static class Utilities
             }
             catch (Exception ex)
             {
-                Logs.Error($"Internal error in async task: {ex.ReadableString()}");
+                Logs.Error($"Internal error in async task ({sourceId}): {ex.ReadableString()}");
             }
         });
     }
@@ -655,6 +667,8 @@ public static class Utilities
         }
         try
         {
+            sys_kill(proc.Id, 2); // try CTRL+C super-graceful exit (SIGINT=2)
+            proc.WaitForExit(TimeSpan.FromSeconds(graceSeconds));
             sys_kill(proc.Id, 15); // try graceful exit (SIGTERM=15)
             proc.WaitForExit(TimeSpan.FromSeconds(graceSeconds));
         }
@@ -674,15 +688,26 @@ public static class Utilities
     /// <summary>Reusable general web client.</summary>
     public static HttpClient UtilWebClient = NetworkBackendUtils.MakeHttpClient();
 
+    /// <summary>Reusable general web client with a very long timeout, for <see cref="DownloadFile"/> in particular to use.</summary>
+    public static HttpClient DownloaderWebClient = NetworkBackendUtils.MakeHttpClient(120);
+
     /// <summary>Downloads a file from a given URL and saves it to a given filepath.</summary>
-    public static async Task DownloadFile(string url, string filepath, Action<long, long, long> progressUpdate, CancellationTokenSource cancel = null, string altUrl = null, string verifyHash = null)
+    public static async Task DownloadFile(string url, string filepath, Action<long, long, long> progressUpdate, CancellationTokenSource cancel = null, string altUrl = null, string verifyHash = null, Dictionary<string, string> headers = null)
     {
         altUrl ??= url;
         cancel ??= new();
         using CancellationTokenSource combinedCancel = CancellationTokenSource.CreateLinkedTokenSource(Program.GlobalProgramCancel, cancel.Token);
         Directory.CreateDirectory(Path.GetDirectoryName(filepath));
         using FileStream writer = File.OpenWrite(filepath);
-        using HttpResponseMessage response = await UtilWebClient.SendAsync(new HttpRequestMessage(HttpMethod.Get, url), HttpCompletionOption.ResponseHeadersRead, Program.GlobalProgramCancel);
+        HttpRequestMessage request = new(HttpMethod.Get, url);
+        if (headers is not null)
+        {
+            foreach ((string key, string value) in headers)
+            {
+                request.Headers.Add(key, value);
+            }
+        }
+        HttpResponseMessage response = await UtilWebClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, Program.GlobalProgramCancel);
         long length = response.Content.Headers.ContentLength ?? 0;
         ConcurrentQueue<byte[]> chunks = new();
         ConcurrentQueue<(long, long, long, bool)> progUpdates = new();
@@ -693,53 +718,91 @@ public static class Utilities
         using Stream dlStream = await response.Content.ReadAsStreamAsync();
         Task loadData = Task.Run(async () =>
         {
+            HttpResponseMessage workingResponse = response;
+            Stream workingStream = dlStream;
             try
             {
+                int tryCount = 0;
+                long totalRead = 0;
                 byte[] buffer = new byte[Math.Min(length + 1024, 1024 * 1024 * 64)]; // up to 64 megabytes, just grab as big a chunk as we can at a time
                 int nextOffset = 0;
                 while (true)
                 {
-                    using CancellationTokenSource delayCleanup = new();
-                    Task<int> readTask = Task.Run(async () => await dlStream.ReadAsync(buffer.AsMemory(nextOffset), combinedCancel.Token));
-                    Task waiting = Task.Delay(TimeSpan.FromMinutes(2), delayCleanup.Token);
-                    Task reading = Task.Run(async () => await readTask);
-                    Task first = await Task.WhenAny(waiting, reading);
-                    if (first == waiting)
+                    try
                     {
-                        Logs.Warning($"Download from '{altUrl}' has had no update for 2 minutes. Download may be failing. Will wait 3 more minutes and consider failed if it exceeds 5 total minutes.");
-                        Task waiting2 = Task.Delay(TimeSpan.FromMinutes(3), delayCleanup.Token);
-                        Task second = await Task.WhenAny(waiting2, reading);
-                        if (second == waiting2)
+                        using CancellationTokenSource delayCleanup = new();
+                        Task<int> readTask = Task.Run(async () => await workingStream.ReadAsync(buffer.AsMemory(nextOffset), combinedCancel.Token));
+                        Task waiting = Task.Delay(TimeSpan.FromMinutes(2), delayCleanup.Token);
+                        Task reading = Task.Run(async () => await readTask);
+                        Task first = await Task.WhenAny(waiting, reading);
+                        if (first == waiting)
+                        {
+                            Logs.Warning($"Download from '{altUrl}' has had no update for 2 minutes. Download may be failing. Will wait 3 more minutes and consider failed if it exceeds 5 total minutes.");
+                            Task waiting2 = Task.Delay(TimeSpan.FromMinutes(3), delayCleanup.Token);
+                            Task second = await Task.WhenAny(waiting2, reading);
+                            if (second == waiting2)
+                            {
+                                chunks.Enqueue(null);
+                                throw new SwarmReadableErrorException("Download timed out, 5 minutes with no new data over stream.");
+                            }
+                            Logs.Info($"Download progressed before timeout, continuing as normal (received {new MemoryNum(await readTask)}).");
+                        }
+                        delayCleanup.Cancel();
+                        int read = await readTask;
+                        if (read <= 0)
+                        {
+                            if (nextOffset > 0)
+                            {
+                                chunks.Enqueue(buffer[..nextOffset]);
+                                totalRead += nextOffset;
+                            }
+                            chunks.Enqueue(null);
+                            break;
+                        }
+                        if (nextOffset + read < 1024 * 1024 * 5)
+                        {
+                            nextOffset += read;
+                        }
+                        else
+                        {
+                            chunks.Enqueue(buffer[..(nextOffset + read)]);
+                            totalRead += nextOffset + read;
+                            nextOffset = 0;
+                        }
+                        if (cancel is not null && cancel.IsCancellationRequested)
                         {
                             chunks.Enqueue(null);
-                            throw new SwarmReadableErrorException("Download timed out, 5 minutes with no new data over stream.");
+                            break;
                         }
-                        Logs.Info($"Download progressed before timeout, continuing as normal (received {new MemoryNum(await readTask)}).");
                     }
-                    delayCleanup.Cancel();
-                    int read = await readTask;
-                    if (read <= 0)
+                    catch (Exception ex)
                     {
-                        if (nextOffset > 0)
+                        if (tryCount < 4 && totalRead > 0 && totalRead < length)
                         {
-                            chunks.Enqueue(buffer[..nextOffset]);
+                            Logs.Debug($"Download from '{altUrl}' failed in loadData with internal exception, (WILL RETRY): {ex.ReadableString()}");
+                            tryCount++;
+                            nextOffset = 0;
+                            workingStream.Dispose();
+                            workingStream = null;
+                            workingResponse.Dispose();
+                            request = new(HttpMethod.Get, url);
+                            if (headers is not null)
+                            {
+                                foreach ((string key, string value) in headers)
+                                {
+                                    request.Headers.Add(key, value);
+                                }
+                            }
+                            request.Headers.Range = new(totalRead, length);
+                            workingResponse = await UtilWebClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, Program.GlobalProgramCancel);
+                            if (workingResponse.StatusCode != HttpStatusCode.PartialContent)
+                            {
+                                throw new SwarmReadableErrorException($"Failed to download {altUrl} (expecting Partial range continue): got response code {(int)workingResponse.StatusCode} {workingResponse.StatusCode}");
+                            }
+                            workingStream = await workingResponse.Content.ReadAsStreamAsync();
+                            continue;
                         }
-                        chunks.Enqueue(null);
-                        break;
-                    }
-                    if (nextOffset + read < 1024 * 1024 * 5)
-                    {
-                        nextOffset += read;
-                    }
-                    else
-                    {
-                        chunks.Enqueue(buffer[..(nextOffset + read)]);
-                        nextOffset = 0;
-                    }
-                    if (cancel is not null && cancel.IsCancellationRequested)
-                    {
-                        chunks.Enqueue(null);
-                        break;
+                        throw;
                     }
                 }
             }
@@ -748,6 +811,11 @@ public static class Utilities
                 Logs.Error($"Download from '{altUrl}' failed in loadData with internal exception: {ex.ReadableString()}");
                 chunks.Enqueue(null);
                 throw;
+            }
+            finally
+            {
+                workingStream?.Dispose();
+                workingResponse?.Dispose();
             }
         });
         void removeFile()
@@ -1092,6 +1160,24 @@ public static class Utilities
                 return exe;
             }
         }
+        string linuxPath = "dlbackend/ComfyUI/venv/lib";
+        if (Directory.Exists(linuxPath))
+        {
+            string subFolder = Directory.EnumerateDirectories(linuxPath, "python*").FirstOrDefault();
+            if (subFolder is not null)
+            {
+                string linuxFolder = $"{subFolder}/site-packages/imageio_ffmpeg/binaries";
+                if (Directory.Exists(linuxFolder))
+                {
+                    string exe = Directory.EnumerateFiles(linuxFolder, "ffmpeg-linux*").FirstOrDefault();
+                    if (!string.IsNullOrWhiteSpace(exe))
+                    {
+                        Logs.Debug($"Will use comfy copy of ffmpeg at '{exe}'");
+                        return exe;
+                    }
+                }
+            }
+        }
         Logs.Warning($"No ffmpeg available, some video-related features will not work. Install ffmpeg and ensure it is in your PATH to enable these features.");
         return null;
     }, true);
@@ -1130,6 +1216,7 @@ public static class Utilities
     /// <summary>Launch, run, and return the text output of, a 'git' command input.</summary>
     public static async Task<string> RunGitProcess(string args, string dir = null, bool canRetry = true)
     {
+        int timeout = Math.Clamp(Program.ServerSettings.Maintenance.GitTimeoutMinutes, 1, 999);
         dir ??= Environment.CurrentDirectory;
         dir = Path.GetFullPath(dir);
         ProcessStartInfo start = new("git", args)
@@ -1169,7 +1256,7 @@ public static class Utilities
                 return result;
             }
             Task exitTask = p.WaitForExitAsync(Program.GlobalProgramCancel);
-            Task finished = await Task.WhenAny(exitTask, Task.Delay(TimeSpan.FromMinutes(1)));
+            Task finished = await Task.WhenAny(exitTask, Task.Delay(TimeSpan.FromMinutes(timeout)));
             if (finished == exitTask)
             {
                 return await result();
@@ -1179,7 +1266,7 @@ public static class Utilities
             {
                 return await result();
             }
-            Logs.Warning($"Git process '{args}' in '{dir}' has been running for over a minute, something may have gone wrong, allowing 1 more minute to finish...");
+            Logs.Warning($"Git process '{args}' in '{dir}' has been running for over {timeout} minute{(timeout == 1 ? "" : "s")}, something may have gone wrong, allowing 1 more minute to finish...");
             finished = await Task.WhenAny(exitTask, Task.Delay(TimeSpan.FromMinutes(1)));
             if (finished == exitTask)
             {
@@ -1190,7 +1277,7 @@ public static class Utilities
             {
                 return await result();
             }
-            Logs.Error($"Git process '{args}' in '{dir}' has been running for over 2 minutes - something has gone wrong. Will background.");
+            Logs.Error($"Git process '{args}' in '{dir}' has been running for over {timeout + 1} minutes - something has gone wrong. Will background.");
             NetworkBackendUtils.ReportLogsFromProcess(p, "failed git process", "failed-git");
             return "Failed - process never finished in time";
         }

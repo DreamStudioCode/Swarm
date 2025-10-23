@@ -109,6 +109,14 @@ function escapeJsString(text) {
     return text.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll("'", "\\'").replaceAll('\n', '\\n').replaceAll('\r', '\\r').replaceAll('\t', '\\t');
 }
 
+/** Escapes a string for use in a URL. */
+function escapeHtmlForUrl(text) {
+    if (text == null) {
+        return '';
+    }
+    return text.replaceAll('&', '%26').replaceAll('<', '%3C').replaceAll('>', '%3E').replaceAll('"', '%22').replaceAll("'", '%27').replaceAll('\n', '%0A').replaceAll('\r', '%0D').replaceAll('\t', '%09');
+}
+
 function isHtmlSpanStyleAllowed(text) {
     if (text.startsWith('"') && text.endsWith('"')) {
         text = text.substring(1, text.length - 1);
@@ -307,16 +315,23 @@ function findParentOfClass(elem, className) {
 
 /** Returns all of the text nodes within an element. */
 function getTextNodesIn(node) {
-    var textNodes = [];
     if (node.nodeType == 3) {
-        textNodes.push(node);
+        if (node.textContent == '\n' && node.nextSibling && node.nextSibling.tagName == 'BR') {
+            // Some form of browser wonk, enter inserts a "\n" node and also a "<br>" node, which is visually only a single newline, so just... pretend we don't see the stray node I guess???
+            return [];
+        }
+        return [node];
     }
     else {
+        var textNodes = [];
+        if (node.tagName == 'BR') {
+            textNodes.push(node);
+        }
         for (let child of node.childNodes) {
             textNodes.push.apply(textNodes, getTextNodesIn(child));
         }
+        return textNodes;
     }
-    return textNodes;
 }
 
 /** Sets the selection range of the given element to the given start and end character indices. This is for fixing contenteditable elements. */
@@ -327,9 +342,10 @@ function setSelectionRange(el, start, end) {
     let foundStart = false;
     let charCount = 0
     let endCharCount;
-    for (let textNode of textNodes) {
-        endCharCount = charCount + textNode.length;
-        if (!foundStart && start >= charCount && start <= endCharCount) {
+    for (let i = 0; i < textNodes.length; i++) {
+        let textNode = textNodes[i];
+        endCharCount = charCount + (textNode.tagName == 'BR' ? 1 : textNode.textContent.length);
+        if (!foundStart && start >= charCount && (i == textNodes.length - 1 ? start <= endCharCount : start < endCharCount)) {
             range.setStart(textNode, start - charCount);
             foundStart = true;
         }
@@ -356,19 +372,25 @@ function isChildOf(node, parentId) {
 }
 
 /** Returns the current cursor position in the given contenteditable span, in a way that compensates for sub-spans. */
-function getCurrentCursorPosition(parentId) {
+function getCurrentCursorPosition(parentId, getEnd = false) {
     let selection = window.getSelection();
+    if (selection.rangeCount == 0) {
+        return -1;
+    }
+    let range = selection.getRangeAt(0);
     let charCount = -1;
     let node;
-    if (selection.focusNode && isChildOf(selection.focusNode, parentId)) {
-        node = selection.focusNode;
-        charCount = selection.focusOffset;
+    let containerTarget = getEnd ? range.endContainer : range.startContainer;
+    let offsetTarget = getEnd ? range.endOffset : range.startOffset;
+    if (containerTarget && isChildOf(containerTarget, parentId)) {
+        node = containerTarget;
+        charCount = offsetTarget;
         if (node.id == parentId) {
             let i = 0;
             let altCount = 0;
             for (let child of node.childNodes) {
                 if (i++ < charCount) {
-                    altCount += child.textContent.length;
+                    altCount += child.tagName == 'BR' ? 1 : child.textContent.length;
                 }
             }
             return altCount;
@@ -379,7 +401,7 @@ function getCurrentCursorPosition(parentId) {
             }
             else if (node.previousSibling) {
                 node = node.previousSibling;
-                charCount += node.textContent.length;
+                charCount += node.tagName == 'BR' ? 1 : node.textContent.length;
             }
             else {
                 node = node.parentNode;
@@ -387,6 +409,50 @@ function getCurrentCursorPosition(parentId) {
         }
     }
     return charCount;
+}
+
+/** Returns the text content of the given element, compatible with both textareas and contenteditable spans. */
+function getTextContent(box) {
+    if (box.tagName == 'TEXTAREA') {
+        return box.value;
+    }
+    let nodes = getTextNodesIn(box);
+    let text = '';
+    for (let node of nodes) {
+        text += node.tagName == 'BR' ? '\n' : node.textContent;
+    }
+    return text;
+}
+
+/** Sets the text content of the given element, compatible with both textareas and contenteditable spans. */
+function setTextContent(box, text) {
+    if (box.tagName == 'TEXTAREA') {
+        box.value = text;
+    }
+    else {
+        box.innerText = text;
+    }
+}
+
+/** Sets the selection range of the given element, compatible with both textareas and contenteditable spans. */
+function setTextSelRange(box, start, end) {
+    if (box.tagName == 'TEXTAREA') {
+        box.selectionStart = start;
+        box.selectionEnd = end;
+    }
+    else {
+        setSelectionRange(box, start, end);
+    }
+}
+
+/** Returns the selection range of the given element, compatible with both textareas and contenteditable spans. */
+function getTextSelRange(box) {
+    if (box.tagName == 'TEXTAREA') {
+        return [box.selectionStart, box.selectionEnd];
+    }
+    let start = getCurrentCursorPosition(box.id, false);
+    let end = getCurrentCursorPosition(box.id, true);
+    return [start, end];
 }
 
 /** Downloads the data at the given URL and returns a 'data:whatever,base64:...' URL. */
@@ -474,18 +540,30 @@ function getCookie(name) {
 
 /** Lists all cookies that start with the given prefix. */
 function listCookies(prefix) {
-    let decodedCookie = decodeURIComponent(document.cookie);
-    let ca = decodedCookie.split(';');
-    let result = [];
-    for(let i = 0; i < ca.length; i++) {
-        let c = ca[i].trim();
-        let equal = c.indexOf('=');
-        let name = c.substring(0, equal);
-        if (name.startsWith(prefix)) {
-            result.push(name);
+    try {
+        let decodedCookie = decodeURIComponent(document.cookie);
+        let ca = decodedCookie.split(';');
+        let result = [];
+        for(let i = 0; i < ca.length; i++) {
+            let c = ca[i].trim();
+            let equal = c.indexOf('=');
+            let name = c.substring(0, equal);
+            if (name.startsWith(prefix)) {
+                result.push(name);
+            }
         }
+        return result;
     }
-    return result;
+    catch (e) {
+        console.error('Error listing cookies:', e);
+        if (e instanceof URIError) { // Malformed cookie data, try to nuke em
+            for (let cookie of document.cookie.split(';')) {
+                let name = cookie.trim().split('=')[0];
+                deleteCookie(name);
+            }
+        }
+        return [];
+    }
 }
 
 /** Deletes the cookie with the given name. */
@@ -943,10 +1021,27 @@ function guessMimeTypeForExtension(filename) {
     return mimeTypeForExtension[ext] || '';
 }
 
-/** Returns true if the given filename is for a video file based on the extension, or false if it is not. */
+/** Returns a mimetype if the given filename is for a video file based on the extension, or boolean false if it is not. */
 function isVideoExt(filename) {
+    if (filename.startsWith('data:')) {
+        let semicolonIndex = filename.indexOf(';');
+        let colonIndex = filename.indexOf(':');
+        if (semicolonIndex >= 0 && colonIndex >= 0) {
+            let mimeType = filename.substring(colonIndex + 1, semicolonIndex);
+            if (mimeType == 'video/webp') {
+                return false;
+            }
+            if (mimeType.startsWith('video/')) {
+                return mimeType;
+            }
+        }
+        return false;
+    }
     let ext = filename.split('.').pop();
-    return ['mp4', 'mpeg', 'mov', 'webm'].includes(ext);
+    if (['mp4', 'mpeg', 'mov', 'webm'].includes(ext)) {
+        return `video/${ext}`;
+    }
+    return false;
 }
 
 /** 'string.split' with a count limit, and without the stupid misbehavior of the default JS 'string.split'. */
@@ -985,4 +1080,18 @@ function copyText(text) {
         document.execCommand('copy');
         document.body.removeChild(temp);
     }
+}
+
+/** Measures the width of a given text in a given relative div. */
+function measureText(text, relativeDiv = null) {
+    relativeDiv = relativeDiv || document.body;
+    let div = document.createElement('div');
+    div.style.position = 'absolute';
+    div.style.opacity = '0';
+    div.style.left = '-999999px';
+    div.innerText = text;
+    relativeDiv.appendChild(div);
+    let width = div.offsetWidth;
+    relativeDiv.removeChild(div);
+    return width;
 }

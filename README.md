@@ -1,10 +1,10 @@
 # SwarmUI
 
-**SwarmUI v0.9.6 Beta**.
+**SwarmUI v0.9.7 Beta**.
 
 *Formerly known as StableSwarmUI.*
 
-A Modular AI Image Generation Web-User-Interface, with an emphasis on making powertools easily accessible, high performance, and extensibility. Supports AI image models (*Stable Diffusion, Flux, etc.*), and AI video models (*LTX-V, Hunyuan Video, Cosmos, Wan, etc.*), with plans to support eg audio and more in the future.
+A Modular AI Image Generation Web-User-Interface, with an emphasis on making powertools easily accessible, high performance, and extensibility. Supports AI image models (*Stable Diffusion, Flux, Qwen Image, etc.*), and AI video models (*Wan, Hunyuan Video, etc.*), with plans to support eg audio and more in the future.
 
 ![ui-screenshot](.github/images/swarmui.jpg)
 
@@ -72,25 +72,26 @@ Note: if you're on Windows 10, you may need to manually install [git](https://gi
 
 # Installing on Linux
 
-- Install `git`, `python3` via your OS package manager if they are not already installed (make sure to include `pip` and `venv` on distros that do not include them in python directly)
-    - For example, on recent Ubuntu versions, `sudo apt install git python3-pip python3-venv`
+### Prereqs
+
+- Install `git` and `python3` via your OS package manager if they are not already installed (make sure to include `pip` and `venv` on distros that do not include them in python directly)
+    - For example, on some Ubuntu (desktop) versions, `sudo apt install git python3-pip python3-venv`, or you may need <https://launchpad.net/~deadsnakes/+archive/ubuntu/ppa>
+    - For Debian or Ubuntu Server, `sudo apt install git python3-full`
+    - You'll want Python 3.11. Things should also work fine with 3.10 or 3.12. Do not use 3.13.
+    - Make sure `python3.11 -m pip --version` returns a valid package
+
+### Linux Easy Install
+
 - Download [the install-linux.sh file](https://github.com/mcmonkeyprojects/SwarmUI/releases/download/0.6.5-Beta/install-linux.sh), store it somewhere you want to install at, and run it
-    - If you like terminals, you can open a terminal to the folder and run the following commands:
+    - If you like terminals, you can open a terminal to the folder and run the following commands: (Yes this link is still current):
         - `wget https://github.com/mcmonkeyprojects/SwarmUI/releases/download/0.6.5-Beta/install-linux.sh -O install-linux.sh`
         - `chmod +x install-linux.sh`
 - Run the `./install-linux.sh` script, it will install everything for you and eventually open the webpage in your browser.
 - Follow the install instructions on-page.
 
-- You can at any time in the future run the `launch-linux.sh` script to re-launch Swarm.
-- If the page doesn't open itself, you can manually open `http://localhost:7801`
+### Linux Manual Install
 
-# Alternate Manual Linux Install
-
-- Install `git`, `python3` via your OS package manager if they are not already installed (make sure to include `pip` and `venv` on distros that do not include them in python directly)
-    - For example, on recent Ubuntu versions, `sudo apt install git python3-pip python3-venv`
-    - You'll want Python 3.11. Things should also work fine with 3.10 or 3.12. Do not use 3.13.
 - Install DotNET 8 using the instructions at https://dotnet.microsoft.com/en-us/download/dotnet/8.0 (you need `dotnet-sdk-8.0`, as that includes all relevant sub-packages)
-    - Some users [have said](https://github.com/Stability-AI/StableSwarmUI/pull/6) that certain Linux distros expect `aspnet-runtime` to be installed separately
 - Open a shell terminal and `cd` to a directory you want to install into
 - Run shell commands:
     - `git clone https://github.com/mcmonkeyprojects/SwarmUI`
@@ -100,7 +101,12 @@ Note: if you're on Windows 10, you may need to manually install [git](https://gi
 - open `http://localhost:7801/Install` (if it doesn't launch itself)
 - Follow the install instructions on-page.
 
-(TODO): Maybe outlink a dedicated document with per-distro details and whatever. Maybe also make a one-click installer for Linux?
+### Linux Install Notes
+
+- You can at any time in the future run the `launch-linux.sh` script to re-launch Swarm.
+- If the page doesn't open itself, you can manually open `http://localhost:7801`
+
+(TODO): Maybe outlink a dedicated document with per-distro details and whatever. Maybe also make a one-click installer for Linux? Can we remove the global python install prereq?
 
 # Installing on Mac
 
@@ -145,7 +151,7 @@ This project:
 - can automatically install [ultralytics](https://github.com/ultralytics/ultralytics) (AGPL) for `YOLOv8` face detection (ie `SwarmYoloDetection` node or `<segment:yolo-...>` syntax usage may become subject to AGPL terms),
 - can automatically install [insightface](https://github.com/deepinsight/insightface) (MIT) for `IP Adapter - Face` support
 - uses [JSON.NET](https://github.com/JamesNK/Newtonsoft.Json) (MIT), [FreneticUtilities](https://github.com/FreneticLLC/FreneticUtilities) (MIT), [LiteDB](https://github.com/mbdavid/LiteDB) (MIT), [ImageSharp](https://github.com/SixLabors/ImageSharp/) (Apache2 under open-source Split License)
-- embeds copies of web assets from [BootStrap](https://getbootstrap.com/) (MIT), [Select2](https://select2.org/) (MIT), [JQuery](https://jquery.com/) (MIT), [exifr](https://github.com/MikeKovarik/exifr) (MIT).
+- embeds copies of web assets from [BootStrap](https://getbootstrap.com/) (MIT), [Select2](https://select2.org/) (MIT), [JQuery](https://jquery.com/) (MIT), [exif-reader](https://github.com/mattiasw/ExifReader) (MPL-2.0).
 - contains some icons from [Cristian Munoz](https://www.figma.com/community/file/1311159026125960259/7000-free-ui-icons) (CC-BY-4.0), the font [inter by rsms](https://github.com/rsms/inter) (OFL), [Unifont by GNU](https://unifoundry.com/unifont/) (OFL), [Material Symbols Outlined by Google](https://fonts.google.com/icons) (Apache2).
 - can be used to install some custom node packs, which have individual license notices for any non-pure-FOSS licenses before install.
 - supports user-built extensions which may have their own licenses or legal conditions.

@@ -20,6 +20,8 @@ public class T2IPromptHandling
 
         public Dictionary<string, string> Variables = [];
 
+        public Dictionary<string, string> Macros = [];
+
         public int SectionID = 0;
 
         public int Depth = 0;
@@ -46,7 +48,9 @@ public class T2IPromptHandling
                 return text;
             }
             Depth++;
+            int sectionId = SectionID;
             string result = ProcessPromptLike(text, this, false);
+            SectionID = sectionId;
             Depth--;
             return result;
         }
@@ -101,7 +105,7 @@ public class T2IPromptHandling
     /// <summary>Mapping of prompt tag prefixes, to allow for registration of custom prompt tags.</summary>
     public static Dictionary<string, Func<string, PromptTagContext, string>> PromptTagProcessors = [];
 
-    /// <summary>Mapping of prompt tags that require no input.</summary>
+    /// <summary>Mapping of prompt tags that can run very early on or require no input.</summary>
     public static Dictionary<string, Func<string, PromptTagContext, string>> PromptTagBasicProcessors = [];
 
     /// <summary>Mapping of prompt tag prefixes, to allow for registration of custom prompt tags - specifically post-processing like lora (which remove from prompt and get read elsewhere).</summary>
@@ -428,8 +432,30 @@ public class T2IPromptHandling
         {
             return "";
         }
+        static string estimateAsSectionBreak(string data, PromptTagContext context)
+        {
+            return "<break>";
+        }
         PromptTagLengthEstimators["preset"] = estimateEmpty;
         PromptTagLengthEstimators["p"] = estimateEmpty;
+        PromptTagProcessors["param"] = (data, context) =>
+        {
+            string preData = context.PreData;
+            if (preData is null)
+            {
+                context.TrackWarning("Prompt tag 'param' requires pre-data to specify the parameter name.");
+                return null;
+            }
+            data = context.Parse(data).Trim();
+            if (T2IParamTypes.TryGetType(preData, out T2IParamType type, context.Input))
+            {
+                T2IParamTypes.ApplyParameter(preData, data, context.Input, type.CanSectionalize ? context.SectionID : 0);
+                return "";
+            }
+            context.TrackWarning($"Parameter '{preData}' does not exist and will be ignored.");
+            return null;
+        };
+        PromptTagLengthEstimators["param"] = estimateEmpty;
         PromptTagProcessors["embed"] = (data, context) =>
         {
             data = context.Parse(data);
@@ -493,10 +519,13 @@ public class T2IPromptHandling
                 context.TrackWarning($"Lora '{lora}' does not exist and will be ignored.");
                 return null;
             }
-            string shortMatch = matched.Replace(".safetensors", "");
-            if (lora.Length < shortMatch.Length)
+            if (matched.EndsWith(".safetensors"))
             {
-                Logs.Warning($"LoRA input '{lora}' is not a valid LoRA model name, but appears to match '{shortMatch}', will use that instead.");
+                matched = matched.BeforeLast('.');
+            }
+            if (lora.Length < matched.Length)
+            {
+                Logs.Warning($"LoRA input '{lora}' is not a valid LoRA model name, but appears to match '{matched}', will use that instead.");
             }
             T2IModel loraModel = Program.T2IModelSets["LoRA"].GetModel(matched);
             if (loraModel is not null && Program.ServerSettings.Metadata.ImageMetadataIncludeModelHash)
@@ -507,6 +536,11 @@ public class T2IPromptHandling
             List<string> weights = context.Input.Get(T2IParamTypes.LoraWeights) ?? [];
             List<string> tencWeights = context.Input.Get(T2IParamTypes.LoraTencWeights) ?? [];
             List<string> confinements = context.Input.Get(T2IParamTypes.LoraSectionConfinement);
+            if (!(context.Input.SourceSession?.User?.Settings?.ParamParsing?.AllowLoraStacking ?? true) && loraList.Contains(matched))
+            {
+                context.TrackWarning($"LoRA '{matched}' is already applied and will not be added again.");
+                return "";
+            }
             if (confinements is not null && confinements.Count > loraList.Count)
             {
                 context.Input.Remove(T2IParamTypes.LoraSectionConfinement);
@@ -542,17 +576,34 @@ public class T2IPromptHandling
             Logs.Verbose($"LoRA {lora} confined to section {context.SectionID}.");
             confinements.Add($"{context.SectionID}");
             context.Input.Set(T2IParamTypes.LoraSectionConfinement, confinements);
+            List<string> promptedLoras = context.Input.ExtraMeta.GetOrCreate("prompted_loras", () => new List<string>()) as List<string>;
+            promptedLoras.Add(T2IParamTypes.CleanModelName(matched));
             return "";
         };
-        PromptTagPostProcessors["refiner"] = (data, context) =>
+        PromptTagBasicProcessors["base"] = (data, context) =>
         {
-            context.SectionID = 1;
-            return "<refiner//cid=1>";
+            context.SectionID = T2IParamInput.SectionID_BaseOnly;
+            return $"<base//cid={T2IParamInput.SectionID_BaseOnly}>";
         };
-        PromptTagLengthEstimators["refiner"] = (data, context) =>
+        PromptTagLengthEstimators["base"] = estimateAsSectionBreak;
+        PromptTagBasicProcessors["refiner"] = (data, context) =>
         {
-            return "<refiner>";
+            context.SectionID = T2IParamInput.SectionID_Refiner;
+            return $"<refiner//cid={T2IParamInput.SectionID_Refiner}>";
         };
+        PromptTagLengthEstimators["refiner"] = estimateAsSectionBreak;
+        PromptTagBasicProcessors["video"] = (data, context) =>
+        {
+            context.SectionID = T2IParamInput.SectionID_Video;
+            return $"<video//cid={T2IParamInput.SectionID_Video}>";
+        };
+        PromptTagLengthEstimators["video"] = estimateAsSectionBreak;
+        PromptTagBasicProcessors["videoswap"] = (data, context) =>
+        {
+            context.SectionID = T2IParamInput.SectionID_VideoSwap;
+            return $"<videoswap//cid={T2IParamInput.SectionID_VideoSwap}>";
+        };
+        PromptTagLengthEstimators["video"] = estimateAsSectionBreak;
         string autoConfine(string data, PromptTagContext context)
         {
             if (context.SectionID < 10)
@@ -563,24 +614,21 @@ public class T2IPromptHandling
             string raw = context.RawCurrentTag.Before("//cid=");
             return $"<{raw}//cid={context.SectionID}>";
         }
-        PromptTagPostProcessors["segment"] = autoConfine;
-        PromptTagPostProcessors["object"] = autoConfine;
-        PromptTagPostProcessors["region"] = autoConfine;
-        PromptTagPostProcessors["extend"] = autoConfine;
+        PromptTagBasicProcessors["segment"] = autoConfine;
+        PromptTagBasicProcessors["object"] = autoConfine;
+        PromptTagBasicProcessors["region"] = autoConfine;
+        PromptTagBasicProcessors["extend"] = autoConfine;
         PromptTagBasicProcessors["break"] = (data, context) =>
         {
             return "<break>";
         };
-        PromptTagLengthEstimators["break"] = (data, context) =>
-        {
-            return "<break>";
-        };
+        PromptTagLengthEstimators["break"] = estimateAsSectionBreak;
         PromptTagLengthEstimators["embed"] = estimateEmpty;
         PromptTagLengthEstimators["embedding"] = estimateEmpty;
         PromptTagLengthEstimators["lora"] = estimateEmpty;
         PromptTagProcessors["setvar"] = (data, context) =>
         {
-            string name = context.PreData;
+            string name = context.PreData.BeforeAndAfter(',', out string mode);
             if (string.IsNullOrWhiteSpace(name))
             {
                 context.TrackWarning($"A variable name is required when using setvar.");
@@ -588,7 +636,7 @@ public class T2IPromptHandling
             }
             data = context.Parse(data);
             context.Variables[name] = data;
-            return data;
+            return mode.ToLowerFast().Trim() == "false" ? "" : data;
         };
         PromptTagLengthEstimators["setvar"] = (data, context) =>
         {
@@ -596,14 +644,41 @@ public class T2IPromptHandling
         };
         PromptTagProcessors["var"] = (data, context) =>
         {
-            if (!context.Variables.TryGetValue(data, out string val))
+            string name = string.IsNullOrWhiteSpace(data) ? context.PreData : data;
+            if (!context.Variables.TryGetValue(name, out string val))
             {
-                context.TrackWarning($"Variable '{data}' is not recognized.");
+                context.TrackWarning($"Variable '{name}' is not recognized.");
                 return "";
             }
             return val;
         };
         PromptTagLengthEstimators["var"] = estimateEmpty;
+        PromptTagProcessors["setmacro"] = (data, context) =>
+        {
+            string name = context.PreData.BeforeAndAfter(',', out string mode);
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                context.TrackWarning($"A macro name is required when using setmacro.");
+                return null;
+            }
+            context.Macros[name] = data;
+            return mode.ToLowerFast().Trim() == "false" ? "" : context.Parse(data);
+        };
+        PromptTagLengthEstimators["setmacro"] = (data, context) =>
+        {
+            return ProcessPromptLikeForLength(data);
+        };
+        PromptTagProcessors["macro"] = (data, context) =>
+        {
+            string name = string.IsNullOrWhiteSpace(data) ? context.PreData : data;
+            if (!context.Macros.TryGetValue(name, out string val))
+            {
+                context.TrackWarning($"Macro '{name}' is not recognized.");
+                return "";
+            }
+            return context.Parse(val);
+        };
+        PromptTagLengthEstimators["macro"] = estimateEmpty;
         PromptTagBasicProcessors["trigger"] = (data, context) =>
         {
             List<string> phrases = [];
@@ -623,7 +698,7 @@ public class T2IPromptHandling
                     string matched = T2IParamTypes.GetBestModelInList(lora, context.Loras);
                     if (matched is not null)
                     {
-                        add(Program.T2IModelSets["LoRA"].GetModel(matched)?.Metadata?.TriggerPhrase);
+                        add(Program.T2IModelSets["LoRA"].GetModel(matched)?.Metadata?.TriggerPhrase.Replace(';', ','));
                     }
                 }
             }
@@ -650,8 +725,10 @@ public class T2IPromptHandling
             return null;
         }
         string addBefore = "", addAfter = "";
+        int baseSectionId = context.SectionID;
         void processSet(Dictionary<string, Func<string, PromptTagContext, string>> set)
         {
+            context.SectionID = baseSectionId;
             val = StringConversionHelper.QuickSimpleTagFiller(val, "<", ">", tag =>
             {
                 (string prefix, string data) = tag.BeforeAndAfter(':');
@@ -690,6 +767,13 @@ public class T2IPromptHandling
                         }
                         return result;
                     }
+                }
+                int cidCut = tag.LastIndexOf("//cid=");
+                if (cidCut != -1)
+                {
+                    sectionId = int.Parse(tag[(cidCut + "//cid=".Length)..]);
+                    Logs.Verbose($"[Prompt Parsing] Section ID changed by a prior mapping from {context.SectionID} to  {sectionId}");
+                    context.SectionID = sectionId;
                 }
                 return $"<{tag}>";
             }, false, 0);

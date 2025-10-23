@@ -8,6 +8,7 @@ using ISImage = SixLabors.ImageSharp.Image;
 using Image = SwarmUI.Utils.Image;
 using SixLabors.ImageSharp.PixelFormats;
 using System;
+using SwarmUI.Media;
 
 namespace SwarmUI.Text2Image;
 
@@ -18,10 +19,10 @@ public class T2IMultiStepObjectBuilder
     public static async Task<Image> CreateFullImage(string prompt, T2IParamInput user_input, string batchId, Session.GenClaim claim, Action<JObject> output, Action<string> setError, bool isWS, float backendTimeoutMin)
     {
         int obj = 0;
-        async Task<Image> createImageDirect(T2IParamInput user_input)
+        async Task<MediaFile> createImageDirect(T2IParamInput user_input)
         {
-            Image result = null;
-            await T2IEngine.CreateImageTask(user_input, batchId + (obj++), claim, output, setError, isWS, backendTimeoutMin, (img, meta) => { result = img.Img; }, false);
+            MediaFile result = null;
+            await T2IEngine.CreateImageTask(user_input, batchId + (obj++), claim, output, setError, isWS, backendTimeoutMin, (img, meta) => { result = img.File; }, false);
             return result;
         }
         if (string.IsNullOrWhiteSpace(prompt) || !prompt.Contains("<object:"))
@@ -51,9 +52,10 @@ public class T2IMultiStepObjectBuilder
         foreach (T2IParamTypes.ControlNetParamHolder controlnet in T2IParamTypes.Controlnets)
         {
             basicInput.Remove(controlnet.Model);
+            basicInput.Remove(controlnet.Strength);
         }
-        Image img = await createImageDirect(basicInput);
-        if (img is null)
+        MediaFile file = await createImageDirect(basicInput);
+        if (file is not ImageFile img)
         {
             return null;
         }
@@ -100,15 +102,18 @@ public class T2IMultiStepObjectBuilder
             objInput.Set(T2IParamTypes.InitImageCreativity, part.Strength2);
             objInput.Set(T2IParamTypes.Width, fixedWidth);
             objInput.Set(T2IParamTypes.Height, fixedHeight);
-            Image objImg = await createImageDirect(objInput);
-            if (objImg is null)
+            MediaFile objFile = await createImageDirect(objInput);
+            if (objFile is not ImageFile objImg)
             {
                 return null;
             }
             using ISImage objISImg = objImg.ToIS;
             objISImg.Mutate(i => i.Resize(extraWidth, extraHeight));
             liveImg.Mutate(i => i.DrawImage(objISImg, new Point(extraX, extraY), 1));
-            output(new JObject() { ["image"] = "data:image/png;base64," + new Image(liveImg).AsBase64, ["batch_index"] = $"{batchId}{obj++}", ["request_id"] = $"{user_input.UserRequestId}", ["metadata"] = null });
+            if (user_input.Get(T2IParamTypes.OutputIntermediateImages, false))
+            {
+                output(new JObject() { ["image"] = "data:image/png;base64," + new Image(liveImg).AsBase64, ["batch_index"] = $"{batchId}{obj++}", ["request_id"] = $"{user_input.UserRequestId}", ["metadata"] = null });
+            }
         }
         return new(liveImg);
     }

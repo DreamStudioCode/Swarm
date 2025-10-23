@@ -68,9 +68,12 @@ function remapMetadataKeys(metadata, keymap) {
     return metadata;
 }
 
-const imageMetadataKeys = ['prompt', 'Prompt', 'parameters', 'Parameters', 'userComment', 'UserComment', 'model', 'Model'];
+const imageMetadataKeys = ['parameters', 'Parameters', 'userComment', 'UserComment', 'model', 'Model', 'prompt', 'Prompt'];
 
 function interpretMetadata(metadata) {
+    if (Array.isArray(metadata)) {
+        metadata = new Uint8Array(metadata);
+    }
     if (metadata instanceof Uint8Array) {
         let prefix = metadata.slice(0, 8);
         let data = metadata.slice(8);
@@ -125,34 +128,17 @@ function interpretMetadata(metadata) {
 }
 
 function parseMetadata(data, callback) {
-    exifr.parse(data).then(parsed => {
-        if (parsed && imageMetadataKeys.some(key => key in parsed)) {
-            return parsed;
-        }
-        return exifr.parse(data, imageMetadataKeys);
-    }).then(parsed => {
+    if (data instanceof Image) {
+        data = data.src;
+    }
+    fetch(data).then(r => r.blob()).then(b => b.arrayBuffer()).then(buffer => ExifReader.load(buffer, {async: true})).then(parsed => {
         let metadata = null;
         if (parsed) {
-            if (parsed.parameters) {
-                metadata = parsed.parameters;
-            }
-            else if (parsed.Parameters) {
-                metadata = parsed.Parameters;
-            }
-            else if (parsed.prompt) {
-                metadata = parsed.prompt;
-            }
-            else if (parsed.UserComment) {
-                metadata = parsed.UserComment;
-            }
-            else if (parsed.userComment) {
-                metadata = parsed.userComment;
-            }
-            else if (parsed.model) {
-                metadata = parsed.model;
-            }
-            else if (parsed.Model) {
-                metadata = parsed.Model;
+            for (let key of imageMetadataKeys) {
+                if (key in parsed) {
+                    metadata = parsed[key].value;
+                    break;
+                }
             }
         }
         metadata = interpretMetadata(metadata);
@@ -163,6 +149,7 @@ function parseMetadata(data, callback) {
 }
 
 let metadataKeyFormatCleaners = [];
+let promptCidMatcher = new RegExp('\<(.*?)//cid=\\d+>', 'g');
 
 function formatMetadata(metadata) {
     if (!metadata) {
@@ -212,14 +199,14 @@ function formatMetadata(metadata) {
                             }
                         }
                     }
+                    result += `<span class="param_view_block tag-text tag-type-${hash}${added}"><span class="param_view_name" title="${escapeHtmlNoBr(keyTitle)}">${escapeHtml(key)}</span>: `;
                     if (typeof val == 'object') {
-                        result += `<span class="param_view_block tag-text tag-type-${hash}${added}"><span class="param_view_name">${escapeHtml(key)}</span>: `;
                         appendObject(val);
-                        result += `</span>, `;
                     }
                     else {
-                        result += `<span class="param_view_block tag-text tag-type-${hash}${added}"><span class="param_view_name" title="${escapeHtmlNoBr(keyTitle)}">${escapeHtml(key)}</span>: <span class="param_view tag-text-soft tag-type-${hash}" title="${escapeHtmlNoBr(title)}">${escapeHtml(`${val}`)}</span>${extras}</span>, `;
+                        result += `<span class="param_view tag-text-soft tag-type-${hash}" title="${escapeHtmlNoBr(title)}">${escapeHtml(`${val}`)}</span>`;
                     }
+                    result += `${extras}</span>, `;
                 }
             }
         }
@@ -229,7 +216,15 @@ function formatMetadata(metadata) {
         delete data.sui_image_params.swarm_version;
     }
     if ('prompt' in data.sui_image_params && data.sui_image_params.prompt) {
-        appendObject({ 'prompt': data.sui_image_params.prompt });
+        let prompt = data.sui_image_params.prompt;
+        if ('sui_extra_data' in data && 'original_prompt' in data.sui_extra_data) {
+            let originalPrompt = data.sui_extra_data.original_prompt;
+            if (prompt.replaceAll(promptCidMatcher, '<$1>') == originalPrompt) {
+                prompt = originalPrompt;
+                delete data.sui_extra_data.original_prompt;
+            }
+        }
+        appendObject({ 'prompt': prompt });
         result += '\n<br>';
         delete data.sui_image_params.prompt;
     }
@@ -237,6 +232,20 @@ function formatMetadata(metadata) {
         appendObject({ 'negativeprompt': data.sui_image_params.negativeprompt });
         result += '\n<br>';
         delete data.sui_image_params.negativeprompt;
+    }
+    if ('loras' in data.sui_image_params && 'loraweights' in data.sui_image_params) {
+        let loras = data.sui_image_params.loras;
+        let loraWeights = data.sui_image_params.loraweights;
+        let simpleLoras = [];
+        // TODO: Maybe look up some metadata on the models here?
+        for (let i = 0; i < loras.length; i++) {
+            let lora = loras[i];
+            let weight = loraWeights[i];
+            simpleLoras.push(`${lora} : ${weight}`);
+        }
+        delete data.sui_image_params.loras;
+        delete data.sui_image_params.loraweights;
+        data.sui_image_params['loras'] = simpleLoras;
     }
     appendObject(data.sui_image_params);
     result += '\n<br>';

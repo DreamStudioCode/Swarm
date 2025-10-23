@@ -1,6 +1,7 @@
 from . import SwarmLoadImageB64
 import folder_paths
-from nodes import CheckpointLoaderSimple
+from nodes import CheckpointLoaderSimple, LoadImage
+import os
 
 INT_MAX = 0xffffffffffffffff
 INT_MIN = -INT_MAX
@@ -71,11 +72,11 @@ class SwarmInputFloat:
         return {
             "required": {
                 "title": ("STRING", {"default": "My Floating-Point Number", "tooltip": "The name of the input."}),
-                "value": ("FLOAT", {"default": 0, "min": INT_MIN, "max": INT_MAX, "step": 0.1, "round": 0.0000001, "tooltip": "The default value of the input."}),
+                "value": ("FLOAT", {"default": 0, "min": INT_MIN, "max": INT_MAX, "step": 0.01, "round": 0.0000001, "tooltip": "The default value of the input."}),
                 "step": ("FLOAT", {"default": 0.1, "min": INT_MIN, "max": INT_MAX, "step": 0.01, "round": 0.0000001, "tooltip": "The step size of the input. That is, how much the value changes when you click the up/down arrows or move the slider."}),
-                "min": ("FLOAT", {"default": 0, "min": INT_MIN, "max": INT_MAX, "step": 0.1, "round": 0.0000001, "tooltip": "The minimum value of the input."}),
-                "max": ("FLOAT", {"default": 100, "min": INT_MIN, "max": INT_MAX, "step": 0.1, "round": 0.0000001, "tooltip": "The maximum value of the input."}),
-                "view_max": ("FLOAT", {"default": 100, "min": INT_MIN, "max": INT_MAX, "step": 0.1, "round": 0.0000001, "tooltip": "The maximum value of the input that is displayed in the UI when using a slider. This is useful if you want to allow a higher range of values, but don't want to clutter the UI with a huge slider."}),
+                "min": ("FLOAT", {"default": 0, "min": INT_MIN, "max": INT_MAX, "step": 0.01, "round": 0.0000001, "tooltip": "The minimum value of the input."}),
+                "max": ("FLOAT", {"default": 100, "min": INT_MIN, "max": INT_MAX, "step": 0.01, "round": 0.0000001, "tooltip": "The maximum value of the input."}),
+                "view_max": ("FLOAT", {"default": 100, "min": INT_MIN, "max": INT_MAX, "step": 0.01, "round": 0.0000001, "tooltip": "The maximum value of the input that is displayed in the UI when using a slider. This is useful if you want to allow a higher range of values, but don't want to clutter the UI with a huge slider."}),
                 "view_type": (["big", "small", "slider", "pot_slider"], {"tooltip": "The type of input control to use. 'big' is a large text input, 'small' is a small text input, 'slider' is a slider, and 'pot_slider' is a Power-Of-Two scaled slider - this is useful for large inputs like resolutions to allow a more natural feeling selection range."}),
             } | STANDARD_REQ_INPUTS,
         } | STANDARD_OTHER_INPUTS
@@ -96,7 +97,7 @@ class SwarmInputText:
             "required": {
                 "title": ("STRING", {"default": "My Text", "tooltip": "The name of the input."}),
                 "value": ("STRING", {"default": "", "multiline": True, "tooltip": "The default value of the input."}),
-                "view_type": (["normal", "prompt"], {"tooltip": "How to format this text input. 'normal' is a simple single line text input, 'prompt' is a prompt-like text input that has multiple lines and other prompting-specific features."}),
+                "view_type": (["normal", "prompt", "big"], {"tooltip": "How to format this text input. 'normal' is a simple single line text input, 'prompt' is a prompt-like text input that has multiple lines and other prompting-specific features, 'big' is an extra large multiline text box."}),
             } | STANDARD_REQ_INPUTS,
         } | STANDARD_OTHER_INPUTS
 
@@ -190,21 +191,29 @@ class SwarmInputBoolean:
 class SwarmInputImage:
     @classmethod
     def INPUT_TYPES(s):
+        input_dir = folder_paths.get_input_directory()
+        files = [f for f in os.listdir(input_dir) if os.path.isfile(os.path.join(input_dir, f))]
+        files = folder_paths.filter_files_content_types(files, ["image"])
         return {
             "required": {
                 "title": ("STRING", {"default": "My Image", "tooltip": "The name of the input."}),
                 "value": ("STRING", {"default": "(Do Not Set Me)", "multiline": True, "tooltip": "Always leave this blank, the SwarmUI server will fill it for you."}),
                 "auto_resize": ("BOOLEAN", {"default": True, "tooltip": "If true, the image will be resized to match the current generation resolution. If false, the image will be kept at whatever size the user input it at."}),
-            } | STANDARD_REQ_INPUTS,
+            } | STANDARD_REQ_INPUTS | {
+                "image": (sorted(files), {"image_upload": True}),
+            },
         } | STANDARD_OTHER_INPUTS
 
     CATEGORY = "SwarmUI/inputs"
     RETURN_TYPES = ("IMAGE","MASK",)
     FUNCTION = "do_input"
-    DESCRIPTION = "SwarmInput nodes let you define custom input controls in Swarm-Comfy Workflows. Image lets you input an image. Internally this node uses a Base64 string as input, so may not be the most friendly to use on the Comfy Workflow tab, but is very convenient to use on the Generate tab."
+    DESCRIPTION = "SwarmInput nodes let you define custom input controls in Swarm-Comfy Workflows. Image lets you input an image. Internally this node uses a Base64 string as input when value is set by SwarmUI server (Generate tab), otherwise use select Image (Comfy Workflow tab)."
 
-    def do_input(self, value, **kwargs):
-        return SwarmLoadImageB64.b64_to_img_and_mask(value)
+    def do_input(self, value=None, image=None, **kwargs):
+        if not value or value == "(Do Not Set Me)":
+            return LoadImage().load_image(image)
+        else:
+            return SwarmLoadImageB64.b64_to_img_and_mask(value)
 
 
 NODE_CLASS_MAPPINGS = {

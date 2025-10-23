@@ -19,11 +19,11 @@ public static class NetworkBackendUtils
 {
     #region Network
     /// <summary>Create and preconfigure a basic <see cref="HttpClient"/> instance to make web requests with.</summary>
-    public static HttpClient MakeHttpClient()
+    public static HttpClient MakeHttpClient(int timeoutMinutes = 10)
     {
         HttpClient client = new(new SocketsHttpHandler() { PooledConnectionLifetime = TimeSpan.FromMinutes(10), MaxConnectionsPerServer = 1000 });
         client.DefaultRequestHeaders.UserAgent.ParseAdd($"SwarmUI/{Utilities.Version}");
-        client.Timeout = TimeSpan.FromMinutes(10);
+        client.Timeout = TimeSpan.FromMinutes(timeoutMinutes);
         return client;
     }
 
@@ -406,7 +406,7 @@ public static class NetworkBackendUtils
                 if (everLoaded)
                 {
                     Logs.Error($"Self-Start {nameSimple} on port {port} failed. Restarting per configuration AutoRestart=true...");
-                    Func<HardwareInfo, float> memSelector = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? x => 1 - (x.MemoryStatus.AvailablePhysical / (float)x.MemoryStatus.TotalPhysical) : x => 1 - (x.MemoryStatus.AvailableVirtual / (float)x.MemoryStatus.TotalVirtual);
+                    float memSelector(HardwareInfo x) => 1 - (x.MemoryStatus.AvailablePhysical / (float)x.MemoryStatus.TotalPhysical);
                     (HardwareInfo, float)[] info = [.. SystemStatusMonitor.HardwareInfoQueue.Select(x => (x, memSelector(x)))];
                     Logs.Debug($"Memory usage before crash was: {info.Reverse().Take(5).Select(x => $"{x.Item2 * 100:#.0}%").JoinString(", ")}");
                     (HardwareInfo, float) match = info.FirstOrDefault(x => x.Item2 > 0.8);

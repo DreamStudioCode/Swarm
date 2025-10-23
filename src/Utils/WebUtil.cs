@@ -148,7 +148,7 @@ public static class WebUtil
             {
                 string result = await Utilities.QuickRunProcess(name, ["--version"]);
                 string venvInfo = await Utilities.QuickRunProcess(name, ["-m", "venv"]);
-                return $"{result.Before('\n').Trim()}\n{venvInfo.Trim()}";
+                return $"{name}\n{result.Before('\n').Trim().Replace("\n", "  ")}\n{venvInfo.Trim().Replace("\n", "  ")}";
             }
             catch (Exception ex)
             {
@@ -161,11 +161,13 @@ public static class WebUtil
         {
             return "Failure to check python version. You must install Python 3.11 before installing SwarmUI.";
         }
-        (string pythonVersion, string venvInfo) = pythonVersionRaw.BeforeAndAfter('\n');
+        string[] bits = pythonVersionRaw.SplitFast('\n');
+        string pythonExe = bits[0], pythonVersion = bits[1], venvInfo = bits[2];
         if (!pythonVersion.StartsWith("Python 3.10") && !pythonVersion.StartsWith("Python 3.11") && !pythonVersion.StartsWith("Python 3.12"))
         {
             if (pythonVersion.StartsWith("Python 3."))
             {
+                Logs.Warning($"Found python version '{pythonVersion}', which is not in the acceptable range from 3.10 to 3.12.");
                 return "You have a python version installed, but it is not 3.11. Please install Python 3.11 before installing SwarmUI. 3.10 and 3.12 are relatively stable as well. Older versions will not work, and newer versions will have compatibility issues.";
             }
             return "Python does not appear to be installed on your system. You must install Python 3.11 before installing SwarmUI.";
@@ -173,6 +175,19 @@ public static class WebUtil
         if (!venvInfo.StartsWith("usage: venv"))
         {
             return "You have Python installed, but 'venv' is missing. Please install it before proceeding (eg on Ubuntu, run 'sudo apt install python3-venv').";
+        }
+        try
+        {
+            string result = await Utilities.QuickRunProcess(pythonExe, ["-m", "pip", "--version"]);
+            if (string.IsNullOrWhiteSpace(result) || result.Contains("No module named"))
+            {
+                return "You have Python installed, but 'pip' is missing. Please install it before proceeding (eg on Ubuntu, run 'sudo apt install python3-pip').";
+            }
+        }
+        catch (Exception ex)
+        {
+            Logs.Warning($"Failed to check pip version: {ex}");
+            return "You have Python installed, but a check for 'pip' failed to run. Please install it before proceeding (eg on Ubuntu, run 'sudo apt install python3-pip').";
         }
         return null;
     }

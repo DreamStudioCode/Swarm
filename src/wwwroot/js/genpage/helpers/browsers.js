@@ -5,11 +5,11 @@ class BrowserUtil {
      * Make any visible images within a container actually load now.
      */
     makeVisible(elem) {
-        for (let subElem of elem.querySelectorAll('.lazyload')) {
-            let top = subElem.getBoundingClientRect().top;
-            if (top >= window.innerHeight + 512 || top == 0) { // Note top=0 means not visible
-                continue;
-            }
+        let elementsToLoad = Array.from(elem.querySelectorAll('.lazyload')).filter(e => {
+            let top = e.getBoundingClientRect().top;
+            return top != 0 && top < window.innerHeight + 512; // Note top=0 means not visible
+        });
+        for (let subElem of elementsToLoad) {
             subElem.classList.remove('lazyload');
             if (subElem.tagName == 'IMG') {
                 if (!subElem.dataset.src) {
@@ -95,6 +95,8 @@ class GenPageBrowserClass {
         this.rerenderPlanned = false;
         this.updatePendingSince = null;
         this.wantsReupdate = false;
+        this.noContentUpdates = false;
+        this.refreshHandler = (callback) => callback();
         this.checkIsSmall();
     }
 
@@ -142,6 +144,7 @@ class GenPageBrowserClass {
      * Clicks repeatedly into a path to fully open it.
      */
     clickPath(path) {
+        this.noContentUpdates = true;
         let tree = this.tree;
         if (!tree.isOpen) {
             tree.clickme(() => {
@@ -150,6 +153,8 @@ class GenPageBrowserClass {
             return;
         }
         if (path.length == 0) {
+            this.noContentUpdates = false;
+            this.rerender();
             return;
         }
         let split = path.split('/');
@@ -158,25 +163,39 @@ class GenPageBrowserClass {
                 continue;
             }
             if (!(part in tree.children)) {
+                this.noContentUpdates = false;
+                this.rerender();
                 return;
             }
             tree = tree.children[part];
-            if (!tree.isOpen) {
+            if (tree.fileData) {
+                tree.clickme(() => {
+                    this.noContentUpdates = false;
+                    this.rerender();
+                });
+                return;
+            }
+            else if (!tree.isOpen) {
                 tree.clickme(() => {
                     this.clickPath(path);
                 });
                 return;
             }
         }
+        this.noContentUpdates = false;
+        this.rerender();
     }
 
     /**
      * Refreshes the browser view from source.
      */
     refresh() {
-        refreshParameterValues(true, () => {
+        this.refreshHandler(() => {
             this.chunksRendered = 0;
             let path = this.folder;
+            this.folder = '';
+            let depth = this.depth;
+            this.noContentUpdates = true;
             this.update(true, () => {
                 this.clickPath(path);
             });
@@ -326,7 +345,7 @@ class GenPageBrowserClass {
             span.onclick = (e) => {
                 this.select(tree.fileData, null);
             };
-            tree.clickme = (callback) => span.onclick(null);
+            tree.clickme = (callback) => this.select(tree.fileData, callback);
         }
         else {
             let clicker = (isSymbol, callback) => {
@@ -373,7 +392,6 @@ class GenPageBrowserClass {
                 while (remainingFiles.length > 0) {
                     let chunkSize = Math.min(this.maxPreBuild / 2, remainingFiles.length, 100);
                     let chunk = remainingFiles.splice(0, chunkSize);
-                    remainingFiles = remainingFiles.slice(chunkSize);
                     let sectionDiv = createDiv(null, 'lazyload browser-section-loader');
                     sectionDiv.onclick = () => {
                         this.buildContentList(container, chunk, sectionDiv, id);
@@ -432,11 +450,16 @@ class GenPageBrowserClass {
                 if (this.format.startsWith('Big')) { factor = 15; div.classList.add('image-block-big'); }
                 else if (this.format.startsWith('Giant')) { factor = 25; div.classList.add('image-block-giant'); }
                 else if (this.format.startsWith('Small')) { factor = 5; div.classList.add('image-block-small'); }
-                div.style.width = `${factor + 1}rem`;
-                img.addEventListener('load', () => {
-                    let ratio = img.width / img.height;
-                    div.style.width = `${(ratio * factor) + 1}rem`;
-                });
+                if (desc.aspectRatio) {
+                    div.style.width = `${(desc.aspectRatio * factor) + 1}rem`;
+                }
+                else {
+                    div.style.width = `${factor + 1}rem`;
+                    img.addEventListener('load', () => {
+                        let ratio = img.naturalWidth / img.naturalHeight;
+                        div.style.width = `${(ratio * factor) + 1}rem`;
+                    });
+                }
                 let textBlock = createDiv(null, 'image-preview-text');
                 textBlock.innerText = desc.display || desc.name;
                 if (this.format == "Small Thumbnails" || textBlock.innerText.length > 40) {
@@ -467,9 +490,10 @@ class GenPageBrowserClass {
                     detail_list = [escapeHtml(desc.display || desc.name), desc.description.replaceAll('<br>', '&emsp;')];
                 }
                 let percent = 98 / detail_list.length;
+                let imgAdj = 1.3 / detail_list.length;
                 for (let detail of detail_list) {
                     let textBlock = createSpan(null, 'browser-details-list-entry-text');
-                    textBlock.style.width = `${percent}%`;
+                    textBlock.style.width = `calc(${percent}% - ${imgAdj}rem)`;
                     textBlock.innerHTML = detail;
                     textBlock.addEventListener('click', () => {
                         this.select(file, div);
@@ -486,7 +510,7 @@ class GenPageBrowserClass {
                 div.appendChild(menu);
             }
             if (!this.format.includes('Cards')) {
-                div.title = stripHtmlToText(desc.description);
+                div.addEventListener('mouseenter', () => div.title = stripHtmlToText(desc.description), { once: true });
             }
             div.dataset.name = file.name;
             img.classList.add('lazyload');
@@ -717,14 +741,18 @@ class GenPageBrowserClass {
         this.headerCount.innerText = files.length;
         this.headerBar.appendChild(this.headerCount);
         this.buildTreeElements(this.folderTreeDiv, '', this.tree);
-        this.buildContentList(this.contentDiv, files);
-        this.folderTreeDiv.scrollTop = folderScroll;
-        browserUtil.makeVisible(this.contentDiv);
-        if (scrollOffset) {
-            this.contentDiv.scrollTop = scrollOffset;
-        }
         applyTranslations(this.headerBar);
-        applyTranslations(this.contentDiv);
+        if (!this.noContentUpdates) {
+            this.buildContentList(this.contentDiv, files);
+            browserUtil.makeVisible(this.contentDiv);
+            if (scrollOffset) {
+                this.contentDiv.scrollTop = scrollOffset;
+            }
+            applyTranslations(this.contentDiv);
+        }
+        if (folderScroll) {
+            this.folderTreeDiv.scrollTop = folderScroll;
+        }
         this.everLoaded = true;
         if (this.builtEvent) {
             this.builtEvent();

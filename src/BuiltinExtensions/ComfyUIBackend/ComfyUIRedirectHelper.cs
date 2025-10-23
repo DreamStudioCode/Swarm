@@ -12,6 +12,7 @@ using System.Net;
 using SwarmUI.WebAPI;
 using SwarmUI.Accounts;
 using Microsoft.Extensions.Primitives;
+using System.Threading.Tasks;
 
 namespace SwarmUI.Builtin_ComfyUIBackend;
 
@@ -36,6 +37,9 @@ public class ComfyUIRedirectHelper
 
         public ComfyClientData Reserved;
 
+        /// <summary>The user data socket.</summary>
+        public WebSocket Socket;
+
         public void Unreserve()
         {
             if (Reserved is not null)
@@ -43,6 +47,22 @@ public class ComfyUIRedirectHelper
                 Interlocked.Decrement(ref Reserved.Backend.Reservations);
                 Reserved = null;
             }
+        }
+
+        /// <summary>Fully close this user instance and all connections.</summary>
+        public async Task Close()
+        {
+            Users.TryRemove(MasterSID, out _);
+            Unreserve();
+            Socket.Dispose();
+            await Utilities.RunCheckedTask(async () => await Task.WhenAll(Clients.Values.Select(async c =>
+            {
+                if (!c.Socket.CloseStatus.HasValue)
+                {
+                    await c.Socket.CloseAsync(WebSocketCloseStatus.NormalClosure, null, Program.GlobalProgramCancel);
+                }
+                c.Socket.Dispose();
+            })));
         }
     }
 
@@ -157,7 +177,7 @@ public class ComfyUIRedirectHelper
         {
             context.Response.ContentType = "text/html";
             context.Response.StatusCode = 401;
-            await context.Response.WriteAsync("<!DOCTYPE html><html><head><stylesheet>body{background-color:#101010;color:#eeeeee;}</stylesheet></head><body><span class=\"comfy-failed-to-load\">Permission denied.</span></body></html>");
+            await context.Response.WriteAsync("<!DOCTYPE html>\n<html>\n<head>\n<style>body{background-color:#101010;color:#eeeeee;}</style>\n</head>\n<body>\n<span class=\"comfy-failed-to-load\">Permission denied.</span>\n</body>\n</html>");
             await context.Response.CompleteAsync();
             return;
         }
@@ -171,7 +191,7 @@ public class ComfyUIRedirectHelper
         {
             context.Response.ContentType = "text/html";
             context.Response.StatusCode = 400;
-            await context.Response.WriteAsync("<!DOCTYPE html><html><head><stylesheet>body{background-color:#101010;color:#eeeeee;}</stylesheet></head><body><span class=\"comfy-failed-to-load\">No ComfyUI backend available, loading failed.</span></body></html>");
+            await context.Response.WriteAsync("<!DOCTYPE html>\n<html>\n<head>\n<style>body{background-color:#101010;color:#eeeeee;}</style>\n</head>\n<body>\n<span class=\"comfy-failed-to-load\">No ComfyUI backend available, loading failed.</span>\n</body>\n</html>");
             await context.Response.CompleteAsync();
             return;
         }
@@ -196,7 +216,7 @@ public class ComfyUIRedirectHelper
             Logs.Debug($"Comfy backend direct websocket request to {path}, have {allBackends.Count} backends available");
             WebSocket socket = await context.WebSockets.AcceptWebSocketAsync();
             List<Task> tasks = [];
-            ComfyUser user = new();
+            ComfyUser user = new() { Socket = socket };
             // Order all evens then all odds - eg 0, 2, 4, 6, 1, 3, 5, 7 (to reduce chance of overlap when sharing)
             int[] vals = [.. Enumerable.Range(0, allBackends.Count)];
             vals = [.. vals.Where(v => v % 2 == 0), .. vals.Where(v => v % 2 == 1)];
@@ -328,7 +348,6 @@ public class ComfyUIRedirectHelper
                             }
                             if (socket.CloseStatus.HasValue)
                             {
-                                await socket.CloseAsync(socket.CloseStatus.Value, socket.CloseStatusDescription, Program.GlobalProgramCancel);
                                 return;
                             }
                         }
@@ -339,15 +358,27 @@ public class ComfyUIRedirectHelper
                         {
                             return;
                         }
-                        Logs.Debug($"ComfyUI redirection failed (outsocket): {ex.ReadableString()}");
+                        Logs.Debug($"ComfyUI redirection failed (outsocket, user {swarmUser.UserID} with {user.Clients.Count} active sockets): {ex.ReadableString()}");
                     }
                     finally
                     {
-                        Users.TryRemove(client.SID, out _);
                         user.Clients.TryRemove(client, out _);
                         if (client.SID == user.Reserved?.SID)
                         {
                             user.Unreserve();
+                        }
+                        outSocket.Dispose();
+                        if (user.Clients.IsEmpty())
+                        {
+                            Users.TryRemove(client.SID, out _);
+                            _ = Utilities.RunCheckedTask(() =>
+                            {
+                                if (socket.State == WebSocketState.Open)
+                                {
+                                    socket.CloseAsync(WebSocketCloseStatus.InternalServerError, null, Utilities.TimedCancel(TimeSpan.FromSeconds(2)).Token);
+                                }
+                                socket.Dispose();
+                            });
                         }
                     }
                 }));
@@ -381,12 +412,11 @@ public class ComfyUIRedirectHelper
                     {
                         return;
                     }
-                    Logs.Debug($"ComfyUI redirection failed (in-socket): {ex.ReadableString()}");
+                    Logs.Debug($"ComfyUI redirection failed (in-socket, user {swarmUser.UserID} with {user.Clients.Count} active sockets): {ex.ReadableString()}");
                 }
                 finally
                 {
-                    Users.TryRemove(user.MasterSID, out _);
-                    user.Unreserve();
+                    await user.Close();
                 }
             }));
             await Task.WhenAll(tasks);
@@ -399,9 +429,17 @@ public class ComfyUIRedirectHelper
             {
                 context.Response.ContentType = "text/html";
                 context.Response.StatusCode = 401;
-                await context.Response.WriteAsync("<!DOCTYPE html><html><head><stylesheet>body{background-color:#101010;color:#eeeeee;}</stylesheet></head><body><span class=\"comfy-failed-to-load\">Permission denied.</span></body></html>");
+                await context.Response.WriteAsync("<!DOCTYPE html>\n<html>\n<head><style>body{background-color:#101010;color:#eeeeee;}</style></head>\n<body>\n<span class=\"comfy-failed-to-load\">Permission denied.</span>\n</body>\n</html>");
                 await context.Response.CompleteAsync();
                 return;
+            }
+            void givePostError(string error)
+            {
+                Logs.Debug($"Comfy direct POST request gave Swarm-side error: {error}");
+                context.Response.ContentType = "application/json";
+                context.Response.StatusCode = 400;
+                context.Response.WriteAsync(new JObject() { ["error"] = error }.ToString());
+                context.Response.CompleteAsync();
             }
             HttpContent content = null;
             if (path == "prompt" || path == "api/prompt")
@@ -424,8 +462,29 @@ public class ComfyUIRedirectHelper
                                 JObject prompt = parsed["prompt"] as JObject;
                                 int preferredBackendIndex = prompt["swarm_prefer"]?.Value<int>() ?? -1;
                                 prompt.Remove("swarm_prefer");
-                                ComfyClientData[] available = user.Clients.Values.ToArray().Shift(user.BackendOffset);
+                                ComfyClientData[] available = user.Clients.Values.Where(c => c.Backend.MaxUsages > 0).ToArray().Shift(user.BackendOffset);
+                                if (available.Length == 0)
+                                {
+                                    if (await Program.Backends.TryToScaleANewBackend(true))
+                                    {
+                                        Logs.Info("Comfy backend direct prompt request failed due to no available backends for user, causing new backends to load...");
+                                        // TODO: Wait for the backend then re-prompt.
+                                        // As a placeholder, we kill the websocket so the user knows they'll need to retry.
+                                        givePostError("[SwarmUI] No backend available, but auto-scaling was triggered, and a new backend is loading. Please wait a moment, then retry.");
+                                    }
+                                    else
+                                    {
+                                        givePostError("[SwarmUI] No functional comfy backend available to run this request.");
+                                    }
+                                    await user.Socket.CloseAsync(WebSocketCloseStatus.InternalServerError, null, Program.GlobalProgramCancel);
+                                    await user.Close();
+                                    return;
+                                }
                                 ComfyClientData client = available.MinBy(c => c.QueueRemaining);
+                                if (available.All(c => c.QueueRemaining > 0))
+                                {
+                                    _ = Utilities.RunCheckedTask(async () => await Program.Backends.TryToScaleANewBackend(true));
+                                }
                                 if (preferredBackendIndex >= 0)
                                 {
                                     client = available[preferredBackendIndex % available.Length];
@@ -433,7 +492,11 @@ public class ComfyUIRedirectHelper
                                 else if (available.Length > 1)
                                 {
                                     string[] classTypes = [.. prompt.Properties().Select(p => p.Value is JObject jobj ? (string)jobj["class_type"] : null).Where(ct => ct is not null)];
-                                    ComfyClientData[] validClients = [.. available.Where(c => c.Backend is not ComfyUIAPIAbstractBackend comfy || classTypes.All(ct => comfy.NodeTypes.Contains(ct)))];
+                                    ComfyClientData[] validClients = [.. available.Where(c =>
+                                    {
+                                        HashSet<string> nodes = c.Backend is SwarmSwarmBackend swarmBack ? ((HashSet<string>)swarmBack.ExtensionData.GetValueOrDefault("ComfyNodeTypes", new HashSet<string>())) : (c.Backend as ComfyUIAPIAbstractBackend).NodeTypes;
+                                        return classTypes.All(ct => nodes.Contains(ct));
+                                    })];
                                     if (validClients.Length == 0)
                                     {
                                         Logs.Debug("It looks like no available backends support all relevant comfy node class types?!");
@@ -484,6 +547,18 @@ public class ComfyUIRedirectHelper
                     }
                     if (!redirected)
                     {
+                        if (backend.MaxUsages <= 0)
+                        {
+                            if (ComfyUIBackendExtension.ComfyBackendsDirect().Any(b => b.Backend.CanLoadModels && b.Backend.MaxUsages > 0))
+                            {
+                                givePostError("[SwarmUI] No functional comfy backend available to run this request, but valid backends exist. Hit MultiGPU -> Use All to ensure you're able to use other backends.");
+                            }
+                            else
+                            {
+                                givePostError("[SwarmUI] No functional comfy backend available to run this request. Is a backend-scaling currently in progress?");
+                            }
+                            return;
+                        }
                         Logs.Debug($"Was not able to redirect Comfy backend direct prompt request");
                         backend.BackendData.UpdateLastReleaseTime();
                         Logs.Info($"Sent Comfy backend improper API call direct prompt requested to backend #{backend.BackendData.ID}");
@@ -549,7 +624,8 @@ public class ComfyUIRedirectHelper
             }
             else if (path == "user.css" || path == "api/user.css")
             {
-                string remoteUserThemeText = await webClient.GetStringAsync($"{webAddress}/{path}");
+                HttpResponseMessage rawResponse = await webClient.GetAsync($"{webAddress}/{path}");
+                string remoteUserThemeText = rawResponse.StatusCode == HttpStatusCode.OK ? await rawResponse.Content.ReadAsStringAsync() : "";
                 string theme = swarmUser.Settings.Theme ?? Program.ServerSettings.DefaultUser.Theme;
                 if (Program.Web.RegisteredThemes.ContainsKey(theme))
                 {
@@ -584,7 +660,7 @@ public class ComfyUIRedirectHelper
         {
             Logs.Debug($"ComfyUI redirection gave non-200 code: '{code}' for URL: {context.Request.Method} '{path}'");
         }
-        Logs.Verbose($"Comfy Redir status code {code} from {context.Response.StatusCode} and type {response.Content.Headers.ContentType} for {context.Request.Method} '{path}'");
+        //Logs.Verbose($"Comfy Redir status code {code} from {context.Response.StatusCode} and type {response.Content.Headers.ContentType} for {context.Request.Method} '{path}'");
         context.Response.StatusCode = code;
         if (response.Content is not null)
         {

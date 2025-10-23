@@ -36,6 +36,7 @@
                 <div class="tab-pane show active genpage-bottom-tab" style="overflow:hidden" id="Image-Result-Tab" role="tabpanel">
                     <div class="image_editor_input" id="image_editor_input" style="display:none;"></div><div class="image_editor_sizebar splitter-bar t2i-top-imageeditor-bar" id="image_editor_sizebar" style="display:none;"></div><div class="current_image drag_image_target" id="current_image"><div id="welcome_message" class="welcome_message">@(new HtmlString(Program.VersionUpdateMessage ?? (Program.ServerSettings.ShowExperimentalFeatures ? "Experimental Features are enabled. Issue reports will not be accepted." : Program.ServerSettings.UI.OverrideWelcomeMessage)))</div></div>
                 </div>
+                <div id="extra_welcome_message">@(new HtmlString(Program.ServerSettings.UI.ExtraWelcomeInfo))</div>
             </div></div><div class="t2i-top-split-bar splitter-bar" id="t2i-top-2nd-split-bar"></div><div class="current_image_batch" id="current_image_batch_wrapper">
                 <ul class="nav nav-tabs swarm-gen-tab-subnav" data-title="Right Sidebar" data-content="rightsidebarcontent" role="tablist" id="rightsidebarcollection">
                     <li class="nav-item" role="presentation">
@@ -63,7 +64,7 @@
                             </div>
                             <div class="batchgear-toggler" title="If enabled, automatically swaps to new images the moment they're done generating.">
                                 <span class="form-check form-switch display-inline-block">
-                                    <input type="checkbox" class="form-check-input" id="auto_load_images_checkbox" onchange="toggleAutoLoadImages()" checked="true"> <label class="form-check-label translate" for="auto_load_previews_checkbox">Auto Swap To Images</label>
+                                    <input type="checkbox" class="form-check-input" id="auto_load_images_checkbox" onchange="toggleAutoLoadImages()" checked="true"> <label class="form-check-label translate" for="auto_load_images_checkbox">Auto Swap To Images</label>
                                 </span>
                             </div>
                             <div class="batchgear-toggler" title="If enabled, display loading spinners and failed generation crosses.">
@@ -115,6 +116,7 @@
                 <div class="sui_popover_model_button translate" onclick="mainGenHandler.doInterrupt(true)">Interrupt All Sessions</div>
                 <div class="sui_popover_model_button translate" onclick="mainGenHandler.doInterruptAndGen()" title="Alt+Click the Generate button to do this">Interrupt And Generate</div>
                 <div class="sui_popover_model_button translate" onclick="showPromptTokenizen('alt_prompt_textbox')">Show Prompt Tokenization</div>
+                <div class="sui_popover_model_button translate" style="display:none" id="clear_selected_tool_button" onclick="disableSelectedTool()">Clear Selected Tool</div>
             </div>
             <div class="sui-popover sui_popover_model" id="popover_generate">
                 <div class="sui_popover_model_button translate" onclick="mainGenHandler.doGenerate()">Generate</div>
@@ -186,7 +188,6 @@
             <div id="image_fullview_modal_content" style="width:fit-content;margin:auto;min-width:70vw;"></div>
             <div style="position: fixed; top: 1rem; right: 10%; width: 0; height: 0">
                 <span class="text_button translate" onclick="imageFullView.close()">[Close]</span><br>
-                <div id="image_fullview_extra_buttons" class="image_fullview_extra_buttons"></div>
             </div>
         </div>
         <div class="tab-pane genpage-bottom-tab" id="Presets-Tab" role="tabpanel">

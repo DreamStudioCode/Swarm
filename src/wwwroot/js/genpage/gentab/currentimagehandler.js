@@ -7,7 +7,6 @@ class ImageFullViewHelper {
         this.content = getRequiredElementById('image_fullview_modal_content');
         this.modalJq = $('#image_fullview_modal');
         this.noClose = false;
-        this.extraButtons = getRequiredElementById('image_fullview_extra_buttons');
         document.addEventListener('click', (e) => {
             if (e.target.tagName == 'BODY') {
                 return; // it's impossible on the genpage to actually click body, so this indicates a bugged click, so ignore it
@@ -28,6 +27,8 @@ class ImageFullViewHelper {
         this.content.addEventListener('mousedown', this.onMouseDown.bind(this));
         document.addEventListener('mouseup', this.onGlobalMouseUp.bind(this));
         document.addEventListener('mousemove', this.onGlobalMouseMove.bind(this));
+        this.fixButtonDelay = null;
+        this.lastClosed = 0;
     }
 
     getImg() {
@@ -51,6 +52,9 @@ class ImageFullViewHelper {
             return;
         }
         if (e.button == 2) { // right-click
+            return;
+        }
+        if (!findParentOfClass(e.target, 'imageview_modal_imagewrap') || e.ctrlKey || e.shiftKey) {
             return;
         }
         this.lastMouseX = e.clientX;
@@ -147,6 +151,9 @@ class ImageFullViewHelper {
     }
 
     onWheel(e) {
+        if (!findParentOfClass(e.target, 'imageview_modal_imagewrap') || e.ctrlKey || e.shiftKey) {
+            return;
+        }
         this.detachImg();
         let img = this.getImg();
         let origHeight = this.getHeightPercent();
@@ -170,13 +177,15 @@ class ImageFullViewHelper {
         img.style.height = `${newHeight}%`;
     }
 
-    showImage(src, metadata) {
+    showImage(src, metadata, batchId = null) {
         this.currentSrc = src;
         this.currentMetadata = metadata;
+        this.currentBatchId = batchId;
         let isVideo = isVideoExt(src);
-        let imgHtml = `<img class="imageview_popup_modal_img" id="imageview_popup_modal_img" style="cursor:grab;max-width:100%;object-fit:contain;" src="${src}">`;
+        let encodedSrc = escapeHtmlForUrl(src);
+        let imgHtml = `<img class="imageview_popup_modal_img" id="imageview_popup_modal_img" style="cursor:grab;max-width:100%;object-fit:contain;" src="${encodedSrc}">`;
         if (isVideo) {
-            imgHtml = `<video class="imageview_popup_modal_img" id="imageview_popup_modal_img" style="cursor:grab;max-width:100%;object-fit:contain;" autoplay loop muted><source src="${src}" type="video/${src.substring(src.lastIndexOf('.') + 1)}"></video>`;
+            imgHtml = `<video class="imageview_popup_modal_img" id="imageview_popup_modal_img" style="cursor:grab;max-width:100%;object-fit:contain;" autoplay loop muted><source src="${encodedSrc}" type="${isVideo}"></video>`;
         }
         this.content.innerHTML = `
         <div class="modal-dialog" style="display:none">(click outside image to close)</div>
@@ -185,29 +194,54 @@ class ImageFullViewHelper {
                 ${imgHtml}
             </div>
             <div class="imageview_popup_modal_undertext">
-            ${formatMetadata(metadata)}
+                <div class="image_fullview_extra_buttons"></div>
+                ${formatMetadata(metadata)}
             </div>
         </div>`;
-        this.modalJq.modal('show');
-        this.extraButtons.innerHTML = '';
-        let subDiv = createDiv(null, null, '<br>');
+        let subDiv = this.content.querySelector('.image_fullview_extra_buttons');
         for (let added of buttonsForImage(getImageFullSrc(src), src, metadata)) {
             if (added.href) {
-                subDiv.appendChild(createDiv(null, null, `<a class="text_button translate" href="${added.href}" title="${added.title}">${added.label}</a><br>`));
+                if (added.is_download) {
+                    subDiv.appendChild(createDiv(null, 'inline-block', `<a class="text_button basic-button translate" href="${added.href}" title="${added.title}" download>${added.label}</a>`));
+                }
+                else {
+                    subDiv.appendChild(createDiv(null, 'inline-block', `<a class="text_button basic-button translate" href="${added.href}" title="${added.title}">${added.label}</a>`));
+                }
             }
             else {
                 quickAppendButton(subDiv, added.label, (e, button) => added.onclick(button), '', added.title);
-                subDiv.appendChild(document.createElement('br'));
             }
-            subDiv.appendChild(document.createElement('br'));
         }
-        this.extraButtons.appendChild(subDiv);
+        this.modalJq.modal('show');
+        if (this.fixButtonDelay) {
+            clearTimeout(this.fixButtonDelay);
+        }
+        if (Date.now() - this.lastClosed > 200) {
+            subDiv.style.pointerEvents = 'none';
+            for (let button of subDiv.getElementsByTagName('button')) {
+                button.disabled = true;
+                button.classList.add('simpler-button-disable');
+            }
+            this.fixButtonDelay = setTimeout(() => {
+                if (subDiv && subDiv.parentElement) {
+                    subDiv.style.pointerEvents = 'auto';
+                    for (let button of subDiv.getElementsByTagName('button')) {
+                        button.disabled = false;
+                    }
+                }
+                this.fixButtonDelay = null;
+            }, 500);
+        }
     }
 
     close() {
+        if (!this.isOpen()) {
+            return;
+        }
         this.isDragging = false;
         this.didDrag = false;
         this.modalJq.modal('hide');
+        this.lastClosed = Date.now();
     }
 
     isOpen() {
@@ -267,10 +301,23 @@ function toggleSeparateBatches() {
 function clickImageInBatch(div) {
     let imgElem = div.getElementsByTagName('img')[0];
     if (currentImgSrc == div.dataset.src) {
-        imageFullView.showImage(div.dataset.src, div.dataset.metadata);
+        imageFullView.showImage(div.dataset.src, div.dataset.metadata, div.dataset.batch_id);
         return;
     }
     setCurrentImage(div.dataset.src, div.dataset.metadata, div.dataset.batch_id ?? '', imgElem && imgElem.dataset.previewGrow == 'true', false, true, div.dataset.is_placeholder == 'true');
+}
+
+/** Removes a preview thumbnail and moves to either previous or next image. */
+function removeImageBlockFromBatch(div) {
+    if (!div.classList.contains('image-block-current')) {
+        div.remove();
+        return;
+    }
+    let chosen = div.previousElementSibling || div.nextElementSibling;
+    div.remove();
+    if (chosen) {
+        clickImageInBatch(chosen);
+    }
 }
 
 function rightClickImageInBatch(e, div) {
@@ -289,7 +336,7 @@ function rightClickImageInBatch(e, div) {
             popoverActions.push({ key: added.label, action: added.onclick, title: added.title });
         }
     }
-    popoverActions.push({ key: 'Remove From Batch View', action: () => div.remove() })
+    popoverActions.push({ key: 'Remove From Batch View', action: () => removeImageBlockFromBatch(div) })
     let popover = new AdvancedPopover('image_batch_context_menu', popoverActions, false, mouseX, mouseY, document.body, null);
     e.preventDefault();
     e.stopPropagation();
@@ -318,18 +365,27 @@ function copy_current_image_params() {
         let confinements = metadata.lorasectionconfinement;
         let loras = metadata.loras;
         let weights = metadata.loraweights;
+        let promptedLoras = extra.prompted_loras || [];
+        let isOldSwarmVers = !metadata.swarm_version || metadata.swarm_version.match(/^0\.9\.[0-6]\./);
         if (confinements.length == loras.length && loras.length == weights.length) {
             let newLoras = [];
             let newWeights = [];
+            let newConfinements = [];
             for (let i = 0; i < confinements.length; i++) {
-                if (confinements[i] == -1) {
+                if (isOldSwarmVers ? confinements[i] == -1 : !promptedLoras.includes(loras[i])) {
                     newLoras.push(loras[i]);
                     newWeights.push(weights[i]);
+                    newConfinements.push(confinements[i]);
                 }
             }
             metadata.loras = newLoras;
             metadata.loraweights = newWeights;
-            delete metadata.lorasectionconfinement;
+            if (isOldSwarmVers) {
+                delete metadata.lorasectionconfinement;
+            }
+            else {
+                metadata.lorasectionconfinement = newConfinements;
+            }
         }
     }
     if ('loras' in metadata && 'loraweights' in metadata && document.getElementById('input_loras') && metadata.loras.length == metadata.loraweights.length) {
@@ -356,7 +412,8 @@ function copy_current_image_params() {
         metadata.aspectratio = 'Custom';
     }
     let exclude = getUserSetting('reuseparamexcludelist').split(',').map(s => cleanParamName(s));
-    resetParamsToDefault(exclude, false);
+    let resetExclude = [...exclude, ...Object.keys(metadata), ...Object.keys(extra).map(e => e.endsWith('_filename') ? e.substring(0, e.length - '_filename'.length) : null).filter(e => e != null)];
+    resetParamsToDefault(resetExclude, false);
     for (let param of gen_param_types) {
         if (param.nonreusable || exclude.includes(param.id)) {
             continue;
@@ -364,15 +421,19 @@ function copy_current_image_params() {
         let elem = document.getElementById(`input_${param.id}`);
         let val = metadata[param.id];
         if (elem && val !== undefined && val !== null && val !== '') {
-            setDirectParamValue(param, val);
-            if (param.group && param.group.toggles) {
-                let toggle = getRequiredElementById(`input_group_content_${param.group.id}_toggle`);
-                if (!toggle.checked) {
-                    toggle.click();
+            let group = param.group;
+            while (group) {
+                if (group.toggles) {
+                    let toggle = getRequiredElementById(`input_group_content_${group.id}_toggle`);
+                    if (!toggle.checked) {
+                        toggle.click();
+                    }
                 }
+                group = group.parent;
             }
+            setDirectParamValue(param, val);
         }
-        else if (elem && param.toggleable && param.visible) {
+        else if (elem && param.toggleable && param.visible && !resetExclude.includes(param.id)) {
             let toggle = getRequiredElementById(`input_${param.id}_toggle`);
             toggle.checked = false;
             doToggleEnable(elem.id);
@@ -404,7 +465,7 @@ function shiftToNextImagePreview(next = true, expand = false) {
         divs[newIndex].querySelector('img').click();
         if (expand) {
             divs[newIndex].querySelector('img').click();
-            imageFullView.showImage(currentImgSrc, currentMetadataVal);
+            imageFullView.showImage(currentImgSrc, currentMetadataVal, 'history');
             imageFullView.pasteState(expandedState);
         }
         return;
@@ -428,14 +489,14 @@ function shiftToNextImagePreview(next = true, expand = false) {
     let block = findParentOfClass(newImg, 'image-block');
     setCurrentImage(block.dataset.src, block.dataset.metadata, block.dataset.batch_id, newImg.dataset.previewGrow == 'true');
     if (expand) {
-        imageFullView.showImage(block.dataset.src, block.dataset.metadata);
+        imageFullView.showImage(block.dataset.src, block.dataset.metadata, block.dataset.batch_id);
         imageFullView.pasteState(expandedState);
     }
 }
 
 window.addEventListener('keydown', function(kbevent) {
     let isFullView = imageFullView.isOpen();
-    let isCurImgFocused = document.activeElement && 
+    let isCurImgFocused = document.activeElement &&
         (findParentOfClass(document.activeElement, 'current_image')
         || findParentOfClass(document.activeElement, 'current_image_batch')
         || document.activeElement.tagName == 'BODY');
@@ -471,8 +532,8 @@ function alignImageDataFormat() {
     let format = getUserSetting('ImageMetadataFormat', 'auto');
     let extrasWrapper = curImg.querySelector('.current-image-extras-wrapper');
     let scale = img.dataset.previewGrow == 'true' ? 8 : 1;
-    let imgWidth = img.naturalWidth * scale;
-    let imgHeight = img.naturalHeight * scale;
+    let imgWidth = (img.naturalWidth ?? img.videoWidth) * scale;
+    let imgHeight = (img.naturalHeight ?? img.videoHeight) * scale;
     let ratio = imgWidth / imgHeight;
     let height = Math.min(imgHeight, curImg.offsetHeight);
     let width = Math.min(imgWidth, height * ratio);
@@ -511,13 +572,15 @@ function toggleStar(path, rawSrc) {
             let newMetadata = { ...oldMetadata, is_starred: data.new_state };
             curImgImg.dataset.metadata = JSON.stringify(newMetadata);
             let button = getRequiredElementById('current_image').querySelector('.star-button');
-            if (data.new_state) {
-                button.classList.add('button-starred-image');
-                button.innerText = 'Starred';
-            }
-            else {
-                button.classList.remove('button-starred-image');
-                button.innerText = 'Star';
+            if (button) {
+                if (data.new_state) {
+                    button.classList.add('button-starred-image');
+                    button.innerText = 'Starred';
+                }
+                else {
+                    button.classList.remove('button-starred-image');
+                    button.innerText = 'Star';
+                }
             }
         }
         let batchDiv = getRequiredElementById('current_image_batch').querySelector(`.image-block[data-src="${rawSrc}"]`);
@@ -533,7 +596,7 @@ function toggleStar(path, rawSrc) {
         if (imageFullView.isOpen() && imageFullView.currentSrc == rawSrc) {
             let oldMetadata = JSON.parse(imageFullView.currentMetadata);
             let newMetadata = { ...oldMetadata, is_starred: data.new_state };
-            imageFullView.showImage(rawSrc, JSON.stringify(newMetadata));
+            imageFullView.showImage(rawSrc, JSON.stringify(newMetadata), imageFullView.currentBatchId);
         }
     });
 }
@@ -601,7 +664,7 @@ function setCurrentImage(src, metadata = '', batchId = '', previewGrow = false, 
         img.muted = true;
         let sourceObj = document.createElement('source');
         srcTarget = sourceObj;
-        sourceObj.type = `video/${src.substring(src.lastIndexOf('.') + 1)}`;
+        sourceObj.type = isVideo;
         img.appendChild(sourceObj);
     }
     else {
@@ -635,13 +698,20 @@ function setCurrentImage(src, metadata = '', batchId = '', previewGrow = false, 
         }
         alignImageDataFormat();
     }
+    if (isVideo) {
+        img.addEventListener('loadeddata', function() {
+            if (img) {
+                img.onload();
+            }
+        }, false);
+    }
     srcTarget.src = src;
     img.className = 'current-image-img';
     img.id = 'current_image_img';
     img.dataset.src = src;
     img.dataset.metadata = metadata || '{}';
     img.dataset.batch_id = batchId;
-    img.onclick = () => imageFullView.showImage(img.dataset.src, img.dataset.metadata);
+    img.onclick = () => imageFullView.showImage(img.dataset.src, img.dataset.metadata, img.dataset.batch_id);
     let extrasWrapper = isReuse ? document.getElementById('current-image-extras-wrapper') : createDiv('current-image-extras-wrapper', 'current-image-extras-wrapper');
     extrasWrapper.innerHTML = '';
     let buttons = createDiv(null, 'current-image-buttons');
@@ -843,6 +913,18 @@ function setCurrentImage(src, metadata = '', batchId = '', previewGrow = false, 
         curImg.appendChild(img);
         curImg.appendChild(extrasWrapper);
     }
+    let batchContainer = getRequiredElementById('current_image_batch');
+    if (batchContainer) {
+        let batchImg = batchContainer.querySelector(`[data-src="${src}"]`);
+        for (let i of batchContainer.getElementsByClassName('image-block')) {
+            if (batchImg == i) {
+                i.classList.add('image-block-current');
+            }
+            else {
+                i.classList.remove('image-block-current');
+            }
+        }
+    }
 }
 
 /** Gets the container div element for a generated image to put into, in the batch output view. If Separate Batches is enabled, will use or create a per-batch container. */
@@ -864,7 +946,7 @@ function appendImage(container, imageSrc, batchId, textPreview, metadata = '', t
     if (typeof container == 'string') {
         container = getRequiredElementById(container);
     }
-    container.dataset.numImages = (container.dataset.numImages ?? 0) + 1;
+    container.dataset.numImages = parseInt(container.dataset.numImages ?? 0) + 1;
     let div = createDiv(null, `image-block image-block-${type} image-batch-${batchId == "folder" ? "folder" : (container.dataset.numImages % 2 ? "1" : "0")}`);
     div.dataset.batch_id = batchId;
     div.dataset.preview_text = textPreview;
@@ -892,16 +974,16 @@ function appendImage(container, imageSrc, batchId, textPreview, metadata = '', t
         img.width = 16 * 10;
         let sourceObj = document.createElement('source');
         srcTarget = sourceObj;
-        sourceObj.type = `video/${src.substring(src.lastIndexOf('.') + 1)}`;
+        sourceObj.type = isVideo;
         img.appendChild(sourceObj);
     }
     else {
         img = document.createElement('img');
         srcTarget = img;
     }
-    img.addEventListener('load', () => {
+    img.addEventListener(isVideo ? 'loadeddata' : 'load', () => {
         if (batchId != "folder") {
-            let ratio = img.naturalWidth / img.naturalHeight;
+            let ratio = (img.naturalWidth || img.videoWidth) / (img.naturalHeight || img.videoHeight);
             div.style.width = `calc(${roundToStr(ratio * 10, 2)}rem + 2px)`;
         }
     });
@@ -931,7 +1013,7 @@ function gotImageResult(image, metadata, batchId) {
     if (!document.getElementById('current_image_img') || autoLoadImagesElem.checked) {
         setCurrentImage(src, metadata, batchId, false, true);
         if (getUserSetting('AutoSwapImagesIncludesFullView') && imageFullView.isOpen()) {
-            imageFullView.showImage(src, metadata);
+            imageFullView.showImage(src, metadata, batchId);
         }
     }
     return batch_div;

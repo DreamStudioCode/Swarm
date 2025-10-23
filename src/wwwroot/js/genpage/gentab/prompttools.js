@@ -48,6 +48,9 @@ class PromptTabCompleteClass {
             let prefixLow = prefix.toLowerCase();
             return this.getOrderedMatches(allPresets.map(p => p.title), prefixLow);
         });
+        this.registerPrefix('param[param_id]', 'Set a raw parameter value directly.', (prefix) => { 
+            return ['\nSet a parameter value directly, for example "<param[CFG Scale]:1>" or "<param[cfgscale]:1>" to set CFG Scale to 1.', '\nYou can combine with sub-syntax, eg "<param[cfgscale]:<random:1,2,3>>" to set CFG Scale to a random value.'];
+        });
         this.registerAltPrefix('p', 'preset');
         this.registerPrefix('embed', 'Use a pretrained CLIP TI Embedding', (prefix) => {
             let prefixLow = prefix.toLowerCase();
@@ -76,10 +79,10 @@ class PromptTabCompleteClass {
                     return this.getOrderedMatches(yolomodels.map(m => `yolo-${m}`), prefixLow);
                 }
             }
-            return ['\nSpecify before the ">" some text to match against in the image, like "<segment:face>".', '\nCan also do "<segment:text,creativity,threshold>" eg "face,0.6,0.5" where creativity is InitImageCreativity, and threshold is mask matching threshold for CLIP-Seg.', '\nYou can use a negative threshold value like "<segment:face,0.6,-0.5>" to invert the mask.', '\nYou may use the "yolo-" prefix to use a YOLOv8 seg model,', '\nor format "yolo-<model>-1" to get specifically the first result from a YOLOv8 match list.', '\n Additionally, you can apply a class filter by appending "yolo-<model>:<class_ids>:" where <class_ids> is a comma-separated list of class IDs or names to filter the detection results.'];
+            return ['\nSpecify before the ">" some text to match against in the image, like "<segment:face>".', '\nCan also do "<segment:text,creativity,threshold>" eg "face,0.6,0.5" where creativity is InitImageCreativity, and threshold is mask matching threshold for CLIP-Seg.', '\nYou can use a negative threshold value like "<segment:face,0.6,-0.5>" to invert the mask.', '\nYou may use the "yolo-" prefix to use a YOLOv8 seg model,', '\nFor more advanced usages and a link to relevant docs, click the "+" button next to the prompt box, then "Auto Segment Refinement".'];
         });
         this.registerPrefix('setvar[var_name]', 'Store text for reference later in the prompt', (prefix) => { 
-            return ['\nSave the content of the tag into the named variable. eg "<setvar[colors]: red and blue>", then use like "<var:colors>"', '\nVariables can include the results of other tags. eg "<setvar[expression]: <random: smiling|frowning|crying>>"', '\nReference stored values later in the prompt with the <var:> tag'];
+            return ['\nSave the content of the tag into the named variable. eg "<setvar[colors]: red and blue>", then use like "<var:colors>"', '\nVariables can include the results of other tags. eg "<setvar[expression]: <random: smiling|frowning|crying>>"', '\nReference stored values later in the prompt with the <var:> tag', '\nThe setvar tag emits a copy the variable value in place. You can not do this with eg "<setvar[colors,false]: red and blue>"'];
         });
         this.registerPrefix('var', 'Reference a previously saved variable later', (prefix, prompt) => {
             let prefixLow = prefix.toLowerCase();
@@ -98,13 +101,42 @@ class PromptTabCompleteClass {
             }
             return possible;
         });
+        this.registerPrefix('setmacro[macro_name]', 'Store raw text for reference later in the prompt', (prefix) => {
+            return ['\nSave the raw content of the tag into the named macro. eg "<setmacro[color]:<random:red|blue|green>>", then use like "<macro:color>"', '\nMacro content will be re-evaluated each time it is used eg "<macro:color> hair, <macro:color> eyes" might produce "red hair, blue eyes', '\nReference macros later in the prompt with the <macro:> tag', '\nThe setmacro tag emits a copy the variable value in place. You can not do this with eg "<setmacro[colors,false]: red and blue>"'];
+        });
+        this.registerPrefix('macro', 'Reference a previously saved macro', (prefix, prompt) => {
+            let prefixLow = prefix.toLowerCase();
+            let possible = [];
+            let matches = prompt.matchAll(/<setmacro\[(.*?)\]:/g);
+            if (matches) {
+                for (let match of matches) {
+                    let varName = match.substring('<setmacro['.length, match.length - ']:'.length);
+                    if (varName.toLowerCase().includes(prefixLow)) {
+                        possible.push(varName);
+                    }
+                }
+            }
+            if (possible.length == 0) {
+                return ['\nRecall a macro previously saved with <setmacro[name]:...>, use like "<macro:name>"','\n"setmacro" must be used earlier in the prompt, then "macro" later'];
+            }
+            return possible;
+        });
         this.registerPrefix('clear', 'Automatically clear part of the image to transparent (by CLIP segmentation matching) (iffy quality, prefer the Remove Background parameter over this)', (prefix) => {
             return ['\nSpecify before the ">" some text to match against in the image, like "<segment:background>"'];
         });
         this.registerPrefix('break', 'Split this prompt across multiple lines of conditioning to the model (helps separate concepts for long prompts).', (prefix) => {
             return [];
         }, true);
+        this.registerPrefix('base', 'Add a section of prompt text that is only used for the Base pass (excluding refiner/i2v/etc).', (prefix) => {
+            return [];
+        }, true);
         this.registerPrefix('refiner', 'Add a section of prompt text that is only used for the Refine/Upscale pass.', (prefix) => {
+            return [];
+        }, true);
+        this.registerPrefix('video', 'Add a section of prompt text that replaces the prompt for the image-to-video generation pass.', (prefix) => {
+            return [];
+        }, true);
+        this.registerPrefix('videoswap', 'Add a section of prompt text that replaces the prompt for the image-to-video Swap pass (eg Wan 2.2 lownoise).', (prefix) => {
             return [];
         }, true);
         this.registerPrefix('trigger', "Automatically fills with the current model or LoRA's trigger phrase(s), if any.", (prefix) => {
@@ -140,7 +172,7 @@ class PromptTabCompleteClass {
     }
 
     getPromptBeforeCursor(box) {
-        return box.value.substring(0, box.selectionStart);
+        return getTextContent(box).substring(0, getTextSelRange(box)[0]);
     }
 
     findLastWordIndex(text) {
@@ -343,10 +375,9 @@ class PromptTabCompleteClass {
             if (isClickable) {
                 button.action = () => {
                     let areaPre = prompt.substring(0, index);
-                    let areaPost = box.value.substring(box.selectionStart);
-                    box.value = areaPre + apply + areaPost;
-                    box.selectionStart = areaPre.length + apply.length;
-                    box.selectionEnd = areaPre.length + apply.length;
+                    let areaPost = getTextContent(box).substring(getTextSelRange(box)[0]);
+                    setTextContent(box, areaPre + apply + areaPost);
+                    setTextSelRange(box, areaPre.length + apply.length, areaPre.length + apply.length);
                     box.focus();
                     box.dispatchEvent(new Event('input'));
                 };
@@ -462,14 +493,26 @@ class PromptPlusButton {
             this.regionModalProcessChanges();
             $('#text_prompt_region_modal').modal('show');
         }});
+        buttons.push({ key: 'image', key_html: 'Upload Prompt Image', title: "Upload an image to use as an image-prompt", action: () => {
+            this.autoHideMenu();
+            let input = document.createElement('input');
+            input.type = 'file';
+            input.accept = 'image/*';
+            input.onchange = (e) => {
+                let file = e.target.files[0];
+                if (file && file.type.startsWith('image/')) {
+                    imagePromptAddImage(file);
+                }
+            };
+            input.click();
+        }});
         buttons.push({ key: 'other', key_html: 'Other...', title: "Add some other prompt syntax (that doesn't have its own menu)", action: () => {
             let text = this.altTextBox.value.trim();
             if (!text.endsWith('<')) {
                 text += ' <';
             }
             this.altTextBox.value = text;
-            this.altTextBox.selectionStart = this.altTextBox.value.length;
-            this.altTextBox.selectionEnd = this.altTextBox.value.length;
+            setTextSelRange(this.altTextBox, this.altTextBox.value.length, this.altTextBox.value.length);
             this.altTextBox.focus();
             triggerChangeFor(this.altTextBox);
         }});

@@ -80,6 +80,9 @@ public class Program
     /// <summary>Event-action fired when the model paths have changed (eg via settings change).</summary>
     public static Action ModelPathsChangedEvent;
 
+    /// <summary>Event-action fired when shutdown has begun but before the global cancel has set.</summary>
+    public static Action PreShutdownEvent;
+
     /// <summary>General data directory root.</summary>
     public static string DataDir = "Data";
 
@@ -88,6 +91,15 @@ public class Program
 
     /// <summary>Date of the current git commit, if known.</summary>
     public static string CurrentGitDate = null;
+
+    /// <summary>If non-zero, a remote automated API has declared that it is in control of this instance, and this is the <see cref="Environment.TickCount64"/> when it was last declared.</summary>
+    public static long TimeLastRemoteControlPing = 0;
+
+    /// <summary>If non-zero, a remote automated API must declare that it is in control of this instance every this many milliseconds, or else the server will shut down.</summary>
+    public static long RequireControlPingEveryMS = 0;
+
+    /// <summary>If true, user has requested that the server avoid saving data. This is not a hard requirement.</summary>
+    public static bool NoPersist = false;
 
     /// <summary>Primary execution entry point.</summary>
     public static void Main(string[] args)
@@ -183,11 +195,15 @@ public class Program
                     VersionUpdateMessageShort = $"Update available: {newer[0]} (you are running {Utilities.Version}, this is {newer.Length} release(s) behind):\nSee release notes at <a target=\"_blank\" href=\"{url}\">{url}</a>";
                     VersionUpdateMessage = $"{VersionUpdateMessageShort}\nThere is a button available to automatically apply the update on the <a href=\"#Settings-Server\" onclick=\"getRequiredElementById('servertabbutton').click();getRequiredElementById('serverinfotabbutton').click();\">Server Info Tab</a>.";
                 }
+                else if (tags.IsEmpty())
+                {
+                    Logs.Error($"Swarm failed to check for updates! Tag list empty?!");
+                }
                 else
                 {
                     Logs.Init($"Swarm is up to date! You have version {Utilities.Version}, and {tags[0]} is the latest.");
                 }
-            }));
+            }, "check for updates"));
         }
         waitFor.Add(Utilities.RunCheckedTask(async () =>
         {
@@ -198,12 +214,12 @@ public class Program
                 DateTimeOffset date = DateTimeOffset.Parse(parts[1].Trim()).ToUniversalTime();
                 CurrentGitDate = $"{date:yyyy-MM-dd HH:mm:ss}";
                 TimeSpan relative = DateTimeOffset.UtcNow - date;
-                string ago = $"{relative.Hours} hour{(relative.Hours == 1 ? "" : "s")} ago";
-                if (relative.Hours > 48)
+                string ago = $"{Math.Floor(relative.TotalHours)} hour{(Math.Floor(relative.TotalHours) == 1 ? "" : "s")} ago";
+                if (relative.TotalHours > 48)
                 {
-                    ago = $"{relative.Days} day{(relative.Days == 1 ? "" : "s")} ago";
+                    ago = $"{Math.Floor(relative.TotalDays)} day{(Math.Floor(relative.TotalDays) == 1 ? "" : "s")} ago";
                 }
-                else if (relative.Hours == 0)
+                else if (relative.TotalHours < 1)
                 {
                     ago = $"{relative.Minutes} minute{(relative.Minutes == 1 ? "" : "s")} ago";
                 }
@@ -214,7 +230,7 @@ public class Program
                 Logs.Error($"Failed to get git commit date: {ex.ReadableString()}");
                 CurrentGitDate = "Git failed to load";
             }
-        }));
+        }, "check current git commit"));
         waitFor.Add(Utilities.RunCheckedTask(async () =>
         {
             NvidiaUtil.NvidiaInfo[] gpuInfo = NvidiaUtil.QueryNvidia();
@@ -227,6 +243,10 @@ public class Program
             else if ((long)memStatus.TotalVirtual <= 0)
             {
                 Logs.Init($"CPU Cores: {Environment.ProcessorCount} | RAM: {new MemoryNum((long)memStatus.TotalPhysical)} total, {new MemoryNum((long)memStatus.AvailablePhysical)} available, unknown virtual/swap");
+            }
+            else if ((long)memStatus.TotalVirtual < (long)memStatus.TotalPhysical)
+            {
+                Logs.Init($"CPU Cores: {Environment.ProcessorCount} | RAM: {new MemoryNum((long)memStatus.TotalPhysical)} total, {new MemoryNum((long)memStatus.AvailablePhysical)} available, {new MemoryNum((long)memStatus.TotalVirtual)} virtual, unknown swap");
             }
             else
             {
@@ -258,7 +278,7 @@ public class Program
                     Logs.Init($"Will use GPU accelerations specific to NVIDIA GeForce RTX 30xx series and newer.");
                 }
             }
-        }));
+        }, "load gpu info"));
         T2IModelClassSorter.Init();
         Extensions.RunOnAllExtensions(e => e.OnPreInit());
         timer.Check("Extension PreInit");
@@ -365,6 +385,14 @@ public class Program
         }
         Logs.Init($"SwarmUI v{Utilities.Version} - {ServerSettings.UserAuthorization.InstanceTitle} is now running.");
         WebhookManager.SendWebhook("Startup", ServerSettings.WebHooks.ServerStartWebhook, ServerSettings.WebHooks.ServerShutdownWebhook);
+        if (Environment.CurrentDirectory.Contains("StableSwarmUI"))
+        {
+            Logs.Warning("You are running SwarmUI in a folder labeled 'StableSwarmUI', indicating you may have ran from an extremely outdated legacy version of SwarmUI (Swarm split from Stability in June 2024). You should probably reinstall fresh from https://github.com/mcmonkeyprojects/SwarmUI");
+        }
+        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("HTTP_PROXY")))
+        {
+            Logs.Warning("You have the environment variable 'HTTP_PROXY' set. This may cause network issues. If Swarm cannot connect to its own backends, remove this env var.");
+        }
         WebServer.WebApp.WaitForShutdown();
         Shutdown();
     }
@@ -473,7 +501,7 @@ public class Program
     /// <summary>Tell the server to shutdown and restart. This call is not blocking, other code will continue momentarily.</summary>
     public static void RequestRestart()
     {
-        _ = Utilities.RunCheckedTask(() => Shutdown(42));
+        _ = Utilities.RunCheckedTask(() => Shutdown(42), "shutdown");
     }
 
     /// <summary>Main shutdown handler. Tells everything to stop.</summary>
@@ -488,6 +516,7 @@ public class Program
         Task.WaitAny(waitShutdown, Task.Delay(TimeSpan.FromMinutes(2)));
         Environment.ExitCode = code;
         Logs.Info("Shutting down...");
+        PreShutdownEvent?.Invoke();
         GlobalCancelSource.Cancel();
         Logs.Verbose("Shutdown webserver...");
         WebServer.WebApp?.StopAsync().Wait();
@@ -696,6 +725,12 @@ public class Program
             };
         }
         LaunchMode = GetCommandLineFlag("launch_mode", ServerSettings.LaunchMode);
+        RequireControlPingEveryMS = (long)(double.Parse(GetCommandLineFlag("require_control_within", "0")) * 60_000);
+        if (RequireControlPingEveryMS > 0)
+        {
+            TimeLastRemoteControlPing = Environment.TickCount64;
+        }
+        NoPersist = GetCommandLineFlagAsBool("no_persist", false);
     }
 
     /// <summary>Applies runtime-changable settings.</summary>
@@ -790,16 +825,19 @@ public class Program
               [--data_dir <path>] [--settings_file <path>] [--backends_file <path>] [--environment <Production/Development>]
               [--host <hostname>] [--port <port>] [--asp_loglevel <level>] [--loglevel <level>]
               [--user_id <username>] [--lock_settings <true/false>] [--ngrok-path <path>] [--cloudflared-path <path>]
-              [--proxy-region <region>] [--ngrok-basic-auth <auth-info>] [--launch_mode <mode>] [--help <true/false>]
+              [--proxy-region <region>] [--proxy-added-args <args>] [--ngrok-basic-auth <auth-info>]
+              [--launch_mode <mode>] [--require_control_within <minutes>] [--no_persist <true/false>] [--help <true/false>]
 
             Generally, CLI args are almost never used. When they are are, they usually fall into the following categories:
               - `settings_file`, `lock_settings`, `backends_file`, `loglevel` may be useful to advanced users will multiple instances.
               - `cloudflared-path` is useful for remote tunnel users (eg colab).
               - `host`, `port`, and `launch_mode` may be useful in developmental usages where you need to quickly or automatically change network paths.
+              - `require_control_within` is used for AutoScalingBackend especially.
 
             Additional documentation about the CLI args is available online: <https://github.com/mcmonkeyprojects/SwarmUI/blob/master/docs/Command%20Line%20Arguments.md> or in the `docs/` folder of this repo.
 
             Find more information about SwarmUI in the GitHub readme and docs folder:
+              - Main website: <https://swarmui.net/>
               - Project Github: <https://github.com/mcmonkeyprojects/SwarmUI>
               - Documentation: <https://github.com/mcmonkeyprojects/SwarmUI/tree/master/docs>
               - Feature Announcements: <https://github.com/mcmonkeyprojects/SwarmUI/discussions/1>

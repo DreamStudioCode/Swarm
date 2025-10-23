@@ -13,6 +13,10 @@ function resetWelcomeMessage(override = null) {
     automaticWelcomeMessage(override);
 }
 
+let extraWelcomeDiv = getRequiredElementById('extra_welcome_message');
+let extraWelcomeHtml = extraWelcomeDiv.innerHTML.trim();
+extraWelcomeDiv.remove();
+
 /** (Only if there is no pre-existing welcome message and the current_image area is empty) automatically chooses a welcome message to display and applies it. */
 function automaticWelcomeMessage(override = null) {
     let div = document.getElementById('welcome_message');
@@ -22,7 +26,7 @@ function automaticWelcomeMessage(override = null) {
     if (div.innerHTML.trim() != '') {
         return;
     }
-    let prefix = `Welcome to <b>${getRequiredElementById('version_display').innerText} - ${window.instanceTitle}</b>!\n`;
+    let prefix = `Welcome to <b>${getRequiredElementById('version_display').innerText} - ${window.instanceTitle}</b>!\n${extraWelcomeHtml}`;
     let curModelElem = getRequiredElementById('current_model');
     if (!curModelElem.value) {
         if (allModels.length == 0) {
@@ -49,7 +53,7 @@ function automaticWelcomeMessage(override = null) {
         `Did you know:\nWant to try some fancy prompting?\nJust type a '&lt;' symbol and watch the suggestions for prompt-syntax tools appear! Give the syntax features a try! <a target="_blank" href="https://github.com/mcmonkeyprojects/SwarmUI/blob/master/docs/Features/Prompt%20Syntax.md">(Documentation Here)</a>`,
         `Did you know:\nSwarm doesn't update itself by default.\nGo to the '<b>Server</b>' tab and click '<b>Update and Restart</b>' to get the latest version. There's also a '<b>Server Config</b>' option to always pull dev updates.`,
         /* Version release notes */
-        `Release notes (2025-04-15): Check out the <a target="_blank" href="https://github.com/mcmonkeyprojects/SwarmUI/releases/tag/0.9.6-Beta">Release Notes for version 0.9.6 (Beta)</a>`
+        `Release notes (2025-08-25): Check out the <a target="_blank" href="https://github.com/mcmonkeyprojects/SwarmUI/releases/tag/0.9.7-Beta">Release Notes for version 0.9.7 (Beta)</a>`
     ];
     let dotnetNotice = document.getElementById('dotnet_missing_message');
     if (dotnetNotice) {
@@ -71,6 +75,6 @@ function automaticWelcomeMessage(override = null) {
     if (override < 0) {
         override += messages.length;
     }
-    div.innerHTML = `${prefix}\n<div class="welcome-message-wrapper">${messages[override]}</div>\n\n<button class="btn btn-secondary" onclick="resetWelcomeMessage(${override - 1})">&lt;</button> <button class="btn btn-secondary" onclick="resetWelcomeMessage(${override + 1})">&gt;</button>`;
+    div.innerHTML = `${prefix}\n<div class="welcome-message-wrapper">${messages[override]}</div>\n\n<button class="basic-button" onclick="resetWelcomeMessage(${override - 1})">&lt;</button> <button class="basic-button" onclick="resetWelcomeMessage(${override + 1})">&gt;</button>`;
     return;
 }

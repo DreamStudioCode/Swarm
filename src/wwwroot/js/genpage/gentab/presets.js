@@ -1,5 +1,22 @@
+/** Collection of helper functions and data related to presets. */
+class PresetHelpers {
+
+    constructor() {
+        this.imageBlockElem = getRequiredElementById('new_preset_image_block');
+        let imageHtml = makeImageInput(null, 'new_preset_image', null, 'Image', 'Image', true, false);
+        this.imageBlockElem.innerHTML = imageHtml;
+        this.imageElem = getRequiredElementById('new_preset_image');
+        this.enableImageElem = getRequiredElementById('new_preset_image_toggle');
+    }
+}
+
+/** Collection of helper functions and data related to presets, just an instance of {@link PresetHelpers}. */
+let presetHelpers = new PresetHelpers();
+
+//////////// TODO: Merge all the below into the class above
 
 let allPresets = [];
+let allPresetsUnsorted = [];
 let currentPresets = [];
 
 let preset_to_edit = null;
@@ -26,10 +43,9 @@ function clearPresetView() {
     getRequiredElementById('new_preset_name').value = '';
     getRequiredElementById('preset_description').value = '';
     getRequiredElementById('new_preset_modal_error').value = '';
-    getRequiredElementById('new_preset_image').innerHTML = '';
-    let enableImage = getRequiredElementById('new_preset_enable_image');
-    enableImage.checked = false;
-    enableImage.disabled = true;
+    clearImageFileInput(presetHelpers.imageElem);
+    presetHelpers.enableImageElem.checked = false;
+    triggerChangeFor(presetHelpers.enableImageElem);
     for (let type of gen_param_types) {
         try {
             let elem = getRequiredElementById('input_' + type.id);
@@ -64,20 +80,24 @@ let editPresetTitle = translatable('Edit Preset');
 
 function create_new_preset_button() {
     clearPresetView();
+    getRequiredElementById('new_preset_name').value = presetBrowser.folder;
     getRequiredElementById('new_preset_modal_title').innerText = createNewPresetTitle.get();
-    $('#add_preset_modal').modal('show');
     let curImg = document.getElementById('current_image_img');
+    presetHelpers.enableImageElem.checked = false;
+    let run = () => {
+        triggerChangeFor(presetHelpers.enableImageElem);
+        fixPresetParamClickables();
+        $('#add_preset_modal').modal('show');
+    };
     if (curImg && curImg.tagName == 'IMG') {
-        let newImg = curImg.cloneNode(true);
-        newImg.id = 'new_preset_image_img';
-        newImg.style.maxWidth = '100%';
-        newImg.style.maxHeight = '';
-        getRequiredElementById('new_preset_image').appendChild(newImg);
-        let enableImage = getRequiredElementById('new_preset_enable_image');
-        enableImage.checked = true;
-        enableImage.disabled = false;
+        setImageFileDirect(presetHelpers.imageElem, curImg.src, 'cur', 'cur', () => {
+            presetHelpers.enableImageElem.checked = false;
+            run();
+        });
     }
-    fixPresetParamClickables();
+    else {
+        run();
+    }
 }
 
 function close_create_new_preset() {
@@ -86,9 +106,13 @@ function close_create_new_preset() {
 
 function save_new_preset() {
     let errorOut = getRequiredElementById('new_preset_modal_error');
-    let name = getRequiredElementById('new_preset_name').value;
+    let name = getRequiredElementById('new_preset_name').value.trim().replaceAll('\\', '/').replace(/^\/+/, '');
     if (name == '') {
         errorOut.innerText = "Must set a Preset Name.";
+        return;
+    }
+    if (name.endsWith('/')) {
+        errorOut.innerText = "Cannot save a preset as a folder, give it a filename, or remove the trailing slash";
         return;
     }
     let description = getRequiredElementById('preset_description').value;
@@ -119,17 +143,31 @@ function save_new_preset() {
         toSend['is_edit'] = true;
         toSend['editing'] = preset_to_edit.title;
     }
-    if (getRequiredElementById('new_preset_enable_image').checked) {
-        toSend['preview_image'] = imageToSmallPreviewData(getRequiredElementById('new_preset_image').getElementsByTagName('img')[0]);
-    }
-    genericRequest('AddNewPreset', toSend, data => {
-        if (Object.keys(data).includes("preset_fail")) {
-            errorOut.innerText = data.preset_fail;
+    let complete = () => {
+        genericRequest('AddNewPreset', toSend, data => {
+            if (Object.keys(data).includes("preset_fail")) {
+                errorOut.innerText = data.preset_fail;
+                return;
+            }
+            loadUserData();
+            $('#add_preset_modal').modal('hide');
+        });
+    };
+    if (presetHelpers.enableImageElem.checked) {
+        let imageVal = getInputVal(presetHelpers.imageElem);
+        if (imageVal) {
+            toSend['preview_image_metadata'] = currentMetadataVal;
+            imageToData(imageVal, (dataURL) => {
+                toSend['preview_image'] = dataURL;
+                complete();
+            }, true);
             return;
         }
-        loadUserData();
-        $('#add_preset_modal').modal('hide');
-    });
+        else {
+            delete toSend['preview_image'];
+        }
+    }
+    complete();
 }
 
 function preset_toggle_advanced() {
@@ -263,23 +301,10 @@ function duplicatePreset(preset) {
 function editPreset(preset) {
     clearPresetView();
     preset_to_edit = preset;
+    presetHelpers.enableImageElem.checked = false;
     getRequiredElementById('new_preset_name').value = preset.title;
     getRequiredElementById('preset_description').value = preset.description;
-    let curImg = document.getElementById('current_image_img');
-    if (curImg && curImg.tagName == 'IMG') {
-        let newImg = curImg.cloneNode(true);
-        newImg.id = 'new_preset_image_img';
-        newImg.style.maxWidth = '100%';
-        newImg.style.maxHeight = '';
-        newImg.removeAttribute('width');
-        newImg.removeAttribute('height');
-        getRequiredElementById('new_preset_image').appendChild(newImg);
-        let enableImage = getRequiredElementById('new_preset_enable_image');
-        enableImage.checked = false;
-        enableImage.disabled = false;
-    }
     getRequiredElementById('new_preset_modal_title').innerText = editPresetTitle.get();
-    $('#add_preset_modal').modal('show');
     for (let key of Object.keys(preset.param_map)) {
         let type = gen_param_types.filter(p => p.id == key)[0];
         if (type) {
@@ -289,19 +314,75 @@ function editPreset(preset) {
             doToggleEnable(presetElem.id);
         }
     }
-    fixPresetParamClickables();
+    let curImg = document.getElementById('current_image_img');
+    let run = () => {
+        triggerChangeFor(presetHelpers.enableImageElem);
+        $('#add_preset_modal').modal('show');
+        fixPresetParamClickables();
+    };
+    if (curImg && curImg.tagName == 'IMG') {
+        setImageFileDirect(presetHelpers.imageElem, curImg.src, 'cur', 'cur', () => {
+            presetHelpers.enableImageElem.checked = false;
+            run();
+        });
+    }
+    else {
+        run();
+    }
 }
 
+function getPresetSortValue(sortBy, preset) {
+    switch (sortBy) {
+        case 'Name': return preset.title.substring(preset.title.lastIndexOf('/') + 1);
+        case 'Path': return preset.title;
+        default: return preset.title;
+    }
+}
+
+/** A preset comparison function which can be used to sort presets. */
+function presetSortCompare(sortBy, a, b) {
+    let valueA = getPresetSortValue(sortBy, a);
+    let valueB = getPresetSortValue(sortBy, b);
+    return valueA.localeCompare(valueB);
+}
+
+/** Sorts the presets based on the current sort options. */
 function sortPresets() {
-    let preList = allPresets.filter(p => p.title.toLowerCase() == "default" || p.title.toLowerCase() == "preview");
-    allPresets = preList.concat(allPresets.filter(p => p.title.toLowerCase() != "default" && p.title.toLowerCase() != "preview"));
+    let sortBy = localStorage.getItem('preset_list_sort_by') || 'Default';
+    let reverse = localStorage.getItem('preset_list_sort_reverse') == 'true';
+    let preList = allPresetsUnsorted.filter(p => p.title.toLowerCase() == "default" || p.title.toLowerCase() == "preview");
+    let mainList = allPresetsUnsorted.filter(p => p.title.toLowerCase() != "default" && p.title.toLowerCase() != "preview");
+    if (sortBy != 'Default') {
+        mainList.sort((a, b) => presetSortCompare(sortBy, a, b));
+    }
+    if (reverse) {
+        mainList.reverse();
+    }
+    allPresets = preList.concat(mainList);
 }
 
 function listPresetFolderAndFiles(path, isRefresh, callback, depth) {
+    let sortElem = document.getElementById('preset_list_sort_by');
+    let fix = null;
+    if (!sortElem) { // first call happens before headers are built atm
+        fix = () => {
+            let sortElem = document.getElementById('preset_list_sort_by');
+            let sortReverseElem = document.getElementById('preset_list_sort_reverse');
+            sortElem.addEventListener('change', () => {
+                localStorage.setItem('preset_list_sort_by', sortElem.value);
+                presetBrowser.update();
+            });
+            sortReverseElem.addEventListener('change', () => {
+                localStorage.setItem('preset_list_sort_reverse', sortReverseElem.checked);
+                presetBrowser.update();
+            });
+        }
+    }
     let proc = () => {
         let prefix = path == '' ? '' : (path.endsWith('/') ? path : `${path}/`);
         let folders = [];
         let files = [];
+        sortPresets();
         for (let preset of allPresets) {
             if (preset.title.startsWith(prefix)) {
                 let subPart = preset.title.substring(prefix.length);
@@ -322,11 +403,13 @@ function listPresetFolderAndFiles(path, isRefresh, callback, depth) {
             }
         }
         callback(folders, files);
+        if (fix) {
+            fix();
+        }
     };
     if (isRefresh) {
         genericRequest('GetMyUserData', {}, data => {
-            allPresets = data.presets;
-            sortPresets();
+            allPresetsUnsorted = data.presets;
             proc();
         });
     }
@@ -352,7 +435,6 @@ function describePreset(preset) {
     ];
     let paramText = Object.keys(preset.data.param_map).map(key => `${key}: ${preset.data.param_map[key]}`);
     let description = `${preset.data.title}:\n${preset.data.description}\n\n${paramText.join('\n')}`;
-    let detail_list = [escapeHtml(preset.data.title), escapeHtml(preset.data.description), escapeHtmlNoBr(paramText.join('\n').replaceAll('\n', '&emsp;'))];
     let className = currentPresets.some(p => p.title == preset.data.title) ? 'preset-block-selected preset-block' : 'preset-block';
     let name = preset.data.title;
     let index = name.lastIndexOf('/');
@@ -360,6 +442,25 @@ function describePreset(preset) {
         name = name.substring(index + 1);
     }
     let searchable = description;
+    let displayFields = new Set((getUserSetting('ui.presetlistdetailsfields', '') || 'path,description,params').split(',').map(s => cleanParamName(s)));
+    let displayParams = Array.from(displayFields).map(field => {
+        if (field == 'path') {
+            return {name: field, value: preset.data.title};
+        }
+        else if (field == 'name') {
+            return {name: field, value: name};
+        }
+        else if (field == 'description') {
+            return {name: field, value: preset.data.description || ''};
+        }
+        else if (field == 'params') {
+            return {name: field, value: paramText.join('\n') };
+        }
+        else {
+            return {name: field, value: `${preset.data.param_map[field] ?? ''}`};
+        }
+    });
+    let detail_list = displayParams.map(p => escapeHtmlNoBr(p.value).replaceAll('\n', '&emsp;'));
     return { name, description: escapeHtml(description), buttons, 'image': preset.data.preview_image, className, searchable, detail_list };
 }
 
@@ -381,7 +482,8 @@ function clearPresets() {
 }
 
 let presetBrowser = new GenPageBrowserClass('preset_list', listPresetFolderAndFiles, 'presetbrowser', 'Cards', describePreset, selectPreset,
-    `<button id="preset_list_create_new_button translate" class="refresh-button" onclick="create_new_preset_button()">Create New Preset</button>
+    `<label for="preset_list_sort_by">Sort:</label> <select id="preset_list_sort_by"><option>Default</option><option>Name</option><option>Path</option></select> <input type="checkbox" id="preset_list_sort_reverse"> <label for="preset_list_sort_reverse">Reverse</label>
+    <button id="preset_list_create_new_button translate" class="refresh-button" onclick="create_new_preset_button()">Create New Preset</button>
     <button id="preset_list_import_button translate" class="refresh-button" onclick="importPresetsButton()">Import Presets</button>
     <button id="preset_list_export_button translate" class="refresh-button" onclick="exportPresetsButton()">Export All Presets</button>
     <button id="preset_list_apply_button translate" class="refresh-button" onclick="apply_presets()" title="Apply all current presets directly to your parameter list.">Apply Presets</button>`);

@@ -60,6 +60,10 @@ public class SessionHandler
     /// <summary>Saves persistent data to file.</summary>
     public void Save()
     {
+        if (Program.NoPersist)
+        {
+            return;
+        }
         lock (DBLock)
         {
             FDSSection roleSection = new();
@@ -69,6 +73,18 @@ public class SessionHandler
             }
             roleSection.SetRoot("___$tracked", TrackedPermissions);
             roleSection.SaveToFile($"{Program.DataDir}/Roles.fds");
+        }
+    }
+
+    /// <summary>Rebuild roles for any user that has the given role, to propagate any changes made to that role.</summary>
+    public void PropagateRoleChange(string roleId)
+    {
+        foreach (User user in Users.Values)
+        {
+            if (user.Settings.Roles.Contains(roleId))
+            {
+                user.BuildRoles();
+            }
         }
     }
 
@@ -247,6 +263,10 @@ public class SessionHandler
 
     public void CleanOldSessions()
     {
+        if (Program.NoPersist)
+        {
+            return;
+        }
         long cutOffTimeUTC = DateTimeOffset.UtcNow.Subtract(MaxSessionAge).ToUnixTimeSeconds();
         lock (DBLock)
         {
@@ -284,9 +304,12 @@ public class SessionHandler
             if (Sessions.TryAdd(sess.ID, sess))
             {
                 sess.User.CurrentSessions[sess.ID] = sess;
-                lock (DBLock)
+                if (!Program.NoPersist)
                 {
-                    SessionDatabase.Upsert(sess.MakeDBEntry());
+                    lock (DBLock)
+                    {
+                        SessionDatabase.Upsert(sess.MakeDBEntry());
+                    }
                 }
                 return sess;
             }
@@ -304,9 +327,12 @@ public class SessionHandler
         catch (Exception) { }
         Sessions.TryRemove(session.ID, out _);
         session.User.CurrentSessions.TryRemove(session.ID, out _);
-        lock (DBLock)
+        if (!Program.NoPersist)
         {
-            SessionDatabase.Delete(session.ID);
+            lock (DBLock)
+            {
+                SessionDatabase.Delete(session.ID);
+            }
         }
     }
 
@@ -363,7 +389,10 @@ public class SessionHandler
                 {
                     if (LoginSessions.FindById(existing.OriginToken) is null)
                     {
-                        SessionDatabase.Delete(id);
+                        if (!Program.NoPersist)
+                        {
+                            SessionDatabase.Delete(id);
+                        }
                         return false;
                     }
                 }
@@ -377,7 +406,10 @@ public class SessionHandler
                 if (Sessions.TryAdd(session.ID, session))
                 {
                     session.User.CurrentSessions[session.ID] = session;
-                    SessionDatabase.Upsert(session.MakeDBEntry());
+                    if (!Program.NoPersist)
+                    {
+                        SessionDatabase.Upsert(session.MakeDBEntry());
+                    }
                     return true;
                 }
             }

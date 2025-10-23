@@ -4,6 +4,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using SwarmUI.Accounts;
 using SwarmUI.Core;
+using SwarmUI.Media;
 using SwarmUI.Utils;
 
 namespace SwarmUI.Text2Image;
@@ -11,29 +12,40 @@ namespace SwarmUI.Text2Image;
 /// <summary>Represents user-input for a Text2Image request.</summary>
 public class T2IParamInput
 {
+    /// <summary>Core section ID numbers.</summary>
+    public static int SectionID_BaseOnly = 5, SectionID_Refiner = 1, SectionID_Video = 2, SectionID_VideoSwap = 3;
+
     /// <summary>Parameter IDs that must be loaded early on, eg extracted from presets in prompts early. Primarily things that affect backend selection.</summary>
     public static readonly string[] ParamsMustLoadEarly = ["model", "images", "internalbackendtype", "exactbackendid"];
+
+    /// <summary>Lock in valid seeds to this input (ie remove '-1' seed values).</summary>
+    public void LockSeeds()
+    {
+        if (!RawOriginalSeed.HasValue)
+        {
+            RawOriginalSeed = Get(T2IParamTypes.Seed, -1);
+        }
+        InternalSet.LockSeeds();
+        foreach (T2IParamSet sectional in SectionParamOverrides.Values)
+        {
+            sectional.LockSeeds();
+        }
+    }
 
     /// <summary>Special handlers for any special logic to apply post-loading a param input.</summary>
     public static List<Action<T2IParamInput>> SpecialParameterHandlers =
     [
         input =>
         {
-            if (!input.RawOriginalSeed.HasValue)
+            foreach (T2IPreset preset in input.PendingPresets)
             {
-                input.RawOriginalSeed = input.Get(T2IParamTypes.Seed, -1);
+                preset.ApplyTo(input);
             }
-            if (!input.TryGet(T2IParamTypes.Seed, out long seed) || seed == -1)
-            {
-                input.Set(T2IParamTypes.Seed, Random.Shared.Next());
-            }
+            input.PendingPresets.Clear();
         },
         input =>
         {
-            if (input.TryGet(T2IParamTypes.VariationSeed, out long seed) && seed == -1)
-            {
-                input.Set(T2IParamTypes.VariationSeed, Random.Shared.Next());
-            }
+            input.LockSeeds();
         },
         input =>
         {
@@ -104,6 +116,9 @@ public class T2IParamInput
         }
     ];
 
+    /// <summary>Special handlers for any special logic to apply at the end of other processing on param input.</summary>
+    public static List<Action<T2IParamInput>> LateSpecialParameterHandlers = [input => input.PreparsePromptLikes()];
+
     /// <summary>The underlying raw <see cref="T2IParamSet"/> backing the main inputs.</summary>
     public T2IParamSet InternalSet = new();
 
@@ -115,6 +130,9 @@ public class T2IParamInput
 
     /// <summary>A set of feature flags required for this input.</summary>
     public HashSet<string> RequiredFlags = [];
+
+    /// <summary>A list of any user requested presets not yet applied.</summary>
+    public List<T2IPreset> PendingPresets = [];
 
     /// <summary>The session this input came from.</summary>
     public Session SourceSession;
@@ -148,6 +166,20 @@ public class T2IParamInput
 
     /// <summary>Locker for editing <see cref="UIDIncrementer"/>.</summary>
     public static LockObject UIDLock = new();
+
+    /// <summary>Parameter overrides applied onto to specific sections.</summary>
+    public Dictionary<int, T2IParamSet> SectionParamOverrides = [];
+
+    /// <summary>Gets the parameter overrides for a given section. Returns the main <see cref="InternalSet"/> if not in a sub-section currently.</summary>
+    /// <param name="section">The section ID.</param>
+    public T2IParamSet GetSectionParamOverrides(int section)
+    {
+        if (section <= 0)
+        {
+            return InternalSet;
+        }
+        return SectionParamOverrides.GetOrCreate(section, () => new());
+    }
 
     /// <summary>Construct a new parameter input handler for a session.</summary>
     public T2IParamInput(Session session)
@@ -224,12 +256,13 @@ public class T2IParamInput
         toret.InternalSet = InternalSet.Clone();
         toret.ExtraMeta = new Dictionary<string, object>(ExtraMeta);
         toret.RequiredFlags = [.. RequiredFlags];
+        toret.PendingPresets = [.. PendingPresets];
         return toret;
     }
 
     public static object SimplifyParamVal(object val)
     {
-        if (val is Image img)
+        if (val is ImageFile img)
         {
             return img.AsBase64;
         }
@@ -424,7 +457,7 @@ public class T2IParamInput
     {
         T2IPromptHandling.PromptTagContext posContext = new() { Input = this, Param = T2IParamTypes.Prompt.Type.ID };
         InternalSet.ValuesInput["prompt"] = ProcessPromptLike(T2IParamTypes.Prompt, posContext);
-        T2IPromptHandling.PromptTagContext negContext = new() { Input = this, Param = T2IParamTypes.Prompt.Type.ID, Variables = posContext.Variables };
+        T2IPromptHandling.PromptTagContext negContext = new() { Input = this, Param = T2IParamTypes.Prompt.Type.ID, Variables = posContext.Variables, Macros = posContext.Macros };
         InternalSet.ValuesInput["negativeprompt"] = ProcessPromptLike(T2IParamTypes.NegativePrompt, negContext);
     }
 
@@ -522,21 +555,62 @@ public class T2IParamInput
     public T Get<T>(T2IRegisteredParam<T> param) => InternalSet.Get(param);
 
     /// <summary>Gets the value of the parameter, if it is present, or default if not.</summary>
-    public T Get<T>(T2IRegisteredParam<T> param, T defVal, bool autoFixDefault = false) => InternalSet.Get(param, defVal, autoFixDefault);
+    public T? GetNullable<T>(T2IRegisteredParam<T> param, int sectionId = 0, bool includeBase = true) where T : unmanaged
+    {
+        if (sectionId > 0 && SectionParamOverrides.TryGetValue(sectionId, out T2IParamSet subSet) && subSet.TryGet(param, out T subVal))
+        {
+            return subVal;
+        }
+        if (sectionId != 0 && !includeBase)
+        {
+            return null;
+        }
+        if (InternalSet.TryGet(param, out T val))
+        {
+            return val;
+        }
+        return null;
+    }
+
+    /// <summary>Gets the value of the parameter, if it is present, or default if not.</summary>
+    public T Get<T>(T2IRegisteredParam<T> param, T defVal, bool autoFixDefault = false, int sectionId = 0, bool includeBase = true)
+    {
+        if (sectionId > 0 && SectionParamOverrides.TryGetValue(sectionId, out T2IParamSet subSet) && subSet.TryGet(param, out T subVal))
+        {
+            return subVal;
+        }
+        if (sectionId != 0 && !includeBase)
+        {
+            return defVal;
+        }
+        return InternalSet.Get(param, defVal, autoFixDefault);
+    }
 
     /// <summary>Gets the value of the parameter as a string, if it is present, or null if not.</summary>
     public string GetString<T>(T2IRegisteredParam<T> param) => InternalSet.GetString(param);
 
     /// <summary>Tries to get the value of the parameter. If it is present, returns true and outputs the value. If it is not present, returns false.</summary>
-    public bool TryGet<T>(T2IRegisteredParam<T> param, out T val) => InternalSet.TryGet(param, out val);
+    public bool TryGet<T>(T2IRegisteredParam<T> param, out T val, int sectionId = 0, bool includeBase = true)
+    {
+        if (sectionId > 0 && SectionParamOverrides.TryGetValue(sectionId, out T2IParamSet subSet) && subSet.TryGet(param, out val))
+        {
+            return true;
+        }
+        if (sectionId != 0 && !includeBase)
+        {
+            val = default;
+            return false;
+        }
+        return InternalSet.TryGet(param, out val);
+    }
 
     /// <summary>Tries to get the value of the parameter. If it is present, returns true and outputs the value. If it is not present, returns false.</summary>
     public bool TryGetRaw(T2IParamType param, out object val) => InternalSet.TryGetRaw(param, out val);
 
     /// <summary>Sets the value of an input parameter to a given plaintext input. Will run the 'Clean' call if needed.</summary>
-    public void Set(T2IParamType param, string val)
+    public void Set(T2IParamType param, string val, int sectionId = 0)
     {
-        InternalSet.Set(param, val);
+        GetSectionParamOverrides(sectionId).Set(param, val);
         if (param.FeatureFlag is not null)
         {
             RequiredFlags.UnionWith(param.FeatureFlag.SplitFast(','));
@@ -544,9 +618,9 @@ public class T2IParamInput
     }
 
     /// <summary>Sets the direct raw value of a given parameter, without processing.</summary>
-    public void Set<T>(T2IRegisteredParam<T> param, T val)
+    public void Set<T>(T2IRegisteredParam<T> param, T val, int sectionId = 0)
     {
-        InternalSet.Set(param, val);
+        GetSectionParamOverrides(sectionId).Set(param, val);
         if (param.Type.FeatureFlag is not null)
         {
             RequiredFlags.UnionWith(param.Type.FeatureFlag.SplitFast(','));
@@ -573,6 +647,15 @@ public class T2IParamInput
             handler(this);
         }
         EarlyLoadDone = true;
+    }
+
+    /// <summary>Late special logic handlers.</summary>
+    public void ApplyLateSpecialLogic()
+    {
+        foreach (Action<T2IParamInput> handler in LateSpecialParameterHandlers)
+        {
+            handler(this);
+        }
     }
 
     /// <summary>Returns a simple text representation of the input data.</summary>

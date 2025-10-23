@@ -4,11 +4,10 @@ using LiteDB;
 using Newtonsoft.Json.Linq;
 using SwarmUI.Accounts;
 using SwarmUI.Core;
+using SwarmUI.Media;
 using SwarmUI.Utils;
 using SwarmUI.WebAPI;
 using System.IO;
-using System.Security.Cryptography;
-using System.Text.RegularExpressions;
 
 namespace SwarmUI.Text2Image;
 
@@ -63,7 +62,12 @@ public class T2IModelHandler
                 catch (Exception) { }
                 try
                 {
-                    File.Delete($"{Folder}/image_metadata.ldb");
+                    File.Delete($"{Folder}/model_metadata.ldb");
+                }
+                catch (Exception) { }
+                try
+                {
+                    File.Delete($"{Folder}/model_metadata-log.ldb");
                 }
                 catch (Exception) { }
                 ModelMetadataCachePerFolder.TryRemove(Folder, out _);
@@ -106,6 +110,10 @@ public class T2IModelHandler
         public int StandardHeight { get; set; }
 
         public bool IsNegativeEmbedding { get; set; }
+
+        public string LoraDefaultWeight { get; set; }
+
+        public string LoraDefaultConfinement { get; set; }
 
         public string License { get; set; }
 
@@ -235,7 +243,8 @@ public class T2IModelHandler
         {
             return model;
         }
-        if (ModelsAPI.InternalExtraModels(ModelType).TryGetValue(name, out JObject extraModelData))
+        Dictionary<string, JObject> extra = ModelsAPI.InternalExtraModels(ModelType);
+        if (extra.TryGetValue(name, out JObject extraModelData) || extra.TryGetValue(name + ".safetensors", out extraModelData))
         {
             return T2IModel.FromNetObject(extraModelData);
         }
@@ -317,6 +326,10 @@ public class T2IModelHandler
     /// <summary>Updates the metadata cache database to the metadata assigned to this model object.</summary>
     public void ResetMetadataFrom(T2IModel model)
     {
+        if (Program.NoPersist)
+        {
+            return;
+        }
         ModelDatabase cache = null;
         try
         {
@@ -374,7 +387,8 @@ public class T2IModelHandler
             {
                 if (File.Exists(prefix + suffix))
                 {
-                    return new Image(File.ReadAllBytes(prefix + suffix), Image.ImageType.IMAGE, suffix.AfterLast('.')).ToMetadataFormat();
+                    ImageFile loaded = new Image(File.ReadAllBytes(prefix + suffix), MediaType.GetByExtension(suffix.AfterLast('.')));
+                    return loaded.ToMetadataFormat();
                 }
             }
             catch (Exception ex)
@@ -543,7 +557,7 @@ public class T2IModelHandler
                 }
             }
             string altTriggerPhrase = triggerPhrases.JoinString(", ");
-            T2IModelClass clazz = T2IModelClassSorter.IdentifyClassFor(model, headerData);
+            T2IModelClass clazz = T2IModelClassSorter.IdentifyClassFor(model, headerData, ModelType);
             string specialFormat = null;
             foreach (string key in headerData.Properties().Select(p => p.Name))
             {
@@ -562,12 +576,12 @@ public class T2IModelHandler
                     specialFormat = "fp8_scaled";
                     break;
                 }
-                if (key.EndsWith(".mlp_context_fc1.wscales"))
+                if (key.EndsWith(".wscales"))
                 {
                     specialFormat = "nunchaku";
                     break;
                 }
-                if (key.EndsWith(".mlp_context_fc1.wtscale"))
+                if (key.EndsWith(".wtscale"))
                 {
                     specialFormat = "nunchaku-fp4";
                     break;
@@ -609,6 +623,11 @@ public class T2IModelHandler
                 height = (metaHeader?.ContainsKey("standard_height") ?? false) ? metaHeader.Value<int>("standard_height") : (clazz?.StandardHeight ?? 0);
             }
             img ??= autoImg;
+            if (img is not null && img.Length > 1024 * 1024 * 8)
+            {
+                Logs.Warning($"Ignoring image in metadata of {model.Name} as it is too large (over {img.Length / 1024 / 1024} megabytes)!");
+                img = null;
+            }
             string[] tags = null;
             JToken tagsTok = metaHeader.Property("modelspec.tags")?.Value;
             if (tagsTok is not null && tagsTok.Type != JTokenType.Null)
@@ -621,6 +640,22 @@ public class T2IModelHandler
                 {
                     tags = tagsTok.Value<string>().Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
                 }
+            }
+            static string[] limitSize(string[] arr, int max)
+            {
+                if (arr is null || arr.Length <= max)
+                {
+                    return arr;
+                }
+                return arr[0..max];
+            }
+            static string limitLength(string str, int max)
+            {
+                if (str is null || str.Length <= max)
+                {
+                    return str;
+                }
+                return str[..(max - 3)] + "...";
             }
             static string pickBest(params string[] options)
             {
@@ -642,6 +677,7 @@ public class T2IModelHandler
                 }
                 return nonNull;
             }
+            const int basicLimit = 4096;
             metadata = new()
             {
                 ModelFileVersion = modified,
@@ -649,24 +685,26 @@ public class T2IModelHandler
                 TimeCreated = new DateTimeOffset(File.GetCreationTimeUtc(model.RawFilePath)).ToUnixTimeMilliseconds(),
                 ModelName = modelCacheId,
                 ModelClassType = clazz?.ID,
-                Title = pickBest(metaHeader?.Value<string>("modelspec.title"), metaHeader?.Value<string>("title"), altName, fileName.BeforeLast('.')),
-                Author = pickBest(metaHeader?.Value<string>("modelspec.author"), metaHeader?.Value<string>("author")),
-                Description = pickBest(metaHeader?.Value<string>("modelspec.description"), metaHeader?.Value<string>("description"), altDescription),
+                Title = limitLength(pickBest(metaHeader?.Value<string>("modelspec.title"), metaHeader?.Value<string>("title"), altName, fileName.BeforeLast('.')), basicLimit),
+                Author = limitLength(pickBest(metaHeader?.Value<string>("modelspec.author"), metaHeader?.Value<string>("author")), basicLimit),
+                Description = limitLength(pickBest(metaHeader?.Value<string>("modelspec.description"), metaHeader?.Value<string>("description"), altDescription), 1024 * 1024 * 4),
                 PreviewImage = img,
                 StandardWidth = width,
                 StandardHeight = height,
-                UsageHint = pickBest(metaHeader?.Value<string>("modelspec.usage_hint"), metaHeader?.Value<string>("usage_hint")),
-                MergedFrom = pickBest(metaHeader?.Value<string>("modelspec.merged_from"), metaHeader?.Value<string>("merged_from")),
-                TriggerPhrase = pickBest(metaHeader?.Value<string>("modelspec.trigger_phrase"), metaHeader?.Value<string>("trigger_phrase")) ?? altTriggerPhrase,
-                License = pickBest(metaHeader?.Value<string>("modelspec.license"), metaHeader?.Value<string>("license")),
-                Date = pickBest(metaHeader?.Value<string>("modelspec.date"), metaHeader?.Value<string>("date")),
-                Preprocessor = pickBest(metaHeader?.Value<string>("modelspec.preprocessor"), metaHeader?.Value<string>("preprocessor")),
-                Tags = tags,
+                UsageHint = limitLength(pickBest(metaHeader?.Value<string>("modelspec.usage_hint"), metaHeader?.Value<string>("usage_hint")), 8192 * 5),
+                MergedFrom = limitLength(pickBest(metaHeader?.Value<string>("modelspec.merged_from"), metaHeader?.Value<string>("merged_from")), 8192 * 10),
+                TriggerPhrase = limitLength(pickBest(metaHeader?.Value<string>("modelspec.trigger_phrase"), metaHeader?.Value<string>("trigger_phrase")) ?? altTriggerPhrase, 8192 * 5),
+                License = limitLength(pickBest(metaHeader?.Value<string>("modelspec.license"), metaHeader?.Value<string>("license")), basicLimit),
+                Date = limitLength(pickBest(metaHeader?.Value<string>("modelspec.date"), metaHeader?.Value<string>("date")), basicLimit),
+                Preprocessor = limitLength(pickBest(metaHeader?.Value<string>("modelspec.preprocessor"), metaHeader?.Value<string>("preprocessor")), basicLimit),
+                Tags = limitSize(tags, 128),
                 IsNegativeEmbedding = (pickBest(metaHeader?.Value<string>("modelspec.is_negative_embedding"), metaHeader?.Value<string>("is_negative_embedding")) ?? "false") == "true",
-                PredictionType = pickBest(metaHeader?.Value<string>("modelspec.prediction_type"), metaHeader?.Value<string>("prediction_type")),
-                Hash = pickBest(metaHeader?.Value<string>("modelspec.hash_sha256"), metaHeader?.Value<string>("hash_sha256")),
+                LoraDefaultWeight = limitLength(pickBest(metaHeader?.Value<string>("modelspec.lora_default_weight"), metaHeader?.Value<string>("lora_default_weight")), basicLimit),
+                LoraDefaultConfinement = limitLength(pickBest(metaHeader?.Value<string>("modelspec.lora_default_confinement"), metaHeader?.Value<string>("lora_default_confinement")), basicLimit),
+                PredictionType = limitLength(pickBest(metaHeader?.Value<string>("modelspec.prediction_type"), metaHeader?.Value<string>("prediction_type")), basicLimit),
+                Hash = limitLength(pickBest(metaHeader?.Value<string>("modelspec.hash_sha256"), metaHeader?.Value<string>("hash_sha256")), basicLimit),
                 TextEncoders = textEncs,
-                SpecialFormat = pickBest(metaHeader?.Value<string>("modelspec.special_format"), metaHeader?.Value<string>("special_format"), specialFormat)
+                SpecialFormat = limitLength(pickBest(metaHeader?.Value<string>("modelspec.special_format"), metaHeader?.Value<string>("special_format"), specialFormat), basicLimit)
             };
             lock (MetadataLock)
             {

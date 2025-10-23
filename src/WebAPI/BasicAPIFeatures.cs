@@ -12,6 +12,7 @@ using Newtonsoft.Json;
 using Microsoft.Extensions.Primitives;
 using System.Reflection;
 using FreneticUtilities.FreneticToolkit;
+using SwarmUI.Media;
 
 namespace SwarmUI.WebAPI;
 
@@ -59,6 +60,7 @@ public static class BasicAPIFeatures
             // or
             "error_id": "invalid_login" // or "ratelimit"
         """)]
+    [API.APINonfinalMark]
     public static async Task<JObject> Login(HttpContext context,
         [API.APIParameter("Login username.")] string username,
         [API.APIParameter("Login password.")] string password)
@@ -108,7 +110,7 @@ public static class BasicAPIFeatures
         return new JObject() { ["success"] = "true" };
     }
 
-    [API.APIDescription("Special route to create a new session ID. Must be called before any other API route. Also returns other fundamental user and server data.",
+    [API.APIDescription("Special route to create a new session ID. Must be called before any other API route. Also returns other fundamental user and server data.\nIntentionally no permission flag required, as permissions are not defined until you create a session.",
         """
             "session_id": "session_id",
             "user_id": "username",
@@ -145,6 +147,7 @@ public static class BasicAPIFeatures
         """
             "success": "true"
         """)]
+    [API.APINonfinalMark]
     public static async Task<JObject> Logout(HttpContext context, Session session)
     {
         if (!Program.ServerSettings.UserAuthorization.AuthorizationRequired)
@@ -258,6 +261,7 @@ public static class BasicAPIFeatures
         [API.APIParameter("User-facing description text.")] string description,
         [API.APIParameter("Use 'param_map' key to send the raw parameter mapping, equivalent to GenerateText2Image.")] JObject raw,
         [API.APIParameter("Optional preview image data base64 string.")] string preview_image = null,
+        [API.APIParameter("Optional raw text of metadata to inject to the preview image.")] string preview_image_metadata = null,
         [API.APIParameter("If true, edit an existing preset. If false, do not override pre-existing presets of the same name.")] bool is_edit = false,
         [API.APIParameter("If is_edit is set, include the original preset name here.")] string editing = null)
     {
@@ -272,6 +276,16 @@ public static class BasicAPIFeatures
         {
             return new JObject() { ["preset_fail"] = "A preset with that title already exists." };
         }
+        if (!string.IsNullOrWhiteSpace(preview_image) && preview_image != "imgs/model_placeholder.jpg")
+        {
+            if ((!preview_image.StartsWith("data:image/jpeg;base64,") && !preview_image.StartsWith("/Output")) || preview_image.Contains('?'))
+            {
+                Logs.Info($"User {session.User.UserID} tried to set a preset preview image to forbidden path: {preview_image}");
+                return new JObject() { ["preset_fail"] = "Forbidden preview-image path." };
+            }
+            ImageFile img = ImageFile.FromDataString(preview_image).ToMetadataJpg(preview_image_metadata);
+            preview_image = img.AsDataString();
+        }
         T2IPreset preset = new()
         {
             Author = session.User.UserID,
@@ -280,11 +294,6 @@ public static class BasicAPIFeatures
             ParamMap = paramData.Properties().Select(p => (p.Name, p.Value.ToString())).PairsToDictionary(),
             PreviewImage = string.IsNullOrWhiteSpace(preview_image) ? "imgs/model_placeholder.jpg" : preview_image
         };
-        if ((preset.PreviewImage != "imgs/model_placeholder.jpg" && !preset.PreviewImage.StartsWith("data:image/jpeg;base64,") && !preset.PreviewImage.StartsWith("/Output")) || preset.PreviewImage.Contains('?'))
-        {
-            Logs.Info($"User {session.User.UserID} tried to set a preset preview image to forbidden path: {preset.PreviewImage}");
-            return new JObject() { ["preset_fail"] = "Forbidden preview-image path." };
-        }
         if (is_edit && existingPreset is not null && editing != title)
         {
             session.User.DeletePreset(editing);
@@ -333,13 +342,10 @@ public static class BasicAPIFeatures
     }
 
     /// <summary>Gets current session status. Not an API call.</summary>
-    public static JObject GetCurrentStatusRaw(Session session, bool do_debug = false)
+    public static JObject GetCurrentStatusRaw(Session session)
     {
-        if (do_debug) { Logs.Verbose($"Getting current status for session {session.User.UserID}..."); }
         JObject backendStatus = Program.Backends.CurrentBackendStatus.GetValue();
-        if (do_debug) { Logs.Verbose("Got backend status, will get feature set..."); }
         string[] features = [.. Program.Backends.GetAllSupportedFeatures()];
-        if (do_debug) { Logs.Verbose("Got backend stats, will get session data...."); }
         Interlocked.MemoryBarrier();
         JObject stats = new()
         {
@@ -348,7 +354,6 @@ public static class BasicAPIFeatures
             ["waiting_backends"] = session.WaitingBackends,
             ["live_gens"] = session.LiveGens
         };
-        if (do_debug) { Logs.Verbose("Exited session lock. Done."); }
         return new JObject
         {
             ["status"] = stats,
@@ -373,10 +378,9 @@ public static class BasicAPIFeatures
             },
             "supported_features": ["feature_id1", "feature_id2"]
         """)]
-    public static async Task<JObject> GetCurrentStatus(Session session,
-        [API.APIParameter("If true, verbose log data about the status report gathering (internal usage).")] bool do_debug = false)
+    public static async Task<JObject> GetCurrentStatus(Session session)
     {
-        return GetCurrentStatusRaw(session, do_debug);
+        return GetCurrentStatusRaw(session);
     }
 
     [API.APIDescription("Tell all waiting generations in this session or all sessions to interrupt.",
@@ -470,6 +474,7 @@ public static class BasicAPIFeatures
         """
             "success": true
         """)]
+    [API.APINonfinalMark]
     public static async Task<JObject> ChangePassword(Session session,
         [API.APIParameter("Your current password.")] string oldPassword,
         [API.APIParameter("Your new password. Must be at least 8 characters.")] string newPassword)
@@ -541,7 +546,7 @@ public static class BasicAPIFeatures
         return new JObject() { ["success"] = true };
     }
 
-    public static HashSet<string> AcceptedAPIKeyTypes = ["stability_api", "civitai_api"];
+    public static HashSet<string> AcceptedAPIKeyTypes = ["stability_api", "civitai_api", "huggingface_api"];
 
     [API.APIDescription("User route to set an API key.",
         """
