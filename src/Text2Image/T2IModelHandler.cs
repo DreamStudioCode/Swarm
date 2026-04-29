@@ -1,4 +1,4 @@
-﻿using FreneticUtilities.FreneticExtensions;
+using FreneticUtilities.FreneticExtensions;
 using FreneticUtilities.FreneticToolkit;
 using LiteDB;
 using Newtonsoft.Json.Linq;
@@ -215,7 +215,16 @@ public class T2IModelHandler
         }
     }
 
+    public HashSet<string> AllModelNames => [.. Models.Keys, .. ModelsAPI.InternalExtraModels(ModelType).Keys];
+
     public List<T2IModel> ListModelsFor(Session session)
+    {
+        Dictionary<string, JObject> extra = ModelsAPI.InternalExtraModels(ModelType);
+        List<string> names = ListModelNamesFor(session);
+        return [.. names.Where(n => n != "(None)").Select(m => GetModel(m, extra))];
+    }
+
+    public List<string> ListModelNamesFor(Session session)
     {
         if (IsShutdown)
         {
@@ -223,27 +232,18 @@ public class T2IModelHandler
         }
         if (session is null || session.User.IsAllowedAllModels)
         {
-            return [.. Models.Values];
+            return ["(None)", .. AllModelNames];
         }
-        return [.. Models.Values.Where(m => session.User.IsAllowedModel(m.Name))];
+        return ["(None)", .. AllModelNames.Where(session.User.IsAllowedModel)];
     }
 
-    public List<string> ListModelNamesFor(Session session)
-    {
-        HashSet<string> list = [.. ListModelsFor(session).Select(m => m.Name)];
-        list.UnionWith(ModelsAPI.InternalExtraModels(ModelType).Keys);
-        List<string> result = new(list.Count + 2) { "(None)" };
-        result.AddRange(list);
-        return result;
-    }
-
-    public T2IModel GetModel(string name)
+    public T2IModel GetModel(string name, Dictionary<string, JObject> extra = null)
     {
         if (Models.TryGetValue(name, out T2IModel model) || Models.TryGetValue(name + ".safetensors", out model))
         {
             return model;
         }
-        Dictionary<string, JObject> extra = ModelsAPI.InternalExtraModels(ModelType);
+        extra ??= ModelsAPI.InternalExtraModels(ModelType);
         if (extra.TryGetValue(name, out JObject extraModelData) || extra.TryGetValue(name + ".safetensors", out extraModelData))
         {
             return T2IModel.FromNetObject(extraModelData);
@@ -264,13 +264,14 @@ public class T2IModelHandler
             {
                 Directory.CreateDirectory(path);
             }
-            lock (ModificationLock)
-            {
-                Models.Clear();
-            }
+            ConcurrentDictionary<string, T2IModel> newModels = new();
             foreach (string path in FolderPaths)
             {
-                AddAllFromFolder(path, "");
+                AddAllFromFolder(path, "", newModels);
+            }
+            lock (ModificationLock)
+            {
+                Models = newModels;
             }
             Logs.Debug($"Have {Models.Count} {ModelType} models.");
             T2IModel[] dupped = [.. Models.Values.Where(m => m.OtherPaths.Count > 0)];
@@ -505,40 +506,43 @@ public class T2IModelHandler
                         altDescription += descTok.Value<string>() + "\n";
                     }
                 }
-                foreach (string wordsKey in AltMetadataTriggerWordsKeys)
+                if (Program.ServerSettings.Paths.UseSecondaryTriggerPhraseSources)
                 {
-                    static string[] procWordsFrom(JToken tok)
+                    foreach (string wordsKey in AltMetadataTriggerWordsKeys)
                     {
-                        if (tok.Type == JTokenType.Array)
+                        static string[] procWordsFrom(JToken tok)
                         {
-                            return tok.ToObject<string[]>();
-                        }
-                        else if (tok is JObject jobj)
-                        {
-                            IEnumerable<string[]> wordSets = jobj.Properties().Select(p => p.Value is JObject subData ? procWordsFrom(subData) : [p.Name]);
-                            return [.. wordSets.Flatten()];
-                        }
-                        else if (tok.Type == JTokenType.String)
-                        {
-                            string trainedWordsTok = tok.Value<string>();
-                            if (trainedWordsTok.StartsWithFast('{') && trainedWordsTok.EndsWithFast('}'))
+                            if (tok.Type == JTokenType.Array)
                             {
-                                try
-                                {
-                                    return procWordsFrom(trainedWordsTok.ParseToJson());
-                                }
-                                catch (Exception) { } // Ignored
+                                return tok.ToObject<string[]>();
                             }
-                            return trainedWordsTok.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+                            else if (tok is JObject jobj)
+                            {
+                                IEnumerable<string[]> wordSets = jobj.Properties().Select(p => p.Value is JObject subData ? procWordsFrom(subData) : [p.Name]);
+                                return [.. wordSets.Flatten()];
+                            }
+                            else if (tok.Type == JTokenType.String)
+                            {
+                                string trainedWordsTok = tok.Value<string>();
+                                if (trainedWordsTok.StartsWithFast('{') && trainedWordsTok.EndsWithFast('}'))
+                                {
+                                    try
+                                    {
+                                        return procWordsFrom(trainedWordsTok.ParseToJson());
+                                    }
+                                    catch (Exception) { } // Ignored
+                                }
+                                return trainedWordsTok.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+                            }
+                            return null;
                         }
-                        return null;
-                    }
-                    if (triggerPhrases.IsEmpty() && altMetadata.TryGetValue(wordsKey, out JToken wordsTok) && wordsTok.Type != JTokenType.Null)
-                    {
-                        string[] trainedWords = procWordsFrom(wordsTok);
-                        if (trainedWords is not null && trainedWords.Length > 0)
+                        if (triggerPhrases.IsEmpty() && altMetadata.TryGetValue(wordsKey, out JToken wordsTok) && wordsTok.Type != JTokenType.Null)
                         {
-                            triggerPhrases.UnionWith(trainedWords);
+                            string[] trainedWords = procWordsFrom(wordsTok);
+                            if (trainedWords is not null && trainedWords.Length > 0)
+                            {
+                                triggerPhrases.UnionWith(trainedWords);
+                            }
                         }
                     }
                 }
@@ -571,7 +575,7 @@ public class T2IModelHandler
                     specialFormat = "bnb_fp4";
                     break;
                 }
-                if (key.EndsWith(".scale_weight"))
+                if (key.EndsWith(".scale_weight") || key.EndsWith(".weight_scale"))
                 {
                     specialFormat = "fp8_scaled";
                     break;
@@ -605,7 +609,7 @@ public class T2IModelHandler
                 Logs.Debug($"Model {model.Name} has special format '{specialFormat}'");
             }
             string img = metaHeader?.Value<string>("modelspec.preview_image") ?? metaHeader?.Value<string>("modelspec.thumbnail") ?? metaHeader?.Value<string>("thumbnail") ?? metaHeader?.Value<string>("preview_image");
-            if (img is not null && !img.StartsWith("data:image/"))
+            if (img is not null && !img.StartsWith("data:image/") && img != "imgs/model_placeholder.jpg")
             {
                 Logs.Warning($"Ignoring image in metadata of {model.Name} '{img}'");
                 img = null;
@@ -698,7 +702,7 @@ public class T2IModelHandler
                 Date = limitLength(pickBest(metaHeader?.Value<string>("modelspec.date"), metaHeader?.Value<string>("date")), basicLimit),
                 Preprocessor = limitLength(pickBest(metaHeader?.Value<string>("modelspec.preprocessor"), metaHeader?.Value<string>("preprocessor")), basicLimit),
                 Tags = limitSize(tags, 128),
-                IsNegativeEmbedding = (pickBest(metaHeader?.Value<string>("modelspec.is_negative_embedding"), metaHeader?.Value<string>("is_negative_embedding")) ?? "false") == "true",
+                IsNegativeEmbedding = (pickBest(metaHeader?.Value<string>("modelspec.is_negative_embedding"), metaHeader?.Value<string>("is_negative_embedding")) ?? "false").ToLowerFast() == "true",
                 LoraDefaultWeight = limitLength(pickBest(metaHeader?.Value<string>("modelspec.lora_default_weight"), metaHeader?.Value<string>("lora_default_weight")), basicLimit),
                 LoraDefaultConfinement = limitLength(pickBest(metaHeader?.Value<string>("modelspec.lora_default_confinement"), metaHeader?.Value<string>("lora_default_confinement")), basicLimit),
                 PredictionType = limitLength(pickBest(metaHeader?.Value<string>("modelspec.prediction_type"), metaHeader?.Value<string>("prediction_type")), basicLimit),
@@ -732,7 +736,7 @@ public class T2IModelHandler
         {
             model.Title = metadata.Title;
             model.Description = metadata.Description;
-            model.ModelClass = T2IModelClassSorter.ModelClasses.GetValueOrDefault(metadata.ModelClassType ?? "");
+            model.ModelClass = T2IModelClassSorter.ModelClasses.GetValueOrDefault((metadata.ModelClassType ?? "").ToLowerFast());
             model.PreviewImage = string.IsNullOrWhiteSpace(metadata.PreviewImage) ? "imgs/model_placeholder.jpg" : metadata.PreviewImage;
             model.StandardWidth = metadata.StandardWidth;
             model.StandardHeight = metadata.StandardHeight;
@@ -741,7 +745,7 @@ public class T2IModelHandler
     }
 
     /// <summary>Internal model adder route. Do not call.</summary>
-    public void AddAllFromFolder(string pathBase, string folder)
+    public void AddAllFromFolder(string pathBase, string folder, ConcurrentDictionary<string, T2IModel> dict)
     {
         if (IsShutdown)
         {
@@ -757,15 +761,21 @@ public class T2IModelHandler
         }
         Parallel.ForEach(Directory.EnumerateDirectories(actualFolder), subfolder =>
         {
-            string path = $"{prefix}{subfolder.Replace('\\', '/').AfterLast('/')}";
-            if (path.AfterLast('/') == ".git")
+            string simpleName = subfolder.Replace('\\', '/').AfterLast('/');
+            string path = $"{prefix}{simpleName}";
+            if (simpleName == ".git")
             {
                 Logs.Warning($"You have a .git folder in your {ModelType} model folder '{pathBase}/{path}'! That's not supposed to be there.");
                 return;
             }
+            if (simpleName.StartsWithFast('.'))
+            {
+                Logs.Verbose($"[Model Scan] Skipping hidden folder {subfolder}");
+                return;
+            }
             try
             {
-                AddAllFromFolder(pathBase, path);
+                AddAllFromFolder(pathBase, path, dict);
             }
             catch (UnauthorizedAccessException)
             {
@@ -778,10 +788,19 @@ public class T2IModelHandler
         });
         Parallel.ForEach(Directory.EnumerateFiles(actualFolder), file =>
         {
+            if (Program.GlobalProgramCancel.IsCancellationRequested)
+            {
+                return;
+            }
             string fixedFileName = file.Replace('\\', '/');
             string fn = fixedFileName.AfterLast('/');
+            if (fn.StartsWithFast('.'))
+            {
+                Logs.Verbose($"[Model Scan] Skipping hidden file {fixedFileName}");
+                return;
+            }
             string fullFilename = $"{prefix}{fn}";
-            if (Models.TryGetValue(fullFilename, out T2IModel existingModel))
+            if (dict.TryGetValue(fullFilename, out T2IModel existingModel))
             {
                 lock (existingModel.OtherPaths)
                 {
@@ -800,7 +819,7 @@ public class T2IModelHandler
                     Description = "(Metadata not yet loaded.)",
                     PreviewImage = "imgs/model_placeholder.jpg",
                 };
-                Models[fullFilename] = model;
+                dict[fullFilename] = model;
                 try
                 {
                     LoadMetadata(model);
@@ -827,7 +846,7 @@ public class T2IModelHandler
                     PreviewImage = "imgs/legacy_ckpt.jpg",
                 };
                 model.PreviewImage = GetAutoFormatImage(model) ?? model.PreviewImage;
-                Models[fullFilename] = model;
+                dict[fullFilename] = model;
                 model.AutoWarn();
             }
         });

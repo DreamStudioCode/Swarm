@@ -7,6 +7,7 @@ class Permissions {
         setTimeout(() => {
             this.gather();
         }, 0);
+        document.addEventListener('show.bs.tab', (e) => this.onNavClick(e));
     }
 
     gather() {
@@ -38,17 +39,28 @@ class Permissions {
         }
     }
 
+    onNavClick(e) {
+        let navItem = findParentOfClass(e.target, 'nav-item');
+        if (!navItem) {
+            return;
+        }
+        let key = navItem.dataset.requiredpermission;
+        if (key && !this.hasPermission(key)) {
+            e.preventDefault();
+        }
+    }
+
     hasPermission(key) {
         if (!this.hasLoaded) {
             return true;
         }
         if (key.includes(',')) {
             for (let k of key.split(',')) {
-                if (this.hasPermission(k)) {
-                    return true;
+                if (!this.hasPermission(k)) {
+                    return false;
                 }
             }
-            return false;
+            return true;
         }
         return this.permissions[key] || this.permissions['*'];
     }

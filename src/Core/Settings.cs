@@ -1,4 +1,4 @@
-﻿using FreneticUtilities.FreneticDataSyntax;
+using FreneticUtilities.FreneticDataSyntax;
 using SwarmUI.Backends;
 using SwarmUI.Media;
 using SwarmUI.Utils;
@@ -67,6 +67,10 @@ public class Settings : AutoConfiguration
     [ConfigComment("Settings related to server performance.")]
     public PerformanceData Performance = new();
 
+    [ConfigComment("List of disabled extension folder names.\nDisabled extensions remain installed on disk, but are not loaded at server startup.")]
+    [SettingHidden]
+    public List<string> DisabledExtensions = [];
+
     /// <summary>Settings related to Swarm server maintenance..</summary>
     public class ServerMaintenanceData : AutoConfiguration
     {
@@ -90,6 +94,9 @@ public class Settings : AutoConfiguration
 
         [ConfigComment("Number of minutes to silently wait for git operations to run.\nIf this duration is reached, a warning is logged and 1 more minute is allowed.\nAfter that final minute runs out, the git process is backgrounded and ignored (it may still be running, but Swarm will stop waiting for it).\nSetting this timeout too low may cause still-running slow processes to glitch or conflict.\nSetting this timeout too high may cause Swarm to freeze up any time git doesn't properly shut down.\nFor most users, the default (1 minute before warn, 1 minute extra) is more than enough, as git extremely rarely needs more than a minute to run.")]
         public int GitTimeoutMinutes = 1;
+
+        [ConfigComment("How many weekly backups of the user database to keep.\nDefault is 3.\nSet to 0 to disable backups.\nBackups are created weekly, in '(Data)/UsersBackups' named as (Year)_(Week).")]
+        public int UserDBBackups = 3;
     }
 
     /// <summary>Settings related to authorization.</summary>
@@ -106,6 +113,54 @@ public class Settings : AutoConfiguration
 
         [ConfigComment("Message to add on the login page.\nYou may use (basic!) HTML here.\nIt is recommended to add contact information here, such as a Discord invite code or an email address.")]
         public string LoginNotice = "This is a local instance not yet configured for shared usage. If you're seeing this on the login screen, ask the server owner to fill it in on the Server Configuration page.";
+
+        [ConfigComment("If true, and authorization is enabled, allow logging in to accounts with a simple username/password/combo.")]
+        public bool AllowSimplePasswordLogin = true;
+
+        /// <summary>Settings related to user registration.</summary>
+        public class RegistrationData : AutoConfiguration
+        {
+            [ConfigComment("If true, allow new users to register accounts on this SwarmUI instance.\nYou must also enable at least one specific registration method.")]
+            public bool AllowRegistration = false;
+
+            [ConfigComment("If true, and AllowRegistration is true, allow registering accounts with a simple username/password/combo.")]
+            public bool SimplePasswordRegistration = false;
+
+            [ConfigComment("If true, and AllowRegistration is true, allow registering accounts via OAuth2 (eg Google login).\nYou must configure OAuth providers in the OAuth section.")]
+            public bool OAuthRegistration = false;
+
+            [ConfigComment("If registration is enabled, what role to assign to new users when they register.")]
+            public string NewUserDefaultRole = "user";
+
+            [ConfigComment("Message to add on the Register page.\nYou may use (basic!) HTML here.\nIt is recommended to add contact information here, such as a Discord invite code or an email address.")]
+            public string RegisterNotice = "This is a local instance not yet configured for registration. If you're seeing this on the register screen, ask the server owner to fill it in on the Server Configuration page.";
+        }
+
+        [ConfigComment("Settings related to user registration.")]
+        public RegistrationData Registration = new();
+
+        /// <summary>Settings related to OAuth providers.</summary>
+        public class OAuthData : AutoConfiguration
+        {
+            [ConfigComment("If true, Google OAuth2 is supported for registration and login. Create in the google cloud console as a 'web application'")]
+            public bool GoogleOAuth = false;
+
+            [ConfigComment("If non-empty, a comma separated whitelist of domains that are allowed for OAuth usage, such as an org domain name.")]
+            public string OAuthAllowedDomains = "";
+
+            [ConfigComment("The Client-ID for Google OAuth.")]
+            public string GoogleOAuthClientId = "";
+
+            [ConfigComment("The Client-Secret for Google OAuth.")]
+            [ValueIsSecret]
+            public string GoogleOAuthClientSecret = "";
+
+            [ConfigComment("The public base URL for this Swarm instance, for OAuth to redirect to. For example, 'https://swarm.example.com'.")]
+            public string OAuthReturnURL = "";
+        }
+
+        [ConfigComment("Settings related to OAuth providers.")]
+        public OAuthData OAuth = new();
     }
 
     /// <summary>Settings related to logging.</summary>
@@ -148,7 +203,10 @@ public class Settings : AutoConfiguration
         public int MaxBackendInitAttempts = 3;
 
         [ConfigComment("Safety check, the maximum duration all requests can be waiting for a backend before the system declares a backend handling failure.\nIf you get backend timeout errors while intentionally running very long generations, increase this value.")]
-        public int MaxTimeoutMinutes = 120;
+        public double MaxTimeoutMinutes = 120;
+
+        [ConfigComment("If checked, when MaxTimeoutMinutes is hit, forcibly restart all backends.\nIf unchecked, pending jobs will be cancelled with an error message.")]
+        public bool ForceRestartOnTimeout = false;
 
         [ConfigComment("The maximum duration an individual request can be waiting on a backend to be available before giving up.\n"
             + "Not to be confused with 'MaxTimeoutMinutes' which requires backends be unresponsive for that duration, this duration includes requests that are merely waiting because other requests are queued."
@@ -233,6 +291,12 @@ public class Settings : AutoConfiguration
 
         [ConfigComment("How many entries in an X-Forwarded-For header to trust.\nDefaults to 3.\nSet to 0 to not trust any forwarded-for.")]
         public int MaxXForwardedFor = 3;
+
+        [ConfigComment("Maximum megabytes that can be sent as a single message from a client to the Swarm server.\nSet this lower to limit abuse, set this higher to allow very large file uploads.\nServer needs a restart for this to fully apply.")]
+        public int MaxNetworkRequestMegabytes = 200;
+
+        /// <summary>Converts <see cref="MaxNetworkRequestMegabytes"/> to bytes as a long.</summary>
+        public long MaxReceiveBytes => MaxNetworkRequestMegabytes * (1024L * 1024);
     }
 
     /// <summary>Settings related to file paths.</summary>
@@ -261,10 +325,10 @@ public class Settings : AutoConfiguration
         public string SDEmbeddingFolder = "Embeddings";
 
         [ConfigComment("The ControlNets model folder to use within 'ModelRoot'.\nDefaults to 'controlnet'.\nAbsolute paths work too (usually do not use an absolute path, use just a folder name).\nUse a semicolon ';' to split multiple paths.")]
-        public string SDControlNetsFolder = "controlnet";
+        public string SDControlNetsFolder = "controlnet;model_patches";
 
-        [ConfigComment("The CLIP (Text Encoder) model folder to use within 'ModelRoot'.\nDefaults to 'clip'.\nAbsolute paths work too (usually do not use an absolute path, use just a folder name).\nUse a semicolon ';' to split multiple paths.")]
-        public string SDClipFolder = "clip";
+        [ConfigComment("The CLIP (Text Encoder) model folder to use within 'ModelRoot'.\nDefaults to 'text_encoders;clip'.\nAbsolute paths work too (usually do not use an absolute path, use just a folder name).\nUse a semicolon ';' to split multiple paths.")]
+        public string SDClipFolder = "text_encoders;clip";
 
         [ConfigComment("The CLIP Vision model folder to use within 'ModelRoot'.\nDefaults to 'clip_vision'.\nAbsolute paths work too (usually do not use an absolute path, use just a folder name).\nUse a semicolon ';' to split multiple paths.")]
         public string SDClipVisionFolder = "clip_vision";
@@ -295,6 +359,9 @@ public class Settings : AutoConfiguration
 
         [ConfigComment("If true, always resave models after the downloader utility grabs them.\nThis ensures metadata is fully properly set, but wastes some extra time on file processing.\nIf false, the downloader will leave a stray json next to the model.\nDefaults to false.")]
         public bool DownloaderAlwaysResave = false;
+
+        [ConfigComment("If true, populate trigger phrase from secondary metadata sources, such as 'trained words' and similar keys.\nIf false, only use actual trigger_phrase specifications.\nTurning this off may help if you see a lot of LoRAs with 10,000 spammed keywords on them or similar (this type of bad metadata is common in certain model classes for some reason).")]
+        public bool UseSecondaryTriggerPhraseSources = true;
     }
 
     /// <summary>Settings related to image/model metadata.</summary>
@@ -314,6 +381,12 @@ public class Settings : AutoConfiguration
 
         [ConfigComment("If true, image metadata will include a list of models with their hashes.\nThis is useful for services like civitai to automatically link models.\nThis will cause extra time to be taken when new hashes need to be loaded.")]
         public bool ImageMetadataIncludeModelHash = true;
+
+        [ConfigComment("How many kilobytes of blank spacer to include in model headers.\nThis allows for future expansion of metadata without rewriting the entire model file.\nDefaults to 64 KiB.\nThe average header length of a standard model is already between several hundred kilobytes to a few megabytes,\nso 64 KiB is not a major increase in space but is enough to fit major metadata changes including eg adding a small jpeg thumbnail.")]
+        public int ModelMetadataSpacerKilobytes = 64;
+
+        [ConfigComment("Special developmental debug tool: if true, always recheck model class when rescanning models.\nThis ignores any saved architecture in the modelspec header.\nThis is quite performance wasteful, and will undo user choices.")]
+        public bool DebugAlwaysRecheckClass = false;
     }
 
     /// <summary>Settings per-user.</summary>
@@ -380,6 +453,20 @@ public class Settings : AutoConfiguration
 
             [ConfigComment("If true, when you interrupt generation, any incomplete generations will be removed from the batch view.\nIf false, they will linger in the batch view with an X mark indicated they were started but not finished.\nIn both cases, they will not save to file.")]
             public bool RemoveInterruptedGens = false;
+
+            [ConfigComment("Pipe-separated list of partial error message bodies.\nIf an error message contains any of these, it will not show in the main error popup box.\nThis is to hide intentionally-induced errors, or errors that pop up frequently but you don't want to be annoyed about.\nFor example, set this to 'Generation session interrupted.|Some Other Error.' if you frequently externally interrupt your own gens.")]
+            public string HideErrorMessages = "";
+
+            [ConfigComment("What to do when you delete an image that you are looking at in the UI:\n- Nothing: image view is closed / reset to empty\n- Next: move to the next image (right/down)\n- Previous: move to the previous image (left/up)")]
+            [ManualSettingsOptions(Vals = ["nothing", "next", "previous"], ManualNames = ["Nothing", "Next (Right/Down)", "Previous (Left/Up)"])]
+            public string DeleteImageBehavior = "next";
+
+            [ConfigComment("If enabled, shifting to next/previous image (eg with arrow keys) in history or batch view,\ncycles at the ends (jumps from the start to the end or vice versa).\nIf disabled, shifting will simply stop at the ends.\nIf 'only arrow keys', cycling happens when you press the arrow keys, but not other actions (eg deleting an image will not cycle).")]
+            [ManualSettingsOptions(Vals = ["true", "false", "only_arrows"], ManualNames = ["Enabled", "Disabled", "Only Arrow Keys"])]
+            public string ImageShiftingCycles = "true";
+
+            [ConfigComment("If enabled, metadata will be hidden in the image Full View by default.\nIf disabled, metadata will be shown by default.\nYou zoom still zoom in or out to show or hide the metadata at any time as usual.")]
+            public bool DefaultHideMetadataInFullview = false;
         }
 
         [ConfigComment("Settings related to the user interface, entirely contained to the frontend.")]
@@ -422,7 +509,9 @@ public class Settings : AutoConfiguration
         public bool AutoSwapImagesIncludesFullView = false; // TODO: UserUI
 
         [ConfigComment("A list of what buttons to include directly under images in the main prompt area of the Generate tab.\nOther buttons will be moved into the 'More' dropdown.\nThis should be a comma separated list."
-            + "\nThe following options are available: \"Use As Init\", \"Use As Image Prompt\", \"Edit Image\", \"Upscale 2x\", \"Star\", \"Reuse Parameters\", \"Open In Folder\", \"Delete\", \"Download\" \"View In History\", \"Refine Image\""
+            + "\nThe following options are available: \"Use As Init\", \"Use As Image Prompt\", \"Edit Image\", \"Upscale 2x\", \"Star\", \"Reuse Parameters\", \"Open In Folder\", \"Delete\", \"Download\", \"View In History\", \"Refine Image\", \"Copy Path\", \"Copy Raw Metadata\""
+            + "\nSome buttons like 'Edit Image' may only apply to images and will not show for audio or video files."
+            + "\nExtensions can add their own button names here too."
             + "\nThe default is blank, which currently implies 'Use As Init,Edit Image,Star,Reuse Parameters'")]
         public string ButtonsUnderMainImages = ""; // TODO: UserUI
 
@@ -465,6 +554,10 @@ public class Settings : AutoConfiguration
             [ConfigComment("What VAE to use with Flux models by default.")]
             [ManualSettingsOptions(Impl = null, Vals = ["None"])]
             public string DefaultFluxVAE = "None";
+
+            [ConfigComment("What VAE to use with Flux2 models by default.")]
+            [ManualSettingsOptions(Impl = null, Vals = ["None"])]
+            public string DefaultFlux2VAE = "None";
 
             [ConfigComment("What VAE to use with SD3 models by default.")]
             [ManualSettingsOptions(Impl = null, Vals = ["None"])]
@@ -530,8 +623,12 @@ public class Settings : AutoConfiguration
             [SettingsOptions(Impl = typeof(AudioImpl))]
             public string CompletionSound = "";
 
-            [ConfigComment($"If any sound effects are enabled, this is the volume they will play at.\n0 means silent, 1 means max volume, 0.5 means half volume.")]
+            [ConfigComment($"For system sound effects such as CompletionSound, this is the volume they will play at.\n0 means silent, 1 means max volume, 0.5 means half volume.")]
             public double Volume = 0.5;
+
+            [ConfigComment("When a video is played, what should be done with the audio?")]
+            [ManualSettingsOptions(Impl = null, Vals = ["last", "play", "silent"], ManualNames = ["Remember Last", "Autoplay", "Default to Silent"])]
+            public string VideoAudioBehavior = "last";
         }
 
         [ConfigComment("Settings related to audio.")]

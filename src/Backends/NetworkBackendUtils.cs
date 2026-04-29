@@ -1,4 +1,4 @@
-﻿using FreneticUtilities.FreneticExtensions;
+using FreneticUtilities.FreneticExtensions;
 using FreneticUtilities.FreneticToolkit;
 using Hardware.Info;
 using Newtonsoft.Json;
@@ -53,7 +53,7 @@ public static class NetworkBackendUtils
         }
         else if (content.Length == 0 && typeof(JType) == typeof(JObject))
         {
-            throw new SwarmReadableErrorException($"Server returned entirely empty response, something went wrong.");
+            throw new SwarmReadableErrorException($"Server returned entirely empty response, something went wrong. If this is a local backend connection, you may have a proxy configuration that is messing with localhost.");
         }
         try
         {
@@ -452,7 +452,8 @@ public static class NetworkBackendUtils
                     status = BackendStatus.ERRORED;
                     reviseStatus(status);
                 }
-            } : () =>
+            }
+            : () =>
             {
                 Logs.Error($"Self-Start {nameSimple} on port {port} failed. AutoRestart disabled, treating as fatal error.");
                 status = BackendStatus.ERRORED;
@@ -520,7 +521,7 @@ public static class NetworkBackendUtils
         signalShutdownExpected = () => Volatile.Write(ref isShuttingDown, true);
         bool shouldContinueErrorLine(string str)
         {
-            return str.StartsWith("Traceback (") || str.Contains("Error: ") || str.StartsWith("  ");
+            return str.StartsWith("Traceback (") || (str.Contains("Error: ") && !str.StartsWith("Found comfy_kitchen backend")) || str.StartsWith("  ");
         }
         void MonitorLoop()
         {
@@ -580,7 +581,7 @@ public static class NetworkBackendUtils
                 while ((line = fixedReader.ReadLine()) != null)
                 {
                     string lineLow = line.ToLowerFast();
-                    if (lineLow.StartsWith("traceback (") || lineLow.Contains("error: "))
+                    if (lineLow.StartsWith("traceback (") || (lineLow.Contains("error: ") && !lineLow.Contains("found comfy_kitchen backend")))
                     {
                         keepShowing = true;
                         Logs.Warning($"[{nameSimple}/STDERR] {line}");
@@ -627,7 +628,7 @@ public static class NetworkBackendUtils
                 }
                 else
                 {
-                    Logs.Info($"Self-Start {nameSimple} unexpectedly exited (if something failed, change setting `LogLevel` to `Debug` to see why!)");
+                    Logs.Info($"Self-Start {nameSimple} unexpectedly exited (ExitCode={(process.HasExited ? process.ExitCode : "unknown")}) (if something failed, change setting `LogLevel` to `Debug` to see why!)");
                     if (errorLog.Length > 0)
                     {
                         Logs.Info($"Self-Start {nameSimple} had errors before shutdown:\n{errorLog}");

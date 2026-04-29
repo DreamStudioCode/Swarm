@@ -1,4 +1,4 @@
-﻿using FreneticUtilities.FreneticToolkit;
+using FreneticUtilities.FreneticToolkit;
 using FreneticUtilities.FreneticDataSyntax;
 using LiteDB;
 using SwarmUI.Core;
@@ -38,6 +38,9 @@ public class User
 
         /// <summary>IDs of the user's current login sessions.</summary>
         public List<string> LoginSessions { get; set; } = [];
+
+        /// <summary>OAuth email associated with this account, if any.</summary>
+        public string OAuthEmail { get; set; } = "";
     }
 
     public void BuildRoles()
@@ -169,10 +172,18 @@ public class User
     /// <summary>Returns the user preset for the given name, or null if not found.</summary>
     public T2IPreset GetPreset(string name)
     {
+        T2IPreset preset;
         lock (SessionHandlerSource.DBLock)
         {
-            return SessionHandlerSource.T2IPresets.FindById($"{UserID}///{name.ToLowerFast()}");
+            preset = SessionHandlerSource.T2IPresets.FindById($"{UserID}///{name.ToLowerFast()}");
         }
+        if (preset is null)
+        {
+            return null;
+        }
+        // TODO: Running this on every get is excessive. Need some amount of versioning/resaving.
+        preset.Clean();
+        return preset;
     }
 
     /// <summary>Returns a list of all presets this user has saved.</summary>
@@ -190,6 +201,10 @@ public class User
                     presets.RemoveAll(p => p is null);
                     Data.Presets.RemoveAll(bad.Contains);
                     Save();
+                }
+                foreach (T2IPreset preset in presets)
+                {
+                    preset.Clean();
                 }
                 return presets;
             }
@@ -282,6 +297,23 @@ public class User
 
     /// <summary>Incrementing counter of request IDs.</summary>
     public long RequestIdCounter = 1000;
+
+    /// <summary>Cache for a generic non-persistent internal session.</summary>
+    public Session GenericSession;
+
+    /// <summary>Get a generic internal use session instance for this user.</summary>
+    public Session GetGenericSession()
+    {
+        if (GenericSession is not null)
+        {
+            return GenericSession;
+        }
+        lock (UserLock)
+        {
+            GenericSession ??= SessionHandlerSource.CreateSession("generic_internal", UserID, false);
+            return GenericSession;
+        }
+    }
 
     /// <summary>Gets the next request ID for this user, incrementing the counter.</summary>
     public long GetNextRequestId()
@@ -487,13 +519,15 @@ public class User
         byte[] salt = RandomNumberGenerator.GetBytes(128 / 8);
         byte[] hashedText = KeyDerivation.Pbkdf2(password: validationText, salt: salt, prf: KeyDerivationPrf.HMACSHA256, iterationCount: 10, numBytesRequested: 256 / 8);
         string validationHashed = Utilities.BytesToHex(salt) + ":" + Utilities.BytesToHex(hashedText);
+        long nowUnix = DateTimeOffset.Now.ToUnixTimeSeconds();
         SessionHandler.LoginSession session = new()
         {
             ID = id,
             UserID = UserID,
             OriginAddress = ip,
             OriginUserAgent = userAgent,
-            LastActiveUnixTime = DateTimeOffset.Now.ToUnixTimeSeconds(),
+            CreatedUnixTime = nowUnix,
+            LastActiveUnixTime = nowUnix,
             ValidationHash = validationHashed
         };
         lock (SessionHandlerSource.DBLock)
@@ -508,5 +542,31 @@ public class User
         }
         string userIdHex = Utilities.BytesToHex(Encoding.UTF8.GetBytes(UserID));
         return (session, $"{userIdHex}.{id}.{validationText}");
+    }
+
+    public void SetOAuthEmail(string email)
+    {
+        if (!string.IsNullOrWhiteSpace(Data.OAuthEmail))
+        {
+            Program.Sessions.UserOAuthLookupDB.Delete(Data.OAuthEmail);
+            Data.OAuthEmail = "";
+        }
+        if (string.IsNullOrWhiteSpace(email))
+        {
+            Save();
+            return;
+        }
+        SessionHandler.UserOAuthLookup lookup = Program.Sessions.UserOAuthLookupDB.FindById(email);
+        if (lookup is not null)
+        {
+            throw new Exception("That OAuth email is already linked to another account.");
+        }
+        Data.OAuthEmail = email;
+        Program.Sessions.UserOAuthLookupDB.Upsert(new SessionHandler.UserOAuthLookup()
+        {
+            OAuthEmail = email,
+            UserID = UserID
+        });
+        Save();
     }
 }

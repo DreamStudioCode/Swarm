@@ -44,6 +44,7 @@ class SimpleTab {
     }
 
     onFolderSelected() {
+        this.setNoImage();
         this.browser.fullContentDiv.style.display = 'inline-block';
         this.containerDiv.style.display = 'none';
         setTimeout(() => updateHash(), 10);
@@ -102,13 +103,25 @@ class SimpleTab {
 
     setImage(imgSrc) {
         let isVideo = isVideoExt(imgSrc);
+        let isAudio = isAudioExt(imgSrc);
         if (isVideo) {
             if (this.imageElem.tagName == 'VIDEO') {
                 this.imageElem.src = imgSrc;
             }
             else {
-                this.imageElemWrapper.innerHTML = `<video class="simple_image_container_img" id="simple_image_container_img" style="cursor:grab;max-width:100%;object-fit:contain;" autoplay loop muted><source src="${imgSrc}" id="simple_image_container_img" type="${isVideo}"></video>`;
+                this.imageElemWrapper.innerHTML = `<div class="video-container simple_image_container_img"><video class="simple_image_container_img" id="simple_image_container_img" style="cursor:grab;max-width:100%;object-fit:contain;" autoplay loop><source src="${imgSrc}" id="simple_image_container_img" type="${isVideo}"></video></div>`;
                 this.imageElem = this.imageElemWrapper.querySelector('#simple_image_container_img');
+                new VideoControls(this.imageElem);
+            }
+        }
+        else if (isAudio) {
+            if (this.imageElem.tagName == 'AUDIO') {
+                this.imageElem.src = imgSrc;
+            }
+            else {
+                this.imageElemWrapper.innerHTML = `<div class="audio-container simple_image_container_img" style="cursor:grab;max-width:100%;"><audio class="simple_image_container_img" id="simple_image_container_img" preload="metadata" src="${imgSrc}"></audio></div>`;
+                this.imageElem = this.imageElemWrapper.querySelector('#simple_image_container_img');
+                new AudioControls(this.imageElem);
             }
         }
         else {
@@ -137,6 +150,9 @@ class SimpleTab {
 
     setNoImage() {
         this.imageElemWrapper.style.opacity = 0;
+        if (this.imageElem.tagName == 'VIDEO' || this.imageElem.tagName == 'AUDIO') {
+            this.imageElem.pause();
+        }
     }
 
     browserDescribeEntry(workflow) {
@@ -265,6 +281,10 @@ class SimpleTab {
             });
             callback(folders, mapped);
         });
+    }
+
+    doInterrupt() {
+        this.genHandler.doInterrupt();
     }
 
     clearBatch() {

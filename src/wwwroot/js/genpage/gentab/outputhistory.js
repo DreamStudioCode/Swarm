@@ -1,5 +1,12 @@
 
-function listImageHistoryFolderAndFiles(path, isRefresh, callback, depth) {
+let registeredMediaButtons = [];
+
+/** Registers a media button for extensions. 'mediaTypes' filters by type eg ['audio'], null means all. 'isDefault' promotes to visible (vs More dropdown). 'showInHistory' controls whether button appears in the History panel. */
+function registerMediaButton(name, action, title = '', mediaTypes = null, isDefault = false, showInHistory = true, href = null, is_download = false, can_multi = false, multi_only = false) {
+    registeredMediaButtons.push({ name, action, title, mediaTypes, isDefault, showInHistory, href, is_download, can_multi, multi_only });
+}
+
+function listOutputHistoryFolderAndFiles(path, isRefresh, callback, depth) {
     let sortBy = localStorage.getItem('image_history_sort_by') ?? 'Name';
     let reverse = localStorage.getItem('image_history_sort_reverse') == 'true';
     let allowAnims = localStorage.getItem('image_history_allow_anims') != 'false';
@@ -21,15 +28,15 @@ function listImageHistoryFolderAndFiles(path, isRefresh, callback, depth) {
             sortReverseElem.checked = reverse;
             sortElem.addEventListener('change', () => {
                 localStorage.setItem('image_history_sort_by', sortElem.value);
-                imageHistoryBrowser.update();
+                imageHistoryBrowser.lightRefresh();
             });
             sortReverseElem.addEventListener('change', () => {
                 localStorage.setItem('image_history_sort_reverse', sortReverseElem.checked);
-                imageHistoryBrowser.update();
+                imageHistoryBrowser.lightRefresh();
             });
             allowAnimsElem.addEventListener('change', () => {
                 localStorage.setItem('image_history_allow_anims', allowAnimsElem.checked);
-                imageHistoryBrowser.update();
+                imageHistoryBrowser.lightRefresh();
             });
         }
     }
@@ -53,16 +60,41 @@ function listImageHistoryFolderAndFiles(path, isRefresh, callback, depth) {
     });
 }
 
-function buttonsForImage(fullsrc, src, metadata) {
+function buttonsForImage(fullsrc, src, metadata, isCurrentImage = false) {
     let isDataImage = src.startsWith('data:');
+    let mediaType = getMediaType(src);
     buttons = [];
     if (permissions.hasPermission('user_star_images') && !isDataImage) {
+        let metaParsed = JSON.parse(metadata);
         buttons.push({
-            label: (metadata && JSON.parse(metadata).is_starred) ? 'Unstar' : 'Star',
+            label: (metadata && metaParsed.is_starred) ? 'Unstar' : 'Star',
             title: 'Star or unstar this image - starred images get moved to a separate folder and highlighted.',
+            className: (metadata && metaParsed.is_starred) ? ' star-button button-starred-image' : ' star-button',
             onclick: (e) => {
                 toggleStar(fullsrc, src);
             }
+        });
+        buttons.push({
+            label: 'Enable Starred',
+            title: 'Marks all selected images as starred if they are not already',
+            onclick: (e) => {
+                if (!metaParsed.is_starred) {
+                    toggleStar(fullsrc, src);
+                }
+            },
+            can_multi: true,
+            multi_only: true
+        });
+        buttons.push({
+            label: 'Disabled Starred',
+            title: 'Marks all selected images as NOT starred if they are currently starred',
+            onclick: (e) => {
+                if (metaParsed.is_starred) {
+                    toggleStar(fullsrc, src);
+                }
+            },
+            can_multi: true,
+            multi_only: true
         });
     }
     if (metadata) {
@@ -71,6 +103,16 @@ function buttonsForImage(fullsrc, src, metadata) {
             title: `Copies the raw form of the image's metadata to your clipboard (usually JSON text).`,
             onclick: (e) => {
                 copyText(metadata);
+                doNoticePopover('Copied!', 'notice-pop-green');
+            }
+        });
+    }
+    if (!isDataImage) {
+        buttons.push({
+            label: 'Copy Path',
+            title: 'Copies the relative file path of this image to your clipboard.',
+            onclick: (e) => {
+                copyText(fullsrc);
                 doNoticePopover('Copied!', 'notice-pop-green');
             }
         });
@@ -90,6 +132,7 @@ function buttonsForImage(fullsrc, src, metadata) {
         href: escapeHtmlForUrl(src),
         is_download: true
     });
+    // TODO: Multi-compat Download (create a zip?)
     if (permissions.hasPermission('user_delete_image') && !isDataImage) {
         buttons.push({
             label: 'Delete',
@@ -97,6 +140,11 @@ function buttonsForImage(fullsrc, src, metadata) {
             onclick: (e) => {
                 if (!uiImprover.lastShift && getUserSetting('ui.checkifsurebeforedelete', true) && !confirm('Are you sure you want to delete this image?\nHold shift to bypass.')) {
                     return;
+                }
+                let deleteBehavior = getUserSetting('ui.deleteimagebehavior', 'next');
+                let shifted = deleteBehavior == 'nothing' ? false : shiftToNextImagePreview(deleteBehavior == 'next', imageFullView.isOpen());
+                if (!shifted) {
+                    imageFullView.close();
                 }
                 genericRequest('DeleteImage', {'path': fullsrc}, data => {
                     if (e) {
@@ -111,23 +159,37 @@ function buttonsForImage(fullsrc, src, metadata) {
                     if (div) {
                         div.remove();
                     }
+                    let currentImage = currentImageHelper.getCurrentImage();
+                    if (currentImage && currentImage.dataset.src == src) {
+                        setCurrentImage(null);
+                    }
                     div = getRequiredElementById('current_image_batch').querySelector(`.image-block[data-src="${src}"]`);
                     if (div) {
                         removeImageBlockFromBatch(div);
                     }
-                    let currentImage = document.getElementById('current_image_img');
-                    if (currentImage && currentImage.dataset.src == src) {
-                        forceShowWelcomeMessage();
-                    }
-                    imageFullView.close();
                 });
-            }
+            },
+            // TODO: Only ask once for the multi-set rather than once per each
+            can_multi: true
         });
+    }
+    for (let reg of registeredMediaButtons) {
+        if ((isCurrentImage || reg.showInHistory) && (!reg.mediaTypes || reg.mediaTypes.includes(mediaType))) {
+            buttons.push({
+                label: reg.name,
+                title: reg.title,
+                href: reg.href,
+                is_download: reg.is_download,
+                can_multi: reg.can_multi,
+                multi_only: reg.multi_only,
+                onclick: () => reg.action(src)
+            });
+        }
     }
     return buttons;
 }
 
-function describeImage(image) {
+function describeOutputFile(image) {
     let buttons = buttonsForImage(image.data.fullsrc, image.data.src, image.data.metadata);
     let parsedMeta = { is_starred: false };
     if (image.data.metadata) {
@@ -145,18 +207,27 @@ function describeImage(image) {
     let name = image.data.name;
     let allowAnims = localStorage.getItem('image_history_allow_anims') != 'false';
     let allowAnimToggle = allowAnims ? '' : '&noanim=true';
-    let dragImage = image.data.src.endsWith('.html') ? 'imgs/html.jpg' : `${image.data.src}`;
-    let imageSrc = image.data.src.endsWith('.html') ? 'imgs/html.jpg' : `${image.data.src}?preview=true${allowAnimToggle}`;
+    let forceImage = null, forcePreview = null;
+    let extension = image.data.src.split('.').pop();
+    if (extension == 'html') {
+        forceImage = 'imgs/html.jpg';
+        forcePreview = forceImage;
+    }
+    else if (['wav', 'mp3', 'aac', 'ogg', 'flac'].includes(extension)) {
+        forcePreview = 'imgs/audio_placeholder.jpg';
+    }
+    let dragImage = forceImage ?? `${image.data.src}`;
+    let imageSrc = forcePreview ?? `${image.data.src}?preview=true${allowAnimToggle}`;
     let searchable = `${image.data.name}, ${image.data.metadata}, ${image.data.fullsrc}`;
     let detail_list = [escapeHtml(image.data.name), formattedMetadata.replaceAll('<br>', '&emsp;')];
     let aspectRatio = parsedMeta.sui_image_params?.width && parsedMeta.sui_image_params?.height ? parsedMeta.sui_image_params.width / parsedMeta.sui_image_params.height : null;
     return { name, description, buttons, 'image': imageSrc, 'dragimage': dragImage, className: parsedMeta.is_starred ? 'image-block-starred' : '', searchable, display: name, detail_list, aspectRatio };
 }
 
-function selectImageInHistory(image, div) {
+function selectOutputInHistory(image, div) {
     lastHistoryImage = image.data.src;
     lastHistoryImageDiv = div;
-    let curImg = document.getElementById('current_image_img');
+    let curImg = currentImageHelper.getCurrentImage();
     if (curImg && curImg.dataset.src == image.data.src) {
         curImg.dataset.batch_id = 'history';
         curImg.click();
@@ -174,7 +245,7 @@ function selectImageInHistory(image, div) {
     }
 }
 
-let imageHistoryBrowser = new GenPageBrowserClass('image_history', listImageHistoryFolderAndFiles, 'imagehistorybrowser', 'Thumbnails', describeImage, selectImageInHistory,
+let imageHistoryBrowser = new GenPageBrowserClass('image_history', listOutputHistoryFolderAndFiles, 'imagehistorybrowser', 'Thumbnails', describeOutputFile, selectOutputInHistory,
     `<label for="image_history_sort_by">Sort:</label> <select id="image_history_sort_by"><option>Name</option><option>Date</option></select> <input type="checkbox" id="image_history_sort_reverse"> <label for="image_history_sort_reverse">Reverse</label> &emsp; <input type="checkbox" id="image_history_allow_anims" checked autocomplete="off"> <label for="image_history_allow_anims">Allow Animation</label>`);
 
 function storeImageToHistoryWithCurrentParams(img) {

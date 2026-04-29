@@ -1,4 +1,4 @@
-﻿@page
+@page
 @{
     ViewData["Title"] = "Page is loading...";
     GeneratePageModel pageModel = new(HttpContext);
@@ -39,24 +39,34 @@
             };
         </text>
     }
+    window.parameter_remaps = {};
+    @foreach ((string oldID, string newID) in T2IParamTypes.ParameterRemaps)
+    {
+        <text>
+            window.parameter_remaps["@oldID"] = "@newID";
+        </text>
+    }
 </script>
 
 <ul class="nav nav-tabs" role="tablist" id="toptablist">
-    <li class="nav-item" role="presentation" data-requiredpermission="comfy_dynamic_custom_workflows">
+    <li class="nav-item" role="presentation" data-requiredpermission="comfy_dynamic_custom_workflows,simple_tab">
         <a class="nav-link translate" data-bs-toggle="tab" href="#Simple" id="simpletabbutton" aria-selected="false" tabindex="-1" role="tab">Simple</a>
     </li>
     <li class="nav-item" role="presentation">
         <a class="nav-link active translate" data-bs-toggle="tab" href="#Text2Image" id="text2imagetabbutton" aria-selected="true" role="tab">Generate</a>
     </li>
     @WebServer.T2ITabHeader
-    <li class="nav-item" role="presentation">
+    <li class="nav-item" role="presentation" data-requiredpermission="utilities_tab">
         <a class="nav-link translate" data-bs-toggle="tab" href="#utilities_tab" id="utilitiestabbutton" aria-selected="false" tabindex="-1" role="tab">Utilities</a>
     </li>
-    <li class="nav-item" role="presentation">
+    <li class="nav-item" role="presentation" data-requiredpermission="user_tab">
         <a class="nav-link translate" data-bs-toggle="tab" href="#user_tab" id="usersettingstabbutton" aria-selected="false" tabindex="-1" role="tab">User</a>
     </li>
     <li class="nav-item" role="presentation" data-requiredpermission="view_server_tab">
         <a class="nav-link translate" data-bs-toggle="tab" href="#server_tab" id="servertabbutton" aria-selected="false" tabindex="-1" role="tab">Server</a>
+    </li>
+    <li class="nav-item ms-auto" role="presentation">
+        <a class="nav-link translate" style="opacity:0" data-bs-toggle="tab" aria-selected="false" tabindex="-1" role="tab" disabled>Quick Tools Space</a>
     </li>
 </ul>
 <div class="tab-content tab-hundred">
@@ -92,6 +102,8 @@
     <script src="js/genpage/utiltab.js?vary=@Utilities.VaryID"></script>
     <script src="js/genpage/server/servertab.js?vary=@Utilities.VaryID"></script>
     <script src="js/genpage/usertab.js?vary=@Utilities.VaryID"></script>
+    <script src="js/genpage/helpers/color_picker.js?vary=@Utilities.VaryID"></script>
+    <script src="js/genpage/helpers/image_editor_tools.js?vary=@Utilities.VaryID"></script>
     <script src="js/genpage/helpers/image_editor.js?vary=@Utilities.VaryID"></script>
     <script src="js/genpage/helpers/generatehandler.js?vary=@Utilities.VaryID"></script>
     <script src="js/genpage/simpletab.js?vary=@Utilities.VaryID"></script>
@@ -99,11 +111,12 @@
     <script src="js/genpage/helpers/metadatahelpers.js?vary=@Utilities.VaryID"></script>
     <script src="js/genpage/gentab/generatecontrols.js?vary=@Utilities.VaryID"></script>
     <script src="js/genpage/gentab/currentimagehandler.js?vary=@Utilities.VaryID"></script>
-    <script src="js/genpage/gentab/imagehistory.js?vary=@Utilities.VaryID"></script>
+    <script src="js/genpage/gentab/outputhistory.js?vary=@Utilities.VaryID"></script>
     <script src="js/genpage/main.js?vary=@Utilities.VaryID"></script>
     <script src="js/genpage/helpers/settings_editor.js?vary=@Utilities.VaryID"></script>
     <script src="js/genpage/server/logs.js?vary=@Utilities.VaryID"></script>
     <script src="js/genpage/helpers/ui_improvements.js?vary=@Utilities.VaryID"></script>
+    <script src="js/genpage/helpers/mediacontrols.js?vary=@Utilities.VaryID"></script>
     @WebServer.PageFooterExtra
     <script src="js/genpage/helpers/finalscript.js?vary=@Utilities.VaryID"></script>
 }

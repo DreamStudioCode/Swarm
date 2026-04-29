@@ -1,4 +1,4 @@
-﻿namespace SwarmUI.Media;
+namespace SwarmUI.Media;
 
 /// <summary>A media type is a specific media file type, such as 'png', 'mp4', etc.</summary>
 /// <param name="extension">The standard file extension for this media type (eg 'png').</param>
@@ -31,7 +31,7 @@ public class MediaType(string extension, string mimeType, MediaMetaType metaType
     /// <param name="defaultPresumption">Optionally, a fallback meta-type presumption.</param>
     public static MediaType GetByExtension(string extension, string mimePresumption = null, MediaMetaType defaultPresumption = null)
     {
-        if (TypesByExtension.TryGetValue(extension, out var type))
+        if (TypesByExtension.TryGetValue(extension, out MediaType type))
         {
             return type;
         }
@@ -47,7 +47,7 @@ public class MediaType(string extension, string mimeType, MediaMetaType metaType
     public static MediaType Register(MediaType type)
     {
         TypesByExtension[type.Extension] = type;
-        foreach (var alt in type.AltExtensions)
+        foreach (string alt in type.AltExtensions)
         {
             TypesByExtension[alt] = type;
         }
@@ -69,13 +69,14 @@ public class MediaType(string extension, string mimeType, MediaMetaType metaType
     /// <summary>Core video media types.</summary>
     public static MediaType VideoMp4 = Register(new("mp4", "video/mp4", MediaMetaType.Video)),
         VideoWebm = Register(new("webm", "video/webm", MediaMetaType.Video)),
-        VideoMov = Register(new("mov", "video/quicktime", MediaMetaType.Video));
+        VideoMov = Register(new("mov", "video/quicktime", MediaMetaType.Video, ["video/mov"]));
 
     /// <summary>Core audio media types.</summary>
     public static MediaType AudioMp3 = Register(new("mp3", "audio/mpeg", MediaMetaType.Audio)),
-        AudioWav = Register(new("wav", "audio/wav", MediaMetaType.Audio)),
+        AudioWav = Register(new("wav", "audio/wav", MediaMetaType.Audio, ["audio/wave", "audio/x-wav"])),
         AudioOgg = Register(new("ogg", "audio/ogg", MediaMetaType.Audio)),
-        AudioFlac = Register(new("flac", "audio/flac", MediaMetaType.Audio));
+        AudioFlac = Register(new("flac", "audio/flac", MediaMetaType.Audio)),
+        AudioAac = Register(new("aac", "audio/aac", MediaMetaType.Audio));
 
     /// <summary>Core text media types.</summary>
     public static MediaType TextTxt = Register(new("txt", "text/plain", MediaMetaType.Text));

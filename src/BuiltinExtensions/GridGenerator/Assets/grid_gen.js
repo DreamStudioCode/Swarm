@@ -7,6 +7,7 @@ class GridGenClass {
     lastAxisId = 0;
     popover = null;
     excludedParams = ['images', 'batchsize', 'refinersavebeforerefine'];
+    inputFilesCache = null;
 
     fillSelectorOptions(selector) {
         selector.add(new Option('', '', true, true));
@@ -80,12 +81,21 @@ class GridGenClass {
         inputBox.className = 'grid-gen-axis-input';
         inputBox.id = `grid-gen-axis-input-${id}`;
         let mode = null;
-        function getFillable() {
+        let getFillable = () => {
             if (!mode) {
                 return null;
             }
             if (mode.type == 'model' || mode.subtype in coreModelMap) {
                 return coreModelMap[mode.subtype || 'Stable-Diffusion'].filter(m => m != '(None)');
+            }
+            if (mode.type == 'image' || mode.type == 'image_list') {
+                return this.inputFilesCache.filter(f => !isAudioExt(f));
+            }
+            if (mode.type == 'video') {
+                return this.inputFilesCache.filter(f => isVideoExt(f));
+            }
+            if (mode.type == 'audio') {
+                return this.inputFilesCache.filter(f => isAudioExt(f));
             }
             if (mode.values) {
                 return mode.values;
@@ -316,6 +326,17 @@ class GridGenClass {
                 fillButton.style.visibility = 'visible';
                 fillButton.title = 'Fill with "true" and "false"';
             }
+            else if (mode && ['image', 'video', 'audio'].includes(mode.type)) {
+                fillButton.innerText = 'Fill';
+                fillButton.style.visibility = 'visible';
+                fillButton.title = 'Fill with input files';
+                if (!this.inputFilesCache) {
+                    genericRequest('ListImages', {'path': 'inputs/', 'depth': 10, 'sortBy': 'Name', 'sortReverse': false}, data => {
+                        this.inputFilesCache = data.files.map(f => `inputs/${f.src}`);
+                        updateInput();
+                    });
+                }
+            }
             else if (mode && mode.examples) {
                 fillButton.innerText = 'Examples';
                 fillButton.style.visibility = 'visible';
@@ -416,7 +437,7 @@ class GridGenClass {
     }
 
     doGenWrapper() {
-        setCurrentModel(() => {
+        currentModelHelper.ensureCurrentModel(() => {
             if (document.getElementById('current_model').value == '') {
                 showError("Cannot generate, no model selected.");
                 return;
@@ -456,7 +477,7 @@ class GridGenClass {
             ${modalFooter()}
             <div id="grid-gen-info-box">...</div>
             <div id="grid-gen-page-config">
-                ${makeTextInput(null, 'grid-gen-output-folder-name', '', 'Output Folder Name', 'Name of the folder to save this grid under in your Image History.\nYou can use auto-fills [date], [time], [year], [month], [day], [hour], [minute], [second]', '', 'normal', 'Output folder name...', false, true)}
+                ${makeTextInput(null, 'grid-gen-output-folder-name', '', 'Output Folder Name', 'Name of the folder to save this grid under in your History tab.\nYou can use auto-fills [date], [time], [year], [month], [day], [hour], [minute], [second]', '', 'normal', 'Output folder name...', false, true)}
             </div>
             <br>
             <div class="grid-gen-checkboxes">

@@ -1,4 +1,4 @@
-﻿using FreneticUtilities.FreneticExtensions;
+using FreneticUtilities.FreneticExtensions;
 using FreneticUtilities.FreneticToolkit;
 using Newtonsoft.Json.Linq;
 using SwarmUI.Accounts;
@@ -29,6 +29,7 @@ public static class ModelsAPI
         API.RegisterAPICall(TestPromptFill, false, Permissions.FundamentalModelAccess);
         API.RegisterAPICall(EditWildcard, true, Permissions.EditWildcards);
         API.RegisterAPICall(EditModelMetadata, true, Permissions.EditModelMetadata);
+        API.RegisterAPICall(GetModelHeaders, true, Permissions.EditModelMetadata);
         API.RegisterAPICall(DoModelDownloadWS, true, Permissions.DownloadModels);
         API.RegisterAPICall(GetModelHash, true, Permissions.EditModelMetadata);
         API.RegisterAPICall(ForwardMetadataRequest, false, Permissions.EditModelMetadata);
@@ -229,7 +230,7 @@ public static class ModelsAPI
                 if (tryMatch(file))
                 {
                     WildcardsHelper.Wildcard card = WildcardsHelper.GetWildcard(file);
-                    files.Add(new(card.Name, card.Name.AfterLast('/'), card.TimeCreated, card.TimeModified, card.GetNetObject(dataImages)));
+                    files.Add(new(card.Name, card.Name.AfterLast('/'), card.TimeCreated, card.TimeModified, card.GetNetObject(dataImages, truncate: true)));
                     if (files.Count > sanityCap)
                     {
                         break;
@@ -372,7 +373,7 @@ public static class ModelsAPI
             output(new JObject() { ["error"] = "Model not found." });
             return;
         }
-        using Session.GenClaim claim = session.Claim(0, Program.Backends.T2IBackends.Count, 0, 0);
+        using Session.GenClaim claim = session.Claim(0, Program.Backends.EnumerateT2IBackends.Count(), 0, 0);
         if (isWS)
         {
             output(BasicAPIFeatures.GetCurrentStatusRaw(session));
@@ -502,7 +503,7 @@ public static class ModelsAPI
             actualModel.Description = description;
             if (!string.IsNullOrWhiteSpace(type))
             {
-                actualModel.ModelClass = T2IModelClassSorter.ModelClasses.GetValueOrDefault(type);
+                actualModel.ModelClass = T2IModelClassSorter.ModelClasses.GetValueOrDefault(type.ToLowerFast());
             }
             if (standard_width > 0)
             {
@@ -547,6 +548,27 @@ public static class ModelsAPI
         return new JObject() { ["success"] = true };
     }
 
+    [API.APIDescription("Gets the raw headers of a model as raw JSON.", "\"headers\": { \"diffusion_model.some.key\": { \"dtype\": \"BF16\", ... }, ... }")]
+    public static async Task<JObject> GetModelHeaders(Session session,
+        [API.APIParameter("Exact filepath name of the model.")] string model,
+        [API.APIParameter("The model's sub-type, eg `Stable-Diffusion`, `LoRA`, etc.")] string subtype = "Stable-Diffusion")
+    {
+        using ManyReadOneWriteLock.ReadClaim claim = Program.RefreshLock.LockRead();
+        if (!Program.T2IModelSets.TryGetValue(subtype, out T2IModelHandler handler))
+        {
+            return new JObject() { ["error"] = "Invalid sub-type." };
+        }
+        if (TryGetRefusalForModel(session, model, out JObject refusal))
+        {
+            return refusal;
+        }
+        if (!handler.Models.TryGetValue(model, out T2IModel actualModel))
+        {
+            return new JObject() { ["error"] = "Model not found." };
+        }
+        return new JObject() { ["headers"] = T2IModel.GetMetadataHeaderFrom(actualModel.RawFilePath) };
+    }
+
     public static AsciiMatcher TokenTextLimiter = new(AsciiMatcher.BothCaseLetters + AsciiMatcher.Digits + " -_.,/");
 
     [API.APIDescription("Downloads a model to the server, with websocket progress updates.\nNote that this does not trigger a model refresh itself, you must do that after a 'success' reply.", "")]
@@ -572,10 +594,24 @@ public static class ModelsAPI
             await ws.SendJson(new JObject() { ["error"] = "Invalid type." }, API.WebsocketTimeout);
             return null;
         }
+        string extension = "safetensors";
+        string folder = handler.DownloadFolderPath;
+        if (url.EndsWith(".gguf"))
+        {
+            extension = "gguf";
+            if (type == "Stable-Diffusion")
+            {
+                folder += "/../diffusion_models"; // Hacky but oughtta do, gguf in diffusion_models is a silly special case
+            }
+        }
         string originalUrl = url;
         url = url.Before('#');
-        Dictionary<string, string> headers = [];
         if (url.StartsWith("https://civitai.com/"))
+        {
+            url = $"https://civitai.red/{url["https://civitai.com/".Length..]}";
+        }
+        Dictionary<string, string> headers = [];
+        if (url.StartsWith("https://civitai.red/"))
         {
             string civitaiApiKey = session.User.GetGenericData("civitai_api", "key");
             if (!string.IsNullOrEmpty(civitaiApiKey))
@@ -598,18 +634,19 @@ public static class ModelsAPI
         }
         try
         {
-            string outPath = $"{handler.DownloadFolderPath}/{name}.safetensors";
+            string outPath = $"{folder}/{name}.{extension}";
             if (File.Exists(outPath))
             {
                 await ws.SendJson(new JObject() { ["error"] = "Model at that save path already exists." }, API.WebsocketTimeout);
                 return null;
             }
-            string tempPath = $"{handler.DownloadFolderPath}/{name}.download.tmp";
+            string tempPath = $"{folder}/{name}.download.tmp";
             if (File.Exists(tempPath))
             {
                 File.Delete(tempPath);
             }
             Directory.CreateDirectory(Path.GetDirectoryName(outPath));
+            Logs.Debug($"Will download model from '{url}' to '{Path.GetFullPath(outPath)}'");
             using CancellationTokenSource canceller = new();
             Task downloading = Utilities.DownloadFile(url, tempPath, (progress, total, perSec) =>
             {
@@ -652,14 +689,14 @@ public static class ModelsAPI
             File.Move(tempPath, outPath);
             if (!string.IsNullOrWhiteSpace(metadata))
             {
-                File.WriteAllText($"{handler.DownloadFolderPath}/{name}.swarm.json", metadata);
+                File.WriteAllText($"{folder}/{name}.swarm.json", metadata);
             }
-            if (Program.ServerSettings.Paths.DownloaderAlwaysResave)
+            using (ManyReadOneWriteLock.WriteClaim claim = Program.RefreshLock.LockWrite())
             {
-                using (ManyReadOneWriteLock.WriteClaim claim = Program.RefreshLock.LockWrite())
-                {
-                    handler.Refresh();
-                }
+                handler.Refresh();
+            }
+            if (Program.ServerSettings.Paths.DownloaderAlwaysResave && extension == "safetensors")
+            {
                 if (handler.Models.TryGetValue($"{name}.safetensors", out T2IModel model))
                 {
                     model.ResaveModel();
@@ -724,7 +761,11 @@ public static class ModelsAPI
     [API.APIDescription("Forwards a metadata request, eg to civitai API.", "")]
     public static async Task<JObject> ForwardMetadataRequest(Session session, string url)
     {
-        if (!url.StartsWithFast("https://civitai.com/"))
+        if (url.StartsWithFast("https://civitai.com/"))
+        {
+            url = $"https://civitai.red/{url["https://civitai.com/".Length..]}";
+        }
+        if (!url.StartsWithFast("https://civitai.red/"))
         {
             return new JObject() { ["error"] = "Invalid URL." };
         }

@@ -1,4 +1,4 @@
-﻿using Newtonsoft.Json.Linq;
+using Newtonsoft.Json.Linq;
 using SwarmUI.Core;
 using SwarmUI.Utils;
 using SwarmUI.Accounts;
@@ -22,12 +22,17 @@ public static class BasicAPIFeatures
     /// <summary>Called by <see cref="Program"/> to register the core API calls.</summary>
     public static void Register()
     {
-        API.RegisterAPICall(Login); // Login is special
-        API.RegisterAPICall(GetNewSession); // GetNewSession is special
+        // Special APIs
+        API.RegisterAPICall(Login);
+        API.RegisterAPICall(RegisterBasic);
+        API.RegisterAPICall(RegisterOAuth);
+        API.RegisterAPICall(GetNewSession);
+        // General APIs
         API.RegisterAPICall(Logout, true, Permissions.Fundamental);
         API.RegisterAPICall(InstallConfirmWS, true, Permissions.Install);
         API.RegisterAPICall(GetMyUserData, false, Permissions.FundamentalGenerateTabAccess);
         API.RegisterAPICall(SetStarredModels, true, Permissions.FundamentalModelAccess);
+        API.RegisterAPICall(SetPresetLinks, true, Permissions.FundamentalModelAccess);
         API.RegisterAPICall(AddNewPreset, true, Permissions.ManagePresets);
         API.RegisterAPICall(DuplicatePreset, true, Permissions.ManagePresets);
         API.RegisterAPICall(DeletePreset, true, Permissions.ManagePresets);
@@ -41,6 +46,9 @@ public static class BasicAPIFeatures
         API.RegisterAPICall(ServerDebugMessage, false, Permissions.ServerDebugMessage);
         API.RegisterAPICall(SetAPIKey, true, Permissions.EditUserSettings);
         API.RegisterAPICall(GetAPIKeyStatus, false, Permissions.ReadUserSettings);
+        API.RegisterAPICall(ListMyAuthTokens, false, Permissions.ReadUserSettings);
+        API.RegisterAPICall(RevokeMyAuthToken, true, Permissions.EditUserSettings);
+        API.RegisterAPICall(CreateAuthToken, true, Permissions.EditUserSettings);
         T2IAPI.Register();
         ModelsAPI.Register();
         BackendAPI.Register();
@@ -65,7 +73,11 @@ public static class BasicAPIFeatures
         [API.APIParameter("Login username.")] string username,
         [API.APIParameter("Login password.")] string password)
     {
-        username = AdminAPI.UsernameValidator.TrimToMatches(username);
+        if (!Program.ServerSettings.UserAuthorization.AllowSimplePasswordLogin)
+        {
+            return new JObject() { ["error_id"] = "invalid_login" };
+        }
+        username = SessionHandler.UsernameValidator.TrimToMatches(username).ToLowerFast();
         string ip = WebUtil.GetIPString(context);
         string userAgent = WebUtil.AllowedXForwardedForChars.TrimToMatches(context.Request.Headers.UserAgent[0] ?? "unknown");
         if (username.Length < 3 || username.Length > 100 || password.Length < 8 || password.Length > 500)
@@ -110,6 +122,122 @@ public static class BasicAPIFeatures
         return new JObject() { ["success"] = "true" };
     }
 
+    [API.APIDescription("Special route to register a new user account. Generally only for UI users, bots/automated API usages should have a user account generate a token first.",
+        """
+            "success": "true" // and sets a cookie
+            // or
+            "error_id": "invalid_input" // or "ratelimit", "username_exists" (or is reserved/invalid), "registration_failed" (internal)
+        """)]
+    [API.APINonfinalMark]
+    public static async Task<JObject> RegisterBasic(HttpContext context,
+        [API.APIParameter("New registered account username.")] string username,
+        [API.APIParameter("New registered account password.")] string password)
+    {
+        username = SessionHandler.UsernameValidator.TrimToMatches(username).ToLowerFast();
+        string ip = WebUtil.GetIPString(context);
+        if (username.Length < 3 || username.Length > 100 || password.Length < 8 || password.Length > 500)
+        {
+            Logs.Warning($"Register attempt from {ip} as {username}, failed due to entirely invalid inputs.");
+            return new JObject() { ["error_id"] = "invalid_input" };
+        }
+        if (!LoginRateLimiterByIP.TryUseOne(ip))
+        {
+            Logs.Warning($"Register attempt from {ip} as {username}, ratelimited by IP.");
+            return new JObject() { ["error_id"] = "ratelimit" };
+        }
+        if (!LoginRateLimiterByUser.TryUseOne(username))
+        {
+            Logs.Warning($"Register attempt from {ip} as {username}, ratelimited by username.");
+            return new JObject() { ["error_id"] = "ratelimit" };
+        }
+        User user = Program.Sessions.GetUser(username, false);
+        if (user is not null)
+        {
+            Logs.Warning($"Register attempt from {ip} as {username}, failed due to username already existing.");
+            return new JObject() { ["error_id"] = "username_exists" };
+        }
+        if (username[0] < 'a' || username[0] > 'z')
+        {
+            Logs.Warning($"Register attempt from {ip} as {username}, failed due to invalid starting character.");
+            return new JObject() { ["error_id"] = "username_exists" };
+        }
+        if (SessionHandler.ReservedUsernames.Contains(username))
+        {
+            Logs.Warning($"Register attempt from {ip} as {username}, failed due to reserved username.");
+            return new JObject() { ["error_id"] = "username_exists" };
+        }
+        user = Program.Sessions.RegisterUser(username, password, Program.ServerSettings.UserAuthorization.Registration.NewUserDefaultRole, false);
+        if (user is null)
+        {
+            Logs.Warning($"Register attempt from {ip} as {username}, failed due to internal registration failure.");
+            return new JObject() { ["error_id"] = "registration_failed" };
+        }
+        Logs.Info($"Register attempt from {ip} as {username}, successful.");
+        return new JObject() { ["success"] = "true" };
+    }
+
+    [API.APIDescription("Special route to register a new user account via OAuth. Cannot be automated, must be via UI.",
+        """
+            "success": "true" // and sets a cookie
+            // or
+            "error_id": "invalid_input" // or "ratelimit", "username_exists" (or is reserved/invalid), "registration_failed" (internal)
+        """)]
+    [API.APINonfinalMark]
+    public static async Task<JObject> RegisterOAuth(HttpContext context,
+        [API.APIParameter("New registered account username.")] string username,
+        [API.APIParameter("Tracker key to identify the source OAuth request.")] string oauth_tracker_key,
+        [API.APIParameter("OAuth provider type.")] string oauth_type)
+    {
+        username = SessionHandler.UsernameValidator.TrimToMatches(username).ToLowerFast();
+        string ip = WebUtil.GetIPString(context);
+        if (username.Length < 3 || username.Length > 100)
+        {
+            Logs.Warning($"Register attempt from {ip} as {username}, failed due to entirely invalid inputs.");
+            return new JObject() { ["error_id"] = "invalid_input" };
+        }
+        if (!LoginRateLimiterByIP.TryUseOne(ip))
+        {
+            Logs.Warning($"Register attempt from {ip} as {username}, ratelimited by IP.");
+            return new JObject() { ["error_id"] = "ratelimit" };
+        }
+        if (!LoginRateLimiterByUser.TryUseOne(username))
+        {
+            Logs.Warning($"Register attempt from {ip} as {username}, ratelimited by username.");
+            return new JObject() { ["error_id"] = "ratelimit" };
+        }
+        User user = Program.Sessions.GetUser(username, false);
+        if (user is not null)
+        {
+            Logs.Warning($"Register attempt from {ip} as {username}, failed due to username already existing.");
+            return new JObject() { ["error_id"] = "username_exists" };
+        }
+        if (username[0] < 'a' || username[0] > 'z')
+        {
+            Logs.Warning($"Register attempt from {ip} as {username}, failed due to invalid starting character.");
+            return new JObject() { ["error_id"] = "username_exists" };
+        }
+        if (SessionHandler.ReservedUsernames.Contains(username))
+        {
+            Logs.Warning($"Register attempt from {ip} as {username}, failed due to reserved username.");
+            return new JObject() { ["error_id"] = "username_exists" };
+        }
+        if (!Program.Sessions.TempAuths.TryGetValue(oauth_tracker_key, out string email))
+        {
+            Logs.Warning($"Register attempt from {ip} as {username}, failed due to invalid OAuth tracker key.");
+            return new JObject() { ["error_id"] = "invalid_input" };
+        }
+        user = Program.Sessions.RegisterUser(username, null, Program.ServerSettings.UserAuthorization.Registration.NewUserDefaultRole, false);
+        if (user is null)
+        {
+            Logs.Warning($"Register attempt from {ip} as {username}, failed due to internal registration failure.");
+            return new JObject() { ["error_id"] = "registration_failed" };
+        }
+        user.SetOAuthEmail(email);
+        Program.Sessions.TempAuths.Remove(oauth_tracker_key, out _);
+        Logs.Info($"Register attempt from {ip} as {username}, successful.");
+        return new JObject() { ["success"] = "true" };
+    }
+
     [API.APIDescription("Special route to create a new session ID. Must be called before any other API route. Also returns other fundamental user and server data.\nIntentionally no permission flag required, as permissions are not defined until you create a session.",
         """
             "session_id": "session_id",
@@ -119,7 +247,8 @@ public static class BasicAPIFeatures
             "server_id": "abc123",
             "permissions": ["permission1", "permission2"]
         """)]
-    public static async Task<JObject> GetNewSession(HttpContext context)
+    public static async Task<JObject> GetNewSession(HttpContext context,
+        [API.APIParameter("If you have an admin account with manage_users permission, specify the id of a different user to impersonate here.")] string impersonateUser = null)
     {
         User user = WebServer.GetUserFor(context);
         if (user is null)
@@ -130,6 +259,19 @@ public static class BasicAPIFeatures
         if (source.Length > 100)
         {
             source = source[..100] + "...";
+        }
+        if (impersonateUser is not null)
+        {
+            if (!user.HasPermission(Permissions.ManageUsers))
+            {
+                return new JObject() { ["error"] = "You do not have permission to impersonate other users.", ["error_id"] = "bad_impersonate" };
+            }
+            User target = Program.Sessions.GetUser(impersonateUser, false);
+            if (target is null)
+            {
+                return new JObject() { ["error"] = "The user you are trying to impersonate does not exist.", ["error_id"] = "bad_impersonate" };
+            }
+            user = target;
         }
         Session session = Program.Sessions.CreateSession(source, user.UserID);
         return new JObject()
@@ -213,13 +355,22 @@ public static class BasicAPIFeatures
                     "param_map": {
                         "key": "value"
                     },
-                    "preview_image": "data:base64 img"
+                    "preview_image": "data:base64 img",
+                    "is_starred": false
                 }
             ],
             "language": "en",
             "permissions": ["permission1", "permission2"],
             "starred_models": {
                 "LoRA": ["one", "two"]
+            },
+            "model_preset_links": {
+                "Stable-Diffusion": {
+                    "modelnamehere": ["preset_title"]
+                },
+                "LoRA": {
+                    "modelnamehere": ["preset_title"]
+                }
             },
             "autocompletions": ["Word\nword\ntag\n3"]
         """)]
@@ -233,6 +384,7 @@ public static class BasicAPIFeatures
             ["language"] = session.User.Settings.Language,
             ["permissions"] = JArray.FromObject(session.User.GetPermissions()),
             ["starred_models"] = JObject.Parse(session.User.GetGenericData("starred_models", "full") ?? "{}"),
+            ["model_preset_links"] = JObject.Parse(session.User.GetGenericData("modelpresetlinks", "full") ?? "{}"),
             ["autocompletions"] = string.IsNullOrWhiteSpace(settings.Source) ? null : new JArray(AutoCompleteListHelper.GetData(settings.Source, settings.EscapeParens, settings.Suffix, settings.SpacingMode))
         };
     }
@@ -250,6 +402,16 @@ public static class BasicAPIFeatures
         return new JObject() { ["success"] = true };
     }
 
+    [API.APIDescription("Saves a reference to a preset for a model or LoRA to the user's data.", "\"success\": \"true\"")]
+    public static async Task<JObject> SetPresetLinks(Session session,
+        [API.APIParameter("Send the raw data as eg 'LoRA': { 'Name': ['Preset'] }, 'Stable-Diffusion': { ... }")] JObject raw)
+    {
+        raw.Remove("session_id");
+        session.User.SaveGenericData("modelpresetlinks", "full", raw.ToString(Formatting.None));
+        session.User.Save();
+        return new JObject() { ["success"] = true };
+    }
+
     [API.APIDescription("User route to add a new parameter preset.",
         """
             "success": true
@@ -263,7 +425,8 @@ public static class BasicAPIFeatures
         [API.APIParameter("Optional preview image data base64 string.")] string preview_image = null,
         [API.APIParameter("Optional raw text of metadata to inject to the preview image.")] string preview_image_metadata = null,
         [API.APIParameter("If true, edit an existing preset. If false, do not override pre-existing presets of the same name.")] bool is_edit = false,
-        [API.APIParameter("If is_edit is set, include the original preset name here.")] string editing = null)
+        [API.APIParameter("If is_edit is set, include the original preset name here.")] string editing = null,
+        [API.APIParameter("Whether the preset is starred.")] bool is_starred = false)
     {
         title = Utilities.StrictFilenameClean(title);
         if (string.IsNullOrWhiteSpace(title))
@@ -292,7 +455,8 @@ public static class BasicAPIFeatures
             Title = title,
             Description = description,
             ParamMap = paramData.Properties().Select(p => (p.Name, p.Value.ToString())).PairsToDictionary(),
-            PreviewImage = string.IsNullOrWhiteSpace(preview_image) ? "imgs/model_placeholder.jpg" : preview_image
+            PreviewImage = string.IsNullOrWhiteSpace(preview_image) ? "imgs/model_placeholder.jpg" : preview_image,
+            IsStarred = is_starred
         };
         if (is_edit && existingPreset is not null && editing != title)
         {
@@ -325,7 +489,8 @@ public static class BasicAPIFeatures
             Title = $"{preset} ({id})",
             Description = existingPreset.Description,
             ParamMap = new(existingPreset.ParamMap),
-            PreviewImage = existingPreset.PreviewImage
+            PreviewImage = existingPreset.PreviewImage,
+            IsStarred = existingPreset.IsStarred
         };
         session.User.SavePreset(newPreset);
         return new JObject() { ["success"] = true };
@@ -544,6 +709,102 @@ public static class BasicAPIFeatures
     {
         Logs.Info($"User '{session.User.UserID}' sent a debug message: {message}");
         return new JObject() { ["success"] = true };
+    }
+
+    [API.APIDescription("User route to list the current user's auth tokens (login sessions).\nOnly valid if authorization is enabled.",
+        """
+            "tokens": [
+                {
+                    "id": "abc123", // Note this is not the full token, just the ID prefix.
+                    "created": 1700000000, // Unix time seconds.
+                    "last_active": 1700001000,
+                    "user_agent": "Mozilla/5.0...",
+                    "origin_address": "127.0.0.1",
+                    "is_current": true // If this was the token that sent this request.
+                }
+            ]
+        """)]
+    public static async Task<JObject> ListMyAuthTokens(HttpContext context, Session session)
+    {
+        if (!Program.ServerSettings.UserAuthorization.AuthorizationRequired)
+        {
+            return new JObject() { ["error"] = "Authorization is not enabled." };
+        }
+        string[] swarmToken = WebUtil.GetSwarmTokenFor(context);
+        string currentTokenId = swarmToken?[1];
+        JArray tokens = [];
+        lock (Program.Sessions.DBLock)
+        {
+            foreach (string tokenId in session.User.Data.LoginSessions)
+            {
+                SessionHandler.LoginSession loginSession = Program.Sessions.LoginSessions.FindById(tokenId);
+                if (loginSession is null)
+                {
+                    continue;
+                }
+                tokens.Add(new JObject()
+                {
+                    ["id"] = tokenId,
+                    ["created"] = loginSession.CreatedUnixTime,
+                    ["last_active"] = loginSession.LastActiveUnixTime,
+                    ["user_agent"] = loginSession.OriginUserAgent ?? "unknown",
+                    ["origin_address"] = loginSession.OriginAddress ?? "unknown",
+                    ["is_current"] = tokenId == currentTokenId
+                });
+            }
+        }
+        return new JObject() { ["tokens"] = tokens };
+    }
+
+    [API.APIDescription("User route to revoke (delete) one of the current user's auth tokens.",
+        """
+            "success": true
+        """)]
+    public static async Task<JObject> RevokeMyAuthToken(HttpContext context, Session session,
+        [API.APIParameter("The ID of the token to revoke.")] string tokenId)
+    {
+        if (!Program.ServerSettings.UserAuthorization.AuthorizationRequired)
+        {
+            return new JObject() { ["error"] = "Authorization is not enabled." };
+        }
+        lock (Program.Sessions.DBLock)
+        {
+            if (!session.User.Data.LoginSessions.Remove(tokenId))
+            {
+                return new JObject() { ["error"] = "Token not found." };
+            }
+            Program.Sessions.LoginSessions.Delete(tokenId);
+            foreach (Session sess in Program.Sessions.Sessions.Values.Where(s => s.OriginToken == tokenId).ToArray())
+            {
+                Program.Sessions.RemoveSession(sess);
+            }
+            session.User.Save();
+        }
+        return new JObject() { ["success"] = true };
+    }
+
+    [API.APIDescription("User route to create a new auth token (login session) for the current user.\nOnly valid if authorization is enabled.",
+        """
+            "token": "useridhex.tokenid.validationtext"
+        """)]
+    public static async Task<JObject> CreateAuthToken(HttpContext context, Session session,
+        [API.APIParameter("A user-provided reason/label for this token, stored as the user-agent.")] string reason)
+    {
+        if (!Program.ServerSettings.UserAuthorization.AuthorizationRequired)
+        {
+            return new JObject() { ["error"] = "Authorization is not enabled." };
+        }
+        if (string.IsNullOrWhiteSpace(reason) || reason.Length > 500)
+        {
+            return new JObject() { ["error"] = "Reason must be between 1 and 500 characters." };
+        }
+        string ip = WebUtil.GetIPString(context);
+        (_, string rawToken) = session.User.CreateLoginSession(ip, reason);
+        if (rawToken is null)
+        {
+            return new JObject() { ["error"] = "Failed to create token." };
+        }
+        return new JObject() { ["token"] = rawToken };
     }
 
     public static HashSet<string> AcceptedAPIKeyTypes = ["stability_api", "civitai_api", "huggingface_api"];

@@ -1,4 +1,4 @@
-﻿using FreneticUtilities.FreneticDataSyntax;
+using FreneticUtilities.FreneticDataSyntax;
 using FreneticUtilities.FreneticExtensions;
 using FreneticUtilities.FreneticToolkit;
 using Newtonsoft.Json.Linq;
@@ -100,6 +100,9 @@ public class SwarmSwarmBackend : AbstractT2IBackend
 
     /// <summary>Event fired when a backend is revising its remote data.</summary>
     public static Action<SwarmSwarmBackend> ReviseRemotesEvent;
+
+    /// <summary>The parent backend, if any.</summary>
+    public SwarmSwarmBackend Parent;
 
     /// <summary>Gets a request adapter appropriate to this Swarm backend, including eg auth headers.</summary>
     public Action<HttpRequestMessage> RequestAdapter()
@@ -256,16 +259,18 @@ public class SwarmSwarmBackend : AbstractT2IBackend
                     if (IsAControlInstance && !ids.Remove(id) && (Settings.AllowForwarding || type != "swarmswarmbackend"))
                     {
                         Logs.Verbose($"{HandlerTypeData.Name} {BackendData.ID} adding remote backend {id} ({type}) '{title}'");
+                        // TODO: support remote non-T2I Backends
                         Handler.AddNewNonrealBackend(HandlerTypeData, BackendData, SettingsRaw, (newData) =>
                         {
-                            SwarmSwarmBackend newSwarm = newData.Backend as SwarmSwarmBackend;
+                            SwarmSwarmBackend newSwarm = newData.AbstractBackend as SwarmSwarmBackend;
                             newSwarm.LinkedRemoteBackendID = id;
                             newSwarm.Models = Models;
                             newSwarm.LinkedRemoteBackendType = type;
                             newSwarm.Title = $"[Remote from {BackendData.ID}: {Title}] {title}";
                             newSwarm.CanLoadModels = backend["can_load_models"].Value<bool>();
+                            newSwarm.Parent = this;
                             OnSwarmBackendAdded?.Invoke(newSwarm);
-                            ControlledNonrealBackends.TryAdd(id, newData);
+                            ControlledNonrealBackends.TryAdd(id, newData as BackendHandler.T2IBackendData);
                         });
                     }
                     if (ControlledNonrealBackends.TryGetValue(id, out BackendHandler.T2IBackendData data))
@@ -457,6 +462,11 @@ public class SwarmSwarmBackend : AbstractT2IBackend
         {
             return false;
         }
+        if (input is not null && input.Get(T2IParamTypes.NoLoadModels, false))
+        {
+            CurrentModelName = model.Name;
+            return true;
+        }
         bool success = false;
         await RunWithSession(async () =>
         {
@@ -516,6 +526,11 @@ public class SwarmSwarmBackend : AbstractT2IBackend
         {
             req[T2IParamTypes.ExactBackendID.Type.ID] = LinkedRemoteBackendID;
         }
+        if (user_input.ReceiveRawBackendData is not null)
+        {
+            req[T2IParamTypes.ForwardRawBackendData.Type.ID] = true;
+        }
+        req[T2IParamTypes.ForwardSwarmData.Type.ID] = true;
         return req;
     }
 
@@ -564,6 +579,7 @@ public class SwarmSwarmBackend : AbstractT2IBackend
                 }
             });
             await websocket.SendJson(BuildRequest(user_input), API.WebsocketTimeout);
+            Logs.Debug($"[{HandlerTypeData.Name}] WebSocket connected, remote backend {LinkedRemoteBackendID} should begin generating...");
             while (true)
             {
                 if (user_input.InterruptToken.IsCancellationRequested)
@@ -571,7 +587,7 @@ public class SwarmSwarmBackend : AbstractT2IBackend
                     // TODO: This will require separate remote sessions per-user for multiuser support
                     await HttpClient.PostJson($"{Address}/API/InterruptAll", new() { ["session_id"] = Session, ["other_sessions"] = false }, RequestAdapter());
                 }
-                JObject response = await websocket.ReceiveJson(1024 * 1024 * 100, true);
+                JObject response = await websocket.ReceiveJson(Utilities.ExtraLargeMaxReceive, true);
                 if (response is not null)
                 {
                     AutoThrowException(response);
@@ -598,6 +614,28 @@ public class SwarmSwarmBackend : AbstractT2IBackend
                     {
                         Logs.Verbose($"[{HandlerTypeData.Name}] Got image from websocket");
                         takeOutput(ImageFile.FromDataString(val.ToString()));
+                    }
+                    else if (response.TryGetValue("raw_backend_data", out JToken rawData))
+                    {
+                        string type = rawData["type"].ToString();
+                        string datab64 = rawData["data"].ToString();
+                        byte[] data = Convert.FromBase64String(datab64);
+                        user_input.ReceiveRawBackendData?.Invoke(type, data);
+                    }
+                    else if (response.TryGetValue("raw_swarm_data", out JToken rawSwarmDataTok) && rawSwarmDataTok is JObject rawSwarmData)
+                    {
+                        Logs.Verbose($"Got raw spawn data from websocket: {rawSwarmData.ToDenseDebugString(true)}");
+                        if (rawSwarmData.TryGetValue("params_used", out JToken paramsUsed))
+                        {
+                            foreach (JToken paramUsed in paramsUsed)
+                            {
+                                user_input.ParamsQueried.Add($"{paramUsed}");
+                            }
+                        }
+                        if (user_input.Get(T2IParamTypes.ForwardSwarmData, false))
+                        {
+                            takeOutput(response);
+                        }
                     }
                     else
                     {

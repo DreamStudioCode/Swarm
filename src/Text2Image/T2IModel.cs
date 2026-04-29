@@ -1,4 +1,4 @@
-﻿using FreneticUtilities.FreneticExtensions;
+using FreneticUtilities.FreneticExtensions;
 using FreneticUtilities.FreneticToolkit;
 using Newtonsoft.Json.Linq;
 using SwarmUI.Core;
@@ -174,6 +174,7 @@ public class T2IModel(T2IModelHandler handler, string folderPath, string filePat
             reader ??= File.OpenRead(RawFilePath);
             try
             {
+                Logs.Verbose("Metadata resave: begin header read");
                 reader.Seek(0, SeekOrigin.Begin);
                 byte[] headerLen = new byte[8];
                 reader.ReadExactly(headerLen, 0, 8);
@@ -191,8 +192,10 @@ public class T2IModel(T2IModelHandler handler, string folderPath, string filePat
                 JObject metaHeader = (json["__metadata__"] as JObject) ?? [];
                 if (Metadata.Hash is null)
                 {
+                    Logs.Verbose("Metadata resave: must rebuild hash");
                     // Metadata fix for when we generated hashes into the file metadata headers, but did not save them into the metadata cache
                     Metadata.Hash = (metaHeader?.ContainsKey("modelspec.hash_sha256") ?? false) ? metaHeader.Value<string>("modelspec.hash_sha256") : "0x" + Utilities.BytesToHex(SHA256.HashData(reader));
+                    Logs.Verbose("Metadata resave: do metadata reset for hash");
                     Handler.ResetMetadataFrom(this);
                 }
                 void specSet(string key, string val)
@@ -217,6 +220,7 @@ public class T2IModel(T2IModelHandler handler, string folderPath, string filePat
                         metaHeader.Remove($"modelspec.{key}");
                     }
                 }
+                Logs.Verbose("Metadata resave: refill data");
                 specSet("sai_model_spec", "1.0.0");
                 specSet("title", Metadata.Title);
                 specSet("architecture", Metadata.ModelClassType);
@@ -239,20 +243,43 @@ public class T2IModel(T2IModelHandler handler, string folderPath, string filePat
                 }
                 specSetEmptyable("lora_default_weight", Metadata.LoraDefaultWeight);
                 specSetEmptyable("lora_default_confinement", Metadata.LoraDefaultConfinement);
-                json["__metadata__"] = metaHeader;
+                metaHeader["__spacer"] = "";
+                byte[] encode()
+                {
+                    json["__metadata__"] = metaHeader;
+                    return Encoding.UTF8.GetBytes(json.ToString(Newtonsoft.Json.Formatting.None));
+                }
+                byte[] headerBytes = encode();
                 void HandleResave(string path)
                 {
                     if (reader is null)
                     {
+                        Logs.Verbose("Metadata resave: fresh open model source file");
                         reader = File.OpenRead(path);
                         reader.Seek(0, SeekOrigin.Begin);
                         byte[] headerLen = new byte[8];
                         reader.ReadExactly(headerLen, 0, 8);
                         len = BitConverter.ToInt64(headerLen, 0);
                     }
+                    Logs.Verbose($"Metadata resave: file at '{path}', header len is {len}, will save new header len {headerBytes.Length}");
+                    if (headerBytes.Length <= len)
                     {
-                        using FileStream writer = File.OpenWrite(path + ".tmp");
-                        byte[] headerBytes = Encoding.UTF8.GetBytes(json.ToString(Newtonsoft.Json.Formatting.None));
+                        Logs.Verbose("Metadata resave: direct update header");
+                        metaHeader["__spacer"] = new string(' ', (int)(len - headerBytes.Length));
+                        headerBytes = encode();
+                        reader.Dispose();
+                        using FileStream writer = File.OpenWrite(path);
+                        writer.Seek(8, SeekOrigin.Begin);
+                        writer.Write(headerBytes);
+                        writer.Flush();
+                        Logs.Debug($"Completed metadata direct-update for {path}");
+                        return;
+                    }
+                    metaHeader["__spacer"] = new string(' ', Program.ServerSettings.Metadata.ModelMetadataSpacerKilobytes * 1024);
+                    headerBytes = encode();
+                    Logs.Verbose("Metadata resave: write .tmp file");
+                    using (FileStream writer = File.OpenWrite(path + ".tmp"))
+                    {
                         writer.Write(BitConverter.GetBytes(headerBytes.LongLength));
                         writer.Write(headerBytes);
                         reader.Seek(8 + len, SeekOrigin.Begin);
@@ -260,6 +287,7 @@ public class T2IModel(T2IModelHandler handler, string folderPath, string filePat
                         reader.Dispose();
                         reader = null;
                     }
+                    Logs.Verbose("Metadata resave: do journal swap");
                     // Journalling replace to prevent data loss in event of a crash.
                     DateTime createTime = File.GetCreationTimeUtc(path);
                     File.Move(path, path + ".tmp2");
@@ -273,6 +301,7 @@ public class T2IModel(T2IModelHandler handler, string folderPath, string filePat
                 {
                     foreach (string altPath in OtherPaths)
                     {
+                        Logs.Verbose($"Metadata resave: apply to altpath: {altPath}");
                         HandleResave(altPath);
                     }
                 }
@@ -305,7 +334,7 @@ public class T2IModel(T2IModelHandler handler, string folderPath, string filePat
             [$"{prefix}loaded"] = AnyBackendsHaveLoaded,
             [$"{prefix}architecture"] = ModelClass?.ID,
             [$"{prefix}class"] = ModelClass?.Name,
-            [$"{prefix}compat_class"] = ModelClass?.CompatClass,
+            [$"{prefix}compat_class"] = ModelClass?.CompatClass?.ID,
             [$"{prefix}resolution"] = $"{StandardWidth}x{StandardHeight}",
             [$"{prefix}standard_width"] = StandardWidth <= 0 ? ModelClass?.StandardWidth ?? 0 : StandardWidth,
             [$"{prefix}standard_height"] = StandardHeight <= 0 ? ModelClass?.StandardHeight ?? 0 : StandardHeight,
@@ -337,7 +366,7 @@ public class T2IModel(T2IModelHandler handler, string folderPath, string filePat
             Description = $"{data["description"]}",
             PreviewImage = $"{data["preview_image"]}",
             AnyBackendsHaveLoaded = (bool)data["loaded"],
-            ModelClass = T2IModelClassSorter.ModelClasses.GetValueOrDefault($"{data["architecture"]}") ?? null,
+            ModelClass = T2IModelClassSorter.ModelClasses.GetValueOrDefault($"{data["architecture"]}".ToLowerFast()) ?? null,
             StandardWidth = (int)data["standard_width"],
             StandardHeight = (int)data["standard_height"],
             IsSupportedModelType = (bool)(data?["is_supported_model_format"] ?? false)
@@ -430,6 +459,10 @@ public class T2IModel(T2IModelHandler handler, string folderPath, string filePat
     /// <summary>Get the safetensors or gguf header from a model. Return includes "__metadata__" key with metadata key:value map, other data at root.</summary>
     public static JObject GetMetadataHeaderFrom(string modelPath)
     {
+        if (!modelPath.EndsWith(".safetensors") && !modelPath.EndsWith(".sft") && !modelPath.EndsWith(".gguf"))
+        {
+            throw new SwarmReadableErrorException($"Cannot get metadata header from unsupported model file type: {modelPath.Replace('\\', '/').AfterLast('/')}");
+        }
         using FileStream file = File.OpenRead(modelPath);
         if (file.Length < 8)
         {

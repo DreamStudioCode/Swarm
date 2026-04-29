@@ -1,4 +1,4 @@
-﻿using FreneticUtilities.FreneticToolkit;
+using FreneticUtilities.FreneticToolkit;
 using System.IO;
 using System.IO.Compression;
 using System.Text.RegularExpressions;
@@ -98,7 +98,7 @@ public partial class CliplikeTokenizer
         }
         if (best is null)
         {
-            Logs.Debug($"[CliplikeTokenizer] Error: Cannot encode word '{word}', will emit empty");
+            Logs.Verbose($"[CliplikeTokenizer] Error: Cannot encode word '{word}', will emit empty");
             best = [];
         }
         if (Cache is not null)

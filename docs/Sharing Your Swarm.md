@@ -22,13 +22,12 @@ Currently, SwarmUI is only validated to be safely usable by **Friends and Family
 
 - Two-Factor Authentication
 - Easy account-quick-swapper for admins
-- Account registration
 - automatic/forced "you must change your password" popup
 - Simple tab stable access for non-power-users
 - Preset serverwide sharing
 - User-local model organization/notes for non-admin users
 - User-local wildcards
-- Many convenience features for remote users, eg a way to download image history as a batch zip
+- Many convenience features for remote users, eg a way to download history as a batch zip
 - Convenient user auth session management and bot token interface
 
 ## Basic Setup Guide
@@ -74,8 +73,31 @@ Currently, SwarmUI is only validated to be safely usable by **Friends and Family
             - If they've never used Swarm before, give them some tips for how to get started! Show them your favorite models and prompting techniques.
             - Or, have your friend watch while you operate the UI and do some generations, so they can see how you do it and ask questions.
 
+## User Registration
+
+- You can enable user registration via the options under Server Configuration.
+    - `AllowRegistration` to turn it on, and other checkboxes to configure what registration methods are allowed.
+        - Simple username/password is available.
+        - Also, Google OAuth is available. Follow <https://developers.google.com/identity/protocols/oauth2> for information about how to set this up.
+    - You can also configure `NewUserDefaultRole` (defaults to `user`)
+    - You should set the `RegisterNotice` text too
+- If enabled, when a user goes to login, there's a link to the `/Register` page they can click to register an account.
+
+## User Impersonation
+
+- Do you want to test how another user sees your Swarm install? It's easy!
+    - On the `Server` tab then `Users` subtab, click the relevant user, and there's an `Impersonate User` button
+    - This will reload the page with you fully viewing and operating as that user instead of yourself.
+    - In the `User` main tab, there is a button to `Stop Impersonating`
+        - If the User tab is inaccessible, don't worry: just open a fresh copy of the SwarmUI tab, and it will be on your own account again.
+    - This is tracked by URL, so for example `http://localhost:7801/Text2Image?impersonate=bob` makes you impersonate the user `bob`
+    - This all of course only works if your real account has the `Manage Users` permission
+- This has a bonus benefit: if you install a personal SwarmUI instance, you can enable the user system to set up separate personal work environments, and then use the Impersonate option to swap between them quickly.
+
 ## Using Shared Swarms As A Backend
 
 You can hook up someone else's shared SwarmUI instance as a backend in your own Swarm!
 
 (TODO: Explain how to. Need easy way to gen and apply account auth stuff.)
+
+<br><br><br><br><br><br><br><br><br><br><br><br><br><br><br>

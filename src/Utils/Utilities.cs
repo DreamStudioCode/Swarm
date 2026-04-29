@@ -1,4 +1,4 @@
-﻿using FreneticUtilities.FreneticExtensions;
+using FreneticUtilities.FreneticExtensions;
 using FreneticUtilities.FreneticToolkit;
 using Microsoft.AspNetCore.Http;
 using Newtonsoft.Json;
@@ -96,7 +96,7 @@ public static class Utilities
                 return;
             }
         }
-        if (Program.Backends.T2IBackendRequests.Any() || Program.Backends.QueuedRequests > 0 || Program.Backends.T2IBackends.Values.Any(b => b.CheckIsInUseAtAll))
+        if (Program.Backends.T2IBackendRequests.Any() || Program.Backends.QueuedRequests > 0 || Program.Backends.AllBackends.Values.Any(b => b.CheckIsInUseAtAll))
         {
             return;
         }
@@ -298,8 +298,11 @@ public static class Utilities
         return Task.WhenAny(tasks);
     }
 
+    /// <summary>Effectively-unlimited max receive length, for internal transfers. Set to 100 gigabytes.</summary>
+    public static long ExtraLargeMaxReceive = 100L * 1024 * 1024 * 1024;
+
     /// <summary>Receive raw binary data from a WebSocket.</summary>
-    public static async Task<byte[]> ReceiveData(this WebSocket socket, int maxBytes, CancellationToken limit)
+    public static async Task<byte[]> ReceiveData(this WebSocket socket, long maxBytes, CancellationToken limit)
     {
         byte[] buffer = new byte[8192];
         using MemoryStream ms = new();
@@ -308,7 +311,7 @@ public static class Utilities
         {
             result = await socket.ReceiveAsync(buffer, limit);
             ms.Write(buffer, 0, result.Count);
-            if (ms.Length > maxBytes)
+            if (ms.Length > maxBytes || ms.Length >= int.MaxValue)
             {
                 throw new IOException($"Received too much data! (over {maxBytes} bytes)");
             }
@@ -318,14 +321,14 @@ public static class Utilities
     }
 
     /// <summary>Receive raw binary data from a WebSocket.</summary>
-    public static async Task<byte[]> ReceiveData(this WebSocket socket, TimeSpan maxDuration, int maxBytes)
+    public static async Task<byte[]> ReceiveData(this WebSocket socket, TimeSpan maxDuration, long maxBytes)
     {
         using CancellationTokenSource cancel = TimedCancel(maxDuration);
         return await ReceiveData(socket, maxBytes, cancel.Token);
     }
 
     /// <summary>Receive JSON data from a WebSocket.</summary>
-    public static async Task<JObject> ReceiveJson(this WebSocket socket, int maxBytes, bool nullOnEmpty = false)
+    public static async Task<JObject> ReceiveJson(this WebSocket socket, long maxBytes, bool nullOnEmpty = false)
     {
         string raw = Encoding.UTF8.GetString(await ReceiveData(socket, maxBytes, Program.GlobalProgramCancel));
         if (nullOnEmpty && string.IsNullOrWhiteSpace(raw))
@@ -336,7 +339,7 @@ public static class Utilities
     }
 
     /// <summary>Receive JSON data from a WebSocket.</summary>
-    public static async Task<JObject> ReceiveJson(this WebSocket socket, TimeSpan maxDuration, int maxBytes, bool nullOnEmpty = false)
+    public static async Task<JObject> ReceiveJson(this WebSocket socket, TimeSpan maxDuration, long maxBytes, bool nullOnEmpty = false)
     {
         string raw = Encoding.UTF8.GetString(await ReceiveData(socket, maxDuration, maxBytes));
         if (nullOnEmpty && string.IsNullOrWhiteSpace(raw))
@@ -400,7 +403,7 @@ public static class Utilities
         return JObject.FromObject(obj.Properties().OrderBy(p => sort(p.Name)).ToDictionary(p => p.Name, p => p.Value));
     }
 
-    /// <summary>(Experimental) aggressively simply low-mem ToString for JSON data. Dense, spaceless, unformatted.</summary>
+    /// <summary>Aggressively simple low-mem ToString for JSON data. Dense, spaceless, unformatted.</summary>
     public static void ToStringFast(this JToken jval, StringBuilder builder)
     {
         if (jval is JObject jobj)
@@ -463,20 +466,27 @@ public static class Utilities
 
     public static async Task YieldJsonOutput(this HttpContext context, WebSocket socket, int status, JObject obj)
     {
-        if (socket != null)
+        try
         {
-            await socket.SendJson(obj, TimeSpan.FromMinutes(1));
-            using CancellationTokenSource cancel = TimedCancel(TimeSpan.FromMinutes(1));
-            await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, null, cancel.Token);
-            return;
+            if (socket is not null)
+            {
+                await socket.SendJson(obj, TimeSpan.FromMinutes(1));
+                using CancellationTokenSource cancel = TimedCancel(TimeSpan.FromMinutes(1));
+                await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, null, cancel.Token);
+                return;
+            }
+            byte[] resp = JsonToByteArray(obj);
+            context.Response.ContentType = "application/json";
+            context.Response.StatusCode = status;
+            context.Response.ContentLength = resp.Length;
+            context.Response.Headers.CacheControl = "no-store";
+            await context.Response.BodyWriter.WriteAsync(resp, Program.GlobalProgramCancel);
+            await context.Response.CompleteAsync();
         }
-        byte[] resp = JsonToByteArray(obj);
-        context.Response.ContentType = "application/json";
-        context.Response.StatusCode = status;
-        context.Response.ContentLength = resp.Length;
-        context.Response.Headers.CacheControl = "no-store";
-        await context.Response.BodyWriter.WriteAsync(resp, Program.GlobalProgramCancel);
-        await context.Response.CompleteAsync();
+        catch (Exception ex)
+        {
+            Logs.Error($"Failing while yielding JSON output: {ex.ReadableString()}");
+        }
     }
 
     public static JObject ErrorObj(string message, string error_id)
@@ -1075,7 +1085,7 @@ public static class Utilities
         {
             IPHostEntry host = Dns.GetHostEntry(Dns.GetHostName());
             List<string> result = [];
-            foreach (var ip in host.AddressList)
+            foreach (IPAddress ip in host.AddressList)
             {
                 if (ip.AddressFamily == AddressFamily.InterNetwork && !$"{ip}".EndsWith(".1"))
                 {

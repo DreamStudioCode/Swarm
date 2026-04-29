@@ -2,6 +2,8 @@
 @{
     ViewData["Title"] = "Login";
     HtmlString notice = new(Program.ServerSettings.UserAuthorization.LoginNotice);
+    bool simpleLogin = Program.ServerSettings.UserAuthorization.AllowSimplePasswordLogin;
+    bool googleOAuthLogin = Program.ServerSettings.UserAuthorization.OAuth.GoogleOAuth;
 }
 @section Header {
     <link rel="stylesheet" href="css/loginpage.css?vary=@Utilities.VaryID" />
@@ -20,21 +22,40 @@
     </div>
     <div class="small-header">
         <span class="translate">Please verify you are on the specific instance of SwarmUI you intend to be, verify the address in the URL is correct. Accounts are not shared between different instances of SwarmUI.</span>
+        @if (Program.ServerSettings.UserAuthorization.Registration.AllowRegistration)
+        {
+            <br>
+            <span class="translate">If you don't have an account yet, you can <a href="Register">register one here</a>.</span>
+        }
     </div>
     <br><hr><br>
     @notice
 </div>
 <div class="login-form-container login-container">
-    <div class="login-input-block">
-        <span class="translate">Username:</span> <input type="text" id="username_input" name="username" class="auto-text auto-text-block translate translate-no-text" placeholder="Username" autocomplete="off" value="" />
-    </div>
-    <div class="login-input-block">
-        <span class="translate">Password:</span> <input type="text" id="password_input" class="auto-text auto-text-block password translate translate-no-text" placeholder="Password" autocomplete="off" value="" />
-    </div>
-    <div class="login-input-block login-message-block" id="login_error_block"></div>
-    <div class="login-input-block">
-        <button type="button" class="basic-button translate" id="login_button" onclick="loginHandler.doLogin()">Login</button>
-    </div>
+    @if (simpleLogin)
+    {
+        <div class="login-input-block">
+            <span class="translate login-label">Username:</span> <input type="text" id="username_input" name="username" class="auto-text auto-text-block translate translate-no-text" placeholder="Username" autocomplete="off" value="" />
+        </div>
+        <div class="login-input-block">
+            <span class="translate login-label">Password:</span> <input type="text" id="password_input" class="auto-text auto-text-block password translate translate-no-text" placeholder="Password" autocomplete="off" value="" />
+        </div>
+        <div class="login-input-block login-message-block" id="login_error_block"></div>
+        <div class="login-input-block">
+            <button type="button" class="basic-button translate" id="login_button" onclick="loginHandler.doLogin()">Login</button>
+        </div>
+    }
+    @if (googleOAuthLogin)
+    {
+        string pathBase = Program.ServerSettings.UserAuthorization.OAuth.OAuthReturnURL;
+        string clientId = Program.ServerSettings.UserAuthorization.OAuth.GoogleOAuthClientId;
+        <script src="https://accounts.google.com/gsi/client" async></script>
+        <div id="g_id_onload" data-client_id="@clientId"
+                data-context="signin" data-ux_mode="popup" data-login_uri="@pathBase/GoogleOAuthVerify" data-itp_support="true">
+        </div>
+        <div class="g_id_signin" data-type="standard" data-shape="rectangular" data-theme="outline" data-text="signin_with" data-size="large" data-logo_alignment="left">
+        </div>
+    }
 </div>
 <div class="login-footer-container login-container">
     <span class="translate">This is a local login page for a specific instance of SwarmUI, owned by the operators of this instance.</span>

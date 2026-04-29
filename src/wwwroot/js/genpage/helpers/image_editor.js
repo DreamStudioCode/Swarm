@@ -1,891 +1,5 @@
 
 /**
- * Base class for an image editor tool, such as Paintbrush or the General tool.
- */
-class ImageEditorTool {
-    constructor(editor, id, icon, name, description, hotkey = null) {
-        this.editor = editor;
-        this.isTempTool = false;
-        this.id = id;
-        this.icon = icon;
-        this.iconImg = new Image();
-        this.iconImg.src = `imgs/${icon}.png`;
-        this.name = name;
-        this.description = description;
-        this.active = false;
-        this.cursor = 'crosshair';
-        this.hotkey = hotkey;
-        this.makeDivs();
-    }
-
-    makeDivs() {
-        this.infoBubble = createDiv(null, 'sui-popover');
-        this.infoBubble.innerHTML = `<div class="image-editor-info-bubble-title">${escapeHtml(this.name)}</div><div class="image-editor-info-bubble-description">${escapeHtml(this.description)}</div>`;
-        this.div = document.createElement('div');
-        this.div.className = 'image-editor-tool';
-        this.div.style.backgroundImage = `url(imgs/${this.icon}.png)`;
-        this.div.addEventListener('click', () => this.onClick());
-        this.div.addEventListener('mouseenter', () => {
-            this.infoBubble.style.top = `${this.div.offsetTop}px`;
-            this.infoBubble.style.left = `${this.div.offsetLeft + this.div.clientWidth + 5}px`;
-            this.infoBubble.classList.add('sui-popover-visible');
-        });
-        this.div.addEventListener('mouseleave', () => {
-            this.infoBubble.classList.remove('sui-popover-visible');
-        });
-        this.editor.leftBar.appendChild(this.infoBubble);
-        this.editor.leftBar.appendChild(this.div);
-        this.configDiv = document.createElement('div');
-        this.configDiv.className = 'image-editor-tool-bottombar';
-        this.configDiv.style.display = 'none';
-        this.editor.bottomBar.appendChild(this.configDiv);
-    }
-
-    onClick() {
-        this.editor.activateTool(this.id);
-    }
-
-    setActive() {
-        if (this.active) {
-            return;
-        }
-        this.active = true;
-        this.div.classList.add('image-editor-tool-selected');
-        this.configDiv.style.display = 'flex';
-    }
-
-    setInactive() {
-        if (!this.active) {
-            return;
-        }
-        this.active = false;
-        this.div.classList.remove('image-editor-tool-selected');
-        this.configDiv.style.display = 'none';
-    }
-
-    draw() {
-    }
-
-    drawCircleBrush(x, y, radius) {
-        this.editor.ctx.strokeStyle = '#ffffff';
-        this.editor.ctx.lineWidth = 1;
-        this.editor.ctx.globalCompositeOperation = 'difference';
-        this.editor.ctx.beginPath();
-        this.editor.ctx.arc(x, y, radius, 0, 2 * Math.PI);
-        this.editor.ctx.stroke();
-        this.editor.ctx.globalCompositeOperation = 'source-over';
-    }
-
-    onMouseDown(e) {
-    }
-
-    onMouseUp(e) {
-    }
-
-    onMouseMove(e) {
-    }
-
-    onMouseWheel(e) {
-    }
-
-    onGlobalMouseMove(e) {
-        return false;
-    }
-
-    onGlobalMouseUp(e) {
-        return false;
-    }
-}
-
-/**
- * A special temporary tool, a wrapper of the base tool class that prevents default behaviors.
- */
-class ImageEditorTempTool extends ImageEditorTool {
-    constructor(editor, id, icon, name, description, hotkey = null) {
-        super(editor, id, icon, name, description, hotkey);
-        this.isTempTool = true;
-    }
-
-    makeDivs() {
-    }
-
-    setActive() {
-        if (this.active) {
-            return;
-        }
-        this.active = true;
-    }
-
-    setInactive() {
-        if (!this.active) {
-            return;
-        }
-        this.active = false;
-    }
-}
-
-/**
- * The special extra options tool.
- */
-class ImageEditorToolOptions extends ImageEditorTool {
-    constructor(editor) {
-        super(editor, 'options', 'dotdotdot', 'Options', 'Additional advanced options for the image editor.');
-        this.optionButtons = [
-            { key: 'Download Current Image', action: () => {
-                let link = document.createElement('a');
-                link.href = this.editor.getFinalImageData();
-                link.download = 'image.png';
-                link.click();
-            }},
-            { key: 'Download Full Canvas', action: () => {
-                let link = document.createElement('a');
-                link.href = this.editor.getMaximumImageData();
-                link.download = 'canvas.png';
-                link.click();
-            }},
-            { key: 'Download Mask', action: () => {
-                let link = document.createElement('a');
-                link.href = this.editor.getFinalMaskData();
-                link.download = 'mask.png';
-                link.click();
-            }},
-        ];
-    }
-
-    onClick() {
-        let rect = this.div.getBoundingClientRect();
-        new AdvancedPopover('imageeditor_options_popover', this.optionButtons, false, rect.x, rect.y + this.div.offsetHeight + 6, document.body, null, null, 999999, false);
-    }
-}
-
-/**
- * The generic common tool (can be activated freely with the Alt key).
- */
-class ImageEditorToolGeneral extends ImageEditorTool {
-    constructor(editor) {
-        super(editor, 'general', 'mouse', 'General', 'General tool. Lets you move around the canvas, or adjust size of current layer.\nWhile resizing an object, hold CTRL to snap-to-grid, or hold SHIFT to disable aspect preservation.\nThe general tool can be activated at any time with the Alt key.\nHotKey: G', 'g');
-        this.currentDragCircle = null;
-        this.rotateIcon = new Image();
-        this.rotateIcon.src = 'imgs/canvas_rotate.png';
-        this.moveIcon = new Image();
-        this.moveIcon.src = 'imgs/canvas_move.png';
-    }
-
-    fixCursor() {
-        this.cursor = this.editor.mouseDown ? 'grabbing' : 'crosshair';
-    }
-
-    activeLayerControlCircles() {
-        let [offsetX, offsetY] = this.editor.imageCoordToCanvasCoord(this.editor.activeLayer.offsetX, this.editor.activeLayer.offsetY);
-        let [width, height] = [this.editor.activeLayer.width * this.editor.zoomLevel, this.editor.activeLayer.height * this.editor.zoomLevel];
-        let circles = [];
-        let radius = 4;
-        circles.push({name: 'top-left', radius: radius, x: offsetX - radius / 2, y: offsetY - radius / 2});
-        circles.push({name: 'top-right', radius: radius, x: offsetX + width + radius / 2, y: offsetY - radius / 2});
-        circles.push({name: 'bottom-left', radius: radius, x: offsetX - radius / 2, y: offsetY + height + radius / 2});
-        circles.push({name: 'bottom-right', radius: radius, x: offsetX + width + radius / 2, y: offsetY + height + radius / 2});
-        circles.push({name: 'center-top', radius: radius, x: offsetX + width / 2, y: offsetY - radius / 2});
-        circles.push({name: 'center-bottom', radius: radius, x: offsetX + width / 2, y: offsetY + height + radius / 2});
-        circles.push({name: 'center-left', radius: radius, x: offsetX - radius / 2, y: offsetY + height / 2});
-        circles.push({name: 'center-right', radius: radius, x: offsetX + width + radius / 2, y: offsetY + height / 2});
-        circles.push({name: 'positioner', radius: radius * 2, x: offsetX + width / 2, y: offsetY - radius * 8, icon: this.moveIcon});
-        circles.push({name: 'rotator', radius: radius * 2, x: offsetX + width / 2, y: offsetY - radius * 16, icon: this.rotateIcon});
-        let angle = this.editor.activeLayer.rotation;
-        if (angle != 0) {
-            for (let circle of circles) {
-                circle.x = Math.round(circle.x);
-                circle.y = Math.round(circle.y);
-                let [cx, cy] = [offsetX + width / 2, offsetY + height / 2];
-                let [x, y] = [circle.x - cx, circle.y - cy];
-                [x, y] = [x * Math.cos(angle) - y * Math.sin(angle), x * Math.sin(angle) + y * Math.cos(angle)];
-                [circle.x, circle.y] = [x + cx, y + cy];
-            }
-        }
-        return circles;
-    }
-
-    getControlCircle(name) {
-        return this.activeLayerControlCircles().find(c => c.name == name);
-    }
-
-    draw() {
-        this.fixCursor();
-        for (let circle of this.activeLayerControlCircles()) {
-            this.editor.ctx.strokeStyle = '#ffffff';
-            this.editor.ctx.fillStyle = '#000000';
-            if (this.editor.isMouseInCircle(circle.x, circle.y, circle.radius)) {
-                this.editor.canvas.style.cursor = 'grab';
-                this.editor.ctx.strokeStyle = '#000000';
-                this.editor.ctx.fillStyle = '#ffffff';
-            }
-            this.editor.ctx.lineWidth = 1;
-            if (circle.icon) {
-                this.editor.ctx.save();
-                this.editor.ctx.filter = 'invert(1)';
-                for (let offset of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
-                    this.editor.ctx.drawImage(circle.icon, circle.x - circle.radius + offset[0], circle.y - circle.radius + offset[1], circle.radius * 2, circle.radius * 2);
-                }
-                this.editor.ctx.restore();
-                this.editor.ctx.drawImage(circle.icon, circle.x - circle.radius, circle.y - circle.radius, circle.radius * 2, circle.radius * 2);
-            }
-            else {
-                this.editor.ctx.beginPath();
-                this.editor.ctx.arc(circle.x, circle.y, circle.radius, 0, 2 * Math.PI);
-                this.editor.ctx.fill();
-                this.editor.ctx.stroke();
-            }
-        }
-    }
-
-    onMouseDown(e) {
-        this.fixCursor();
-        this.currentDragCircle = null;
-        for (let circle of this.activeLayerControlCircles()) {
-            if (this.editor.isMouseInCircle(circle.x, circle.y, circle.radius)) {
-                this.editor.activeLayer.savePositions();
-                this.currentDragCircle = circle.name;
-                break;
-            }
-        }
-    }
-
-    onMouseUp(e) {
-        this.fixCursor();
-        this.currentDragCircle = null;
-    }
-
-    onGlobalMouseMove(e) {
-        if (this.editor.mouseDown) {
-            let dx = (this.editor.mouseX - this.editor.lastMouseX) / this.editor.zoomLevel;
-            let dy = (this.editor.mouseY - this.editor.lastMouseY) / this.editor.zoomLevel;
-            let target = this.editor.activeLayer;
-            let [mouseX, mouseY] = this.editor.canvasCoordToImageCoord(this.editor.mouseX, this.editor.mouseY);
-            if (this.currentDragCircle == 'rotator') {
-                let centerX = target.offsetX + target.width / 2;
-                let centerY = target.offsetY + target.height / 2;
-                target.rotation = Math.atan2(mouseY - centerY, mouseX - centerX) + Math.PI / 2;
-                if (e.ctrlKey) {
-                    target.rotation = Math.round(target.rotation / (Math.PI / 16)) * (Math.PI / 16);
-                }
-                this.editor.markChanged();
-            }
-            else if (this.currentDragCircle) {
-                let current = this.getControlCircle(this.currentDragCircle);
-                let [circleX, circleY] = this.editor.canvasCoordToImageCoord(current.x, current.y);
-                let roundFactor = 1;
-                if (e.ctrlKey) {
-                    roundFactor = 8;
-                    while (roundFactor * this.editor.zoomLevel < 16) {
-                        roundFactor *= 4;
-                    }
-                }
-                function applyRotate(x, y, angle = null) {
-                    let [cx, cy] = [target.offsetX + target.width / 2, target.offsetY + target.height / 2];
-                    if (angle == null) {
-                        angle = target.rotation;
-                    }
-                    [x, y] = [x - cx, y - cy];
-                    [x, y] = [x * Math.cos(angle) - y * Math.sin(angle), x * Math.sin(angle) + y * Math.cos(angle)];
-                    [x, y] = [x + cx, y + cy];
-                    return [x, y];
-                }
-                if (!e.shiftKey && !current.name.startsWith('center') && current.name != 'positioner') {
-                    let [cX, cY] = [target.offsetX + target.width / 2, target.offsetY + target.height / 2];
-                    let [dirX, dirY] = [circleX - cX, circleY - cY];
-                    let lineLen = Math.sqrt(dirX * dirX + dirY * dirY);
-                    [dirX, dirY] = [dirX / lineLen, dirY / lineLen];
-                    let [vX, vY] = [mouseX - cX, mouseY - cY];
-                    let d = vX * dirX + vY * dirY;
-                    [mouseX, mouseY] = [cX + dirX * d, cY + dirY * d];
-                }
-                let dx = Math.round(mouseX / roundFactor) * roundFactor - circleX;
-                let dy = Math.round(mouseY / roundFactor) * roundFactor - circleY;
-                if (current.name == 'positioner') {
-                    target.offsetX += dx;
-                    target.offsetY += dy;
-                }
-                else {
-                    [dx, dy] = [dx * Math.cos(-target.rotation) - dy * Math.sin(-target.rotation), dx * Math.sin(-target.rotation) + dy * Math.cos(-target.rotation)];
-                    let [origX, origY] = [target.offsetX, target.offsetY];
-                    let [origWidth, origHeight] = [target.width, target.height];
-                    if (current.name == 'top-left') {
-                        let [origBRX, origBRY] = applyRotate(origX + origWidth, origY + origHeight);
-                        let widthChange = Math.min(dx, target.width - 1);
-                        let heightChange = Math.min(dy, target.height - 1);
-                        target.offsetX += widthChange;
-                        target.offsetY += heightChange;
-                        target.width -= widthChange;
-                        target.height -= heightChange;
-                        let [newBRX, newBRY] = applyRotate(target.offsetX + target.width, target.offsetY + target.height);
-                        target.offsetX += origBRX - newBRX;
-                        target.offsetY += origBRY - newBRY;
-                    }
-                    else if (current.name == 'top-right') {
-                        let [origBLX, origBLY] = applyRotate(origX, origY + origHeight);
-                        let widthChange = Math.max(dx, 1- target.width);
-                        let heightChange = Math.min(dy, target.height - 1);
-                        target.offsetY += heightChange;
-                        target.width += widthChange;
-                        target.height -= heightChange;
-                        let [newBLX, newBLY] = applyRotate(target.offsetX, target.offsetY + target.height);
-                        target.offsetX += origBLX - newBLX;
-                        target.offsetY += origBLY - newBLY;
-                    }
-                    else if (current.name == 'bottom-left') {
-                        let [origTRX, origTRY] = applyRotate(origX + origWidth, origY);
-                        let widthChange = Math.min(dx, target.width - 1);
-                        let heightChange = Math.max(dy, 1 - target.height);
-                        target.offsetX += widthChange;
-                        target.width -= widthChange;
-                        target.height += heightChange;
-                        let [newTRX, newTRY] = applyRotate(target.offsetX + target.width, target.offsetY);
-                        target.offsetX += origTRX - newTRX;
-                        target.offsetY += origTRY - newTRY;
-                    }
-                    else if (current.name == 'bottom-right') {
-                        let [origTLX, origTLY] = applyRotate(origX, origY);
-                        let widthChange = Math.max(dx, 1 - target.width);
-                        let heightChange = Math.max(dy, 1 - target.height);
-                        target.width += widthChange;
-                        target.height += heightChange;
-                        let [newTLX, newTLY] = applyRotate(target.offsetX, target.offsetY);
-                        target.offsetX += origTLX - newTLX;
-                        target.offsetY += origTLY - newTLY;
-                    }
-                    else if (current.name == 'center-top') {
-                        let [origCBX, origCBY] = applyRotate(origX + origWidth / 2, origY + origHeight);
-                        let heightChange = Math.min(dy, target.height - 1);
-                        target.offsetY += heightChange;
-                        target.height -= heightChange;
-                        let [newCBX, newCBY] = applyRotate(target.offsetX + target.width / 2, target.offsetY + target.height);
-                        target.offsetX += origCBX - newCBX;
-                        target.offsetY += origCBY - newCBY;
-                    }
-                    else if (current.name == 'center-bottom') {
-                        let [origCTX, origCTY] = applyRotate(origX + origWidth / 2, origY);
-                        let heightChange = Math.max(dy, 1 - target.height);
-                        target.height += heightChange;
-                        let [newCTX, newCTY] = applyRotate(target.offsetX + target.width / 2, target.offsetY);
-                        target.offsetX += origCTX - newCTX;
-                        target.offsetY += origCTY - newCTY;
-                    }
-                    else if (current.name == 'center-left') {
-                        let [origCRX, origCRY] = applyRotate(origX + origWidth, origY + origHeight / 2);
-                        let widthChange = Math.min(dx, target.width - 1);
-                        target.offsetX += widthChange;
-                        target.width -= widthChange;
-                        let [newCRX, newCRY] = applyRotate(target.offsetX + target.width, target.offsetY + target.height / 2);
-                        target.offsetX += origCRX - newCRX;
-                        target.offsetY += origCRY - newCRY;
-                    }
-                    else if (current.name == 'center-right') {
-                        let [origCLX, origCLY] = applyRotate(origX, origY + origHeight / 2);
-                        let widthChange = Math.max(dx, 1 - target.width);
-                        target.width += widthChange;
-                        let [newCLX, newCLY] = applyRotate(target.offsetX, target.offsetY + target.height / 2);
-                        target.offsetX += origCLX - newCLX;
-                        target.offsetY += origCLY - newCLY;
-                    }
-                }
-                this.editor.markChanged();
-            }
-            else {
-                this.editor.offsetX += dx;
-                this.editor.offsetY += dy;
-            }
-            return true;
-        }
-        return false;
-    }
-}
-
-/**
- * The layer-move tool.
- */
-class ImageEditorToolMove extends ImageEditorTool {
-    constructor(editor) {
-        super(editor, 'move', 'move', 'Move', 'Free-move the current layer.\nHold SHIFT to lock to flat directions (45/90 degree movements only).\nHold CTRL to snap to grid (32px).\nHotKey: M', 'm');
-        this.startingX = null;
-        this.startingY = null;
-    }
-
-    onMouseDown(e) {
-        this.startingX = this.editor.activeLayer.offsetX;
-        this.startingY = this.editor.activeLayer.offsetY;
-        this.moveX = 0;
-        this.moveY = 0;
-        this.editor.activeLayer.savePositions();
-    }
-
-    onGlobalMouseMove(e) {
-        if (this.editor.mouseDown && this.startingX != null) {
-            this.moveX += (this.editor.mouseX - this.editor.lastMouseX) / this.editor.zoomLevel;
-            this.moveY += (this.editor.mouseY - this.editor.lastMouseY) / this.editor.zoomLevel;
-            let actualX = this.moveX, actualY = this.moveY;
-            if (e.shiftKey) {
-                let absX = Math.abs(actualX), absY = Math.abs(actualY);
-                if (absX > absY * 2) {
-                    actualY = 0;
-                }
-                else if (absY > absX * 2) {
-                    actualX = 0;
-                }
-                else {
-                    let dist = Math.sqrt(actualX * actualX + actualY * actualY);
-                    actualX = dist * Math.sign(actualX);
-                    actualY = dist * Math.sign(actualY);
-                }
-            }
-            let layer = this.editor.activeLayer;
-            layer.offsetX = this.startingX + actualX;
-            layer.offsetY = this.startingY + actualY;
-            if (e.ctrlKey) {
-                layer.offsetX = Math.round(layer.offsetX / 32) * 32;
-                layer.offsetY = Math.round(layer.offsetY / 32) * 32;
-            }
-            this.editor.markChanged();
-            return true;
-        }
-        return false;
-    }
-
-    onGlobalMouseUp(e) {
-        this.startingX = null;
-        this.startingY = null;
-        return false;
-    }
-}
-
-/**
- * The selection tool.
- */
-class ImageEditorToolSelect extends ImageEditorTool {
-    constructor(editor) {
-        super(editor, 'select', 'select', 'Select', 'Select a region of the image.\nHotKey: S', 's');
-        let makeRegionButton = `<div class="image-editor-tool-block">
-            <button class="basic-button id-make-region">Make Region</button>
-        </div>`;
-        this.configDiv.innerHTML = makeRegionButton;
-        this.configDiv.querySelector('.id-make-region').addEventListener('click', () => {
-            if (this.editor.hasSelection) {
-                // TODO: This should create a new pseudo-layer that highlights a simple box and render the region text inside of it
-                let promptBox = getRequiredElementById('alt_prompt_textbox');
-                function roundClean(v) {
-                    return Math.round(v * 1000) / 1000;
-                }
-                let regionText = `\n<region:${roundClean(this.editor.selectX / this.editor.realWidth)},${roundClean(this.editor.selectY / this.editor.realHeight)},${roundClean(this.editor.selectWidth / this.editor.realWidth)},${roundClean(this.editor.selectHeight / this.editor.realHeight)}>`;
-                promptBox.value += regionText;
-                triggerChangeFor(promptBox);
-            }
-        });
-    }
-
-    onMouseDown(e) {
-        let [mouseX, mouseY] = this.editor.canvasCoordToImageCoord(this.editor.mouseX, this.editor.mouseY);
-        this.editor.selectX = mouseX;
-        this.editor.selectY = mouseY;
-        this.editor.hasSelection = false;
-    }
-
-    onMouseUp(e) {
-        if (this.editor.hasSelection) {
-            if (this.editor.selectWidth < 0) {
-                this.editor.selectX += this.editor.selectWidth;
-                this.editor.selectWidth = -this.editor.selectWidth;
-            }
-            if (this.editor.selectHeight < 0) {
-                this.editor.selectY += this.editor.selectHeight;
-                this.editor.selectHeight = -this.editor.selectHeight;
-            }
-        }
-    }
-
-    onGlobalMouseMove(e) {
-        if (this.editor.mouseDown) {
-            let [mouseX, mouseY] = this.editor.canvasCoordToImageCoord(this.editor.mouseX, this.editor.mouseY);
-            this.editor.selectWidth = mouseX - this.editor.selectX;
-            this.editor.selectHeight = mouseY - this.editor.selectY;
-            this.editor.hasSelection = true;
-            this.editor.markChanged();
-            return true;
-        }
-        return false;
-    }
-}
-
-/**
- * The Paintbrush tool (also the base used for other brush-likes, such as the Eraser).
- */
-class ImageEditorToolBrush extends ImageEditorTool {
-    constructor(editor, id, icon, name, description, isEraser, hotkey = null) {
-        super(editor, id, icon, name, description, hotkey);
-        this.cursor = 'none';
-        this.color = '#ffffff';
-        this.radius = 10;
-        this.opacity = 1;
-        this.brushing = false;
-        this.isEraser = isEraser;
-        let colorHTML = `
-        <div class="image-editor-tool-block">
-            <label>Color:&nbsp;</label>
-            <input type="text" class="auto-number id-col1" style="width:75px;flex-grow:0;" value="#ffffff">
-            <input type="color" class="id-col2" value="#ffffff">
-            <button class="basic-button id-col3">Pick</button>
-        </div>`;
-        let radiusHtml = `<div class="image-editor-tool-block id-rad-block">
-                <label>Radius:&nbsp;</label>
-                <input type="number" style="width: 40px;" class="auto-number id-rad1" min="1" max="1024" step="1" value="10">
-                <div class="auto-slider-range-wrapper" style="${getRangeStyle(10, 1, 1024)}">
-                    <input type="range" style="flex-grow: 2" data-ispot="true" class="auto-slider-range id-rad2" min="1" max="1024" step="1" value="10" oninput="updateRangeStyle(arguments[0])" onchange="updateRangeStyle(arguments[0])">
-                </div>
-            </div>`;
-        let opacityHtml = `<div class="image-editor-tool-block id-opac-block">
-                <label>Opacity:&nbsp;</label>
-                <input type="number" style="width: 40px;" class="auto-number id-opac1" min="1" max="100" step="1" value="100">
-                <div class="auto-slider-range-wrapper" style="${getRangeStyle(100, 1, 100)}">
-                    <input type="range" style="flex-grow: 2" class="auto-slider-range id-opac2" min="1" max="100" step="1" value="100" oninput="updateRangeStyle(arguments[0])" onchange="updateRangeStyle(arguments[0])">
-                </div>
-            </div>`;
-        if (isEraser) {
-            this.configDiv.innerHTML = radiusHtml + opacityHtml;
-        }
-        else {
-            this.configDiv.innerHTML = colorHTML + radiusHtml + opacityHtml;
-            this.colorText = this.configDiv.querySelector('.id-col1');
-            this.colorSelector = this.configDiv.querySelector('.id-col2');
-            this.colorPickButton = this.configDiv.querySelector('.id-col3');
-            this.colorText.addEventListener('input', () => {
-                this.colorSelector.value = this.colorText.value;
-                this.onConfigChange();
-            });
-            this.colorSelector.addEventListener('change', () => {
-                this.colorText.value = this.colorSelector.value;
-                this.onConfigChange();
-            });
-            this.colorPickButton.addEventListener('click', () => {
-                if (this.colorPickButton.classList.contains('interrupt-button')) {
-                    this.colorPickButton.classList.remove('interrupt-button');
-                    this.editor.activateTool(this.id);
-                }
-                else {
-                    this.colorPickButton.classList.add('interrupt-button');
-                    this.editor.pickerTool.toolFor = this;
-                    this.editor.activateTool('picker');
-                }
-            });
-        }
-        enableSliderForBox(this.configDiv.querySelector('.id-rad-block'));
-        enableSliderForBox(this.configDiv.querySelector('.id-opac-block'));
-        this.radiusNumber = this.configDiv.querySelector('.id-rad1');
-        this.radiusSelector = this.configDiv.querySelector('.id-rad2');
-        this.opacityNumber = this.configDiv.querySelector('.id-opac1');
-        this.opacitySelector = this.configDiv.querySelector('.id-opac2');
-        this.radiusNumber.addEventListener('change', () => { this.onConfigChange(); });
-        this.opacityNumber.addEventListener('change', () => { this.onConfigChange(); });
-        this.lastTouch = null;
-    }
-
-    setColor(col) {
-        this.color = col;
-        this.colorText.value = col;
-        this.colorSelector.value = col;
-        this.colorPickButton.classList.remove('interrupt-button');
-    }
-
-    onConfigChange() {
-        if (!this.isEraser) {
-            this.color = this.colorText.value;
-        }
-        this.radius = parseInt(this.radiusNumber.value);
-        this.opacity = parseInt(this.opacityNumber.value) / 100;
-        this.editor.redraw();
-    }
-
-    draw() {
-        this.drawCircleBrush(this.editor.mouseX, this.editor.mouseY, this.radius * this.editor.zoomLevel);
-    }
-
-    brush(force = 1) {
-        let [lastX, lastY] = this.editor.activeLayer.canvasCoordToLayerCoord(this.editor.lastMouseX, this.editor.lastMouseY);
-        let [x, y] = this.editor.activeLayer.canvasCoordToLayerCoord(this.editor.mouseX, this.editor.mouseY);
-        this.bufferLayer.drawFilledCircle(lastX, lastY, this.radius * force, this.color);
-        this.bufferLayer.drawFilledCircleStrokeBetween(lastX, lastY, x, y, this.radius * force, this.color);
-        this.bufferLayer.drawFilledCircle(x, y, this.radius * force, this.color);
-        this.editor.markChanged();
-    }
-
-    getForceFrom(e) {
-        if (e.touches && e.touches.length > 0) {
-            let touch = e.touches.item(0);
-            this.lastTouch = new Date().getTime();
-            if (touch.force <= 0) {
-                return 1;
-            }
-            return touch.force;
-        }
-        return 1;
-    }
-
-    onMouseDown(e) {
-        if (this.brushing) {
-            return;
-        }
-        if (e.touches) {
-            this.lastTouch = new Date().getTime();
-        }
-        if (!e.touches && this.lastTouch && new Date().getTime() - this.lastTouch < 1000) {
-            return;
-        }
-        this.brushing = true;
-        let target = this.editor.activeLayer;
-        this.bufferLayer = new ImageEditorLayer(this.editor, target.canvas.width, target.canvas.height, target);
-        this.bufferLayer.opacity = this.opacity;
-        if (this.isEraser) {
-            this.bufferLayer.globalCompositeOperation = 'destination-out';
-        }
-        target.childLayers.push(this.bufferLayer);
-        this.brush(this.getForceFrom(e));
-    }
-
-    onMouseMove(e) {
-        if (this.brushing) {
-            if (e.touches) {
-                this.lastTouch = new Date().getTime();
-            }
-            if (!e.touches && this.lastTouch && new Date().getTime() - this.lastTouch < 1000) {
-                return;
-            }
-            this.brush(this.getForceFrom(e));
-        }
-    }
-
-    onMouseWheel(e) {
-        if (e.ctrlKey) {
-            e.preventDefault();
-            let newRadius = parseInt(this.radius * Math.pow(1.1, -e.deltaY / 100));
-            if (newRadius == this.radius) {
-                newRadius += e.deltaY > 0 ? -1 : 1;
-            }
-            this.radiusNumber.value = Math.max(1, Math.min(1024, newRadius));
-            this.radiusNumber.dispatchEvent(new Event('input'));
-            this.radiusNumber.dispatchEvent(new Event('change'));
-        }
-    }
-
-    onGlobalMouseUp(e) {
-        if (this.brushing) {
-            this.editor.activeLayer.childLayers.pop();
-            let offset = this.editor.activeLayer.getOffset();
-            this.editor.activeLayer.saveBeforeEdit();
-            this.bufferLayer.drawToBackDirect(this.editor.activeLayer.ctx, -offset[0], -offset[1], 1);
-            this.editor.activeLayer.hasAnyContent = true;
-            this.bufferLayer = null;
-            this.brushing = false;
-            return true;
-        }
-        return false;
-    }
-}
-
-
-/**
- * The Paint Bucket tool.
- */
-class ImageEditorToolBucket extends ImageEditorTool {
-    constructor(editor) {
-        super(editor, 'paintbucket', 'paintbucket', 'Paint Bucket', 'Fill an area with a color.\nHotKey: P', 'p');
-        this.cursor = 'crosshair';
-        this.color = '#ffffff';
-        this.threshold = 10;
-        this.opacity = 1;
-        let colorHTML = `
-        <div class="image-editor-tool-block">
-            <label>Color:&nbsp;</label>
-            <input type="text" class="auto-number id-col1" style="width:75px;flex-grow:0;" value="#ffffff">
-            <input type="color" class="id-col2" value="#ffffff">
-            <button class="basic-button id-col3">Pick</button>
-        </div>`;
-        let thresholdHtml = `<div class="image-editor-tool-block id-thresh-block">
-                <label>Threshold:&nbsp;</label>
-                <input type="number" style="width: 40px;" class="auto-number id-thresh1" min="1" max="256" step="1" value="10">
-                <div class="auto-slider-range-wrapper" style="${getRangeStyle(10, 1, 256)}">
-                    <input type="range" style="flex-grow: 2" data-ispot="true" class="auto-slider-range id-thresh2" min="1" max="256" step="1" value="10" oninput="updateRangeStyle(arguments[0])" onchange="updateRangeStyle(arguments[0])">
-                </div>
-            </div>`;
-        this.configDiv.innerHTML = colorHTML + thresholdHtml;
-        this.colorText = this.configDiv.querySelector('.id-col1');
-        this.colorSelector = this.configDiv.querySelector('.id-col2');
-        this.colorPickButton = this.configDiv.querySelector('.id-col3');
-        this.colorText.addEventListener('input', () => {
-            this.colorSelector.value = this.colorText.value;
-            this.onConfigChange();
-        });
-        this.colorSelector.addEventListener('change', () => {
-            this.colorText.value = this.colorSelector.value;
-            this.onConfigChange();
-        });
-        this.colorPickButton.addEventListener('click', () => {
-            if (this.colorPickButton.classList.contains('interrupt-button')) {
-                this.colorPickButton.classList.remove('interrupt-button');
-                this.editor.activateTool(this.id);
-            }
-            else {
-                this.colorPickButton.classList.add('interrupt-button');
-                this.editor.pickerTool.toolFor = this;
-                this.editor.activateTool('picker');
-            }
-        });
-        enableSliderForBox(this.configDiv.querySelector('.id-thresh-block'));
-        this.thresholdNumber = this.configDiv.querySelector('.id-thresh1');
-        this.thresholdSelector = this.configDiv.querySelector('.id-thresh2');
-        this.thresholdNumber.addEventListener('change', () => { this.onConfigChange(); });
-        this.lastTouch = null;
-    }
-
-    setColor(col) {
-        this.color = col;
-        this.colorText.value = col;
-        this.colorSelector.value = col;
-        this.colorPickButton.classList.remove('interrupt-button');
-    }
-
-    onConfigChange() {
-        this.color = this.colorText.value;
-        this.threshold = parseInt(this.thresholdNumber.value);
-        this.editor.redraw();
-    }
-
-    doBucket(x, y) {
-        let layer = this.editor.activeLayer;
-        let [targetX, targetY] = layer.canvasCoordToLayerCoord(x, y);
-        targetX = Math.round(targetX);
-        targetY = Math.round(targetY);
-        if (targetX < 0 || targetY < 0 || targetX >= layer.width || targetY >= layer.height) {
-            return;
-        }
-        layer.saveBeforeEdit();
-        layer.hasAnyContent = true;
-        let canvas = layer.canvas;
-        let ctx = layer.ctx;
-        let refImage = document.createElement('canvas');
-        refImage.width = canvas.width;
-        refImage.height = canvas.height;
-        let refCtx = refImage.getContext('2d');
-        for (let i = 0; i < this.editor.layers.length; i++) {
-            let belowLayer = this.editor.layers[i];
-            if (belowLayer.isMask) {
-                continue;
-            }
-            let offset = layer.getOffset();
-            belowLayer.drawToBack(refCtx, -offset[0], -offset[1], 1);
-            if (belowLayer == layer) {
-                break;
-            }
-        }
-        let refData = refCtx.getImageData(0, 0, refImage.width, refImage.height);
-        let refRawData = refData.data;
-        let imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        let [width, height] = [imageData.width, imageData.height];
-        let maskData = new Uint8Array(width * height);
-        let rawData = imageData.data;
-        let threshold = this.threshold;
-        let newColor = [parseInt(this.color.substring(1, 3), 16), parseInt(this.color.substring(3, 5), 16), parseInt(this.color.substring(5, 7), 16)];
-        function getPixelIndex(x, y) {
-            return (y * width + x) * 4;
-        }
-        function getColorAt(x, y) {
-            let index = getPixelIndex(x, y);
-            return [refRawData[index], refRawData[index + 1], refRawData[index + 2], refRawData[index + 3]];
-        }
-        let startColor = getColorAt(targetX, targetY);
-        function isInRange(targetColor) {
-            return Math.abs(targetColor[0] - startColor[0]) + Math.abs(targetColor[1] - startColor[1]) + Math.abs(targetColor[2] - startColor[2]) + Math.abs(targetColor[3] - startColor[3]) <= threshold;
-        }
-        let hits = 0;
-        function setPixel(x, y) {
-            maskData[y * width + x] = 1;
-            let index = getPixelIndex(x, y);
-            rawData[index] = newColor[0];
-            rawData[index + 1] = newColor[1];
-            rawData[index + 2] = newColor[2];
-            rawData[index + 3] = 255;
-            hits++;
-        }
-        function canInclude(x, y) {
-            return x >= 0 && y >= 0 && x < width && y < height && maskData[y * width + x] == 0 && isInRange(getColorAt(x, y));
-        }
-        let stack = [[targetX, targetY]];
-        while (stack.length > 0) {
-            let [x, y] = stack.pop();
-            if (!canInclude(x, y)) {
-                continue;
-            }
-            if (isInRange(getColorAt(x, y))) {
-                setPixel(x, y);
-                if (canInclude(x - 1, y)) { stack.push([x - 1, y]); }
-                if (canInclude(x + 1, y)) { stack.push([x + 1, y]); }
-                if (canInclude(x, y - 1)) { stack.push([x, y - 1]); }
-                if (canInclude(x, y + 1)) { stack.push([x, y + 1]); }
-            }
-        }
-        ctx.putImageData(imageData, 0, 0);
-        this.editor.markChanged();
-    }
-
-    onMouseDown(e) {
-        this.doBucket(this.editor.mouseX, this.editor.mouseY);
-    }
-}
-
-/**
- * The Color Picker tool, a special hidden sub-tool.
- */
-class ImageEditorToolPicker extends ImageEditorTempTool {
-    constructor(editor, id, icon, name, description, hotkey = null) {
-        super(editor, id, icon, name, description, hotkey);
-        this.cursor = 'none';
-        this.color = '#ffffff';
-        this.picking = false;
-        this.toolFor = null;
-    }
-
-    draw() {
-        this.drawCircleBrush(this.editor.mouseX, this.editor.mouseY, 2);
-    }
-
-    pickNow() {
-        let imageData = this.editor.ctx.getImageData(this.editor.mouseX, this.editor.mouseY, 1, 1).data;
-        this.color = `#${imageData[0].toString(16).padStart(2, '0')}${imageData[1].toString(16).padStart(2, '0')}${imageData[2].toString(16).padStart(2, '0')}`;
-        this.toolFor.setColor(this.color);
-        this.editor.redraw();
-    }
-
-    onMouseDown(e) {
-        if (this.picking || !this.toolFor) {
-            return;
-        }
-        this.picking = true;
-        this.pickNow();
-    }
-
-    onMouseMove(e) {
-        if (this.picking) {
-            this.pickNow();
-        }
-    }
-
-    onGlobalMouseUp(e) {
-        if (this.picking) {
-            this.picking = false;
-            this.toolFor.setColor(this.color);
-            this.editor.activateTool(this.toolFor.id);
-            return true;
-        }
-        return false;
-    }
-}
-
-/**
  * A single layer within an image editing interface.
  * This can be real (user-controlled) OR sub-layers (sometimes user-controlled) OR temporary buffers.
  */
@@ -1027,11 +141,17 @@ class ImageEditorLayer {
     }
 
     layerCoordToCanvasCoord(x, y) {
-        let [x2, y2] = this.editor.imageCoordToCanvasCoord(x, y);
         let [offsetX, offsetY] = this.getOffset();
         let relWidth = this.width / this.canvas.width;
         let relHeight = this.height / this.canvas.height;
-        [x2, y2] = [x2 * relWidth + offsetX, y2 * relHeight + offsetY];
+        let [x2, y2] = [x * relWidth, y * relHeight];
+        let angle = this.rotation;
+        let [cx, cy] = [this.width / 2, this.height / 2];
+        let [x3, y3] = [x2 - cx, y2 - cy];
+        [x3, y3] = [x3 * Math.cos(angle) - y3 * Math.sin(angle), x3 * Math.sin(angle) + y3 * Math.cos(angle)];
+        [x2, y2] = [x3 + cx, y3 + cy];
+        [x2, y2] = [x2 + offsetX, y2 + offsetY];
+        [x2, y2] = this.editor.imageCoordToCanvasCoord(x2, y2);
         return [x2, y2];
     }
 
@@ -1100,6 +220,54 @@ class ImageEditorLayer {
         }
     }
 
+    /** Saves undo state, clears all content, and marks the layer as empty. */
+    clearToEmpty() {
+        this.saveBeforeEdit();
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        this.hasAnyContent = false;
+    }
+
+    applyMaskFromImage(img) {
+        this.saveBeforeEdit();
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+        let imageData;
+        if (this.rotation == 0) {
+            let [offsetX, offsetY] = this.getOffset();
+            this.ctx.drawImage(img, offsetX, offsetY, this.width, this.height, 0, 0, this.canvas.width, this.canvas.height);
+            imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
+        }
+        else {
+            let tempCanvas = document.createElement('canvas');
+            tempCanvas.width = this.canvas.width;
+            tempCanvas.height = this.canvas.height;
+            let tempCtx = tempCanvas.getContext('2d');
+            let [offsetX, offsetY] = this.getOffset();
+            let relWidth = this.width / this.canvas.width;
+            let relHeight = this.height / this.canvas.height;
+            let cx = this.width / 2;
+            let cy = this.height / 2;
+            let cosR = Math.cos(-this.rotation);
+            let sinR = Math.sin(-this.rotation);
+            tempCtx.setTransform(
+                cosR / relWidth, sinR / relHeight,
+                -sinR / relWidth, cosR / relHeight,
+                (-cosR * (offsetX + cx) + sinR * (offsetY + cy) + cx) / relWidth,
+                (-sinR * (offsetX + cx) - cosR * (offsetY + cy) + cy) / relHeight
+            );
+            tempCtx.drawImage(img, 0, 0, img.width || this.editor.realWidth, img.height || this.editor.realHeight, 0, 0, this.editor.realWidth, this.editor.realHeight);
+            imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+        }
+        let data = imageData.data;
+        for (let i = 0; i < data.length; i += 4) {
+            let brightness = data[i] + data[i + 1] + data[i + 2];
+            if (brightness < 128) {
+                data[i + 3] = 0;
+            }
+        }
+        this.ctx.putImageData(imageData, 0, 0);
+        this.hasAnyContent = true;
+    }
+
     saveBeforeEdit() {
         let oldCanvas = document.createElement('canvas');
         oldCanvas.width = this.canvas.width;
@@ -1145,6 +313,13 @@ class ImageEditorHistoryEntry {
             this.data.layer.width = this.data.oldWidth;
             this.data.layer.height = this.data.oldHeight;
         }
+        else if (this.type == 'layer_add' && this.editor.layers.indexOf(this.data.layer) >= 0) {
+            this.editor.removeLayer(this.data.layer, true);
+        }
+        else if (this.type == 'layer_remove') {
+            // TODO: Reinsert at proper index
+            this.editor.addLayer(this.data.layer, true);
+        }
     }
 }
 
@@ -1170,6 +345,7 @@ class ImageEditor {
         this.changeCount = 0;
         this.active = false;
         this.inputDiv = div;
+        this.inputDiv.tabIndex = -1;
         this.leftBar = createDiv(null, 'image_editor_leftbar');
         this.inputDiv.appendChild(this.leftBar);
         this.rightBar = createDiv(null, 'image_editor_rightbar');
@@ -1243,10 +419,20 @@ class ImageEditor {
         this.addTool(new ImageEditorToolBrush(this, 'brush', 'paintbrush', 'Paintbrush', 'Draw on the image.\nHotKey: B', false, 'b'));
         this.addTool(new ImageEditorToolBrush(this, 'eraser', 'eraser', 'Eraser', 'Erase parts of the image.\nHotKey: E', true, 'e'));
         this.addTool(new ImageEditorToolBucket(this));
+        this.addTool(new ImageEditorToolShape(this));
         this.pickerTool = new ImageEditorToolPicker(this, 'picker', 'paintbrush', 'Color Picker', 'Pick a color from the image.');
         this.addTool(this.pickerTool);
+        this.addTool(new ImageEditorToolSam2Points(this));
+        this.addTool(new ImageEditorToolSam2BBox(this));
         this.activateTool('brush');
         this.maxHistory = 15;
+        $('#image_editor_debug_modal').on('hidden.bs.modal', () => {
+            document.getElementById('image_editor_debug_images').innerHTML = '';
+        });
+        let pastebox = document.getElementById('image_editor_paste_pastebox');
+        if (pastebox) {
+            pastebox.onpaste = (e) => this.handlePasteModalPaste(e);
+        }
     }
 
     clearVars() {
@@ -1298,6 +484,9 @@ class ImageEditor {
         if (!newTool) {
             throw new Error(`Tool ${id} not found`);
         }
+        if (newTool.div && newTool.div.style.display == 'none') {
+            return;
+        }
         if (this.activeTool && !newTool.isTempTool) {
             this.activeTool.setInactive();
         }
@@ -1307,7 +496,6 @@ class ImageEditor {
 
     createCanvas() {
         let canvas = document.createElement('canvas');
-        canvas.tabIndex = 1; // Force to be selectable
         canvas.className = 'image-editor-canvas';
         this.inputDiv.insertBefore(canvas, this.rightBar);
         this.canvas = canvas;
@@ -1322,8 +510,8 @@ class ImageEditor {
         document.addEventListener('touchend', (e) => this.onGlobalMouseUp(e));
         canvas.addEventListener('touchend', (e) => this.onMouseUp(e));
         document.addEventListener('touchmove', (e) => this.onGlobalMouseMove(e));
-        canvas.addEventListener('keydown', (e) => this.onKeyDown(e));
-        canvas.addEventListener('keyup', (e) => this.onKeyUp(e));
+        this.inputDiv.addEventListener('keydown', (e) => this.onKeyDown(e));
+        this.inputDiv.addEventListener('keyup', (e) => this.onKeyUp(e));
         document.addEventListener('keydown', (e) => this.onGlobalKeyDown(e));
         document.addEventListener('keyup', (e) => this.onGlobalKeyUp(e));
         canvas.addEventListener('dragover', (e) => {
@@ -1331,6 +519,9 @@ class ImageEditor {
             e.stopPropagation();
         });
         canvas.addEventListener('drop', (e) => this.handleCanvasImageDrop(e));
+        canvas.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+        });
         this.ctx = canvas.getContext('2d');
         canvas.style.cursor = 'none';
         this.maskHelperCanvas = document.createElement('canvas');
@@ -1357,12 +548,8 @@ class ImageEditor {
                 continue;
             }
             let reader = new FileReader();
-            reader.onload = (e) => {
-                let img = new Image();
-                img.onload = () => {
-                    this.addImageLayer(img);
-                };
-                img.src = e.target.result;
+            reader.onload = (ev) => {
+                this.addImageLayerFromClipboard(ev.target.result);
             };
             reader.readAsDataURL(file);
         }
@@ -1384,14 +571,112 @@ class ImageEditor {
         }
     }
 
+    /**
+     * Copies the current selection as image data to the clipboard. No-op if there's no selection.
+     * @param {boolean} currentLayerOnly - If true, copy only the active layer in the selection; if false, copy the full composited image.
+     * Returns true if the copy was initiated, false otherwise.
+     */
+    copySelectionToClipboard(currentLayerOnly = false) {
+        if (!this.hasSelection || this.selectWidth <= 0 || this.selectHeight <= 0 || (currentLayerOnly && !this.activeLayer)) {
+            doNoticePopover('No selection to copy!', 'notice-pop-red');
+            return false;
+        }
+        let layerOnly = currentLayerOnly ? this.activeLayer : null;
+        copyImageToClipboard(this.getImageWithBounds(this.selectX, this.selectY, this.selectWidth, this.selectHeight, 'image/png', layerOnly));
+        doNoticePopover('Copied!', 'notice-pop-green');
+        return true;
+    }
+
+    /**
+     * Handles paste in the fallback modal textbox: reads image from e.clipboardData and adds as layer.
+     */
+    handlePasteModalPaste(e) {
+        let items = (e.clipboardData || (e.originalEvent && e.originalEvent.clipboardData)) ? (e.clipboardData || e.originalEvent.clipboardData).items : null;
+        if (!items) {
+            return;
+        }
+        for (let i = 0; i < items.length; i++) {
+            if (items[i].kind == 'file') {
+                let file = items[i].getAsFile();
+                if (file && file.type.startsWith('image/')) {
+                    e.preventDefault();
+                    let reader = new FileReader();
+                    reader.onload = (ev) => {
+                        this.addImageLayerFromClipboard(ev.target.result);
+                    };
+                    reader.readAsDataURL(file);
+                    return;
+                }
+            }
+        }
+    }
+
+    /**
+     * Pastes the selection from the clipboard to the image editor as a new image layer.
+     * No-op if the clipboard does not contain image data. Shows modal fallback when Clipboard API is unavailable.
+     */
+    pasteSelectionFromClipboard() {
+        if (!navigator.clipboard || !navigator.clipboard.read) {
+            let box = document.getElementById('image_editor_paste_pastebox');
+            box.value = '';
+            $('#image_editor_paste_modal').modal('show');
+            box.focus();
+            return;
+        }
+        navigator.clipboard.read().then((items) => {
+            let found = false;
+            for (let item of items) {
+                for (let type of item.types) {
+                    if (type.startsWith('image/')) {
+                        found = true;
+                        item.getType(type).then((blob) => {
+                            let reader = new FileReader();
+                            reader.onload = (ev) => {
+                                this.addImageLayerFromClipboard(ev.target.result);
+                            };
+                            reader.readAsDataURL(blob);
+                        });
+                        return;
+                    }
+                }
+            }
+            if (!found) {
+                doNoticePopover('No image in clipboard', 'notice-pop-red');
+            }
+        });
+    }
+
+    activeElementIsAnInput() {
+        return document.activeElement.tagName == 'INPUT' || document.activeElement.tagName == 'TEXTAREA';
+    }
+
     onKeyDown(e) {
-        if (e.key === 'Alt') {
+        if (e.key == 'Alt') {
             e.preventDefault();
             this.handleAltDown();
         }
         if (e.ctrlKey && e.key == 'z') {
             e.preventDefault();
             this.undoOnce();
+        }
+        // TODO: Expose a keydown event to tools rather than this global handler only
+        if (e.ctrlKey && e.key == 'c' && !this.activeElementIsAnInput() && this.activeTool && this.activeTool.id == 'select') {
+            this.copySelectionToClipboard(this.activeTool.copyMode == 'layer');
+            e.preventDefault();
+        }
+        if (e.ctrlKey && e.key == 'v' && !this.activeElementIsAnInput()) {
+            e.preventDefault();
+            this.pasteSelectionFromClipboard();
+        }
+        if (e.key == 'Delete' && !this.activeElementIsAnInput() && this.activeTool && this.activeLayer) {
+            if (this.activeTool.id == 'general') {
+                e.preventDefault();
+                this.removeLayer(this.activeLayer);
+            }
+            else if (this.activeTool.id == 'select') {
+                e.preventDefault();
+                this.clearSelectionOnLayer(this.activeLayer);
+            }
         }
         if (!e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
             let toolId = this.toolHotkeys[e.key];
@@ -1411,7 +696,7 @@ class ImageEditor {
     }
 
     onGlobalKeyUp(e) {
-        if (e.key === 'Alt') {
+        if (e.key == 'Alt') {
             this.altDown = false;
             this.handleAltUp();
         }
@@ -1437,7 +722,11 @@ class ImageEditor {
     }
 
     onMouseDown(e) {
+        // 1 = middle, 2 = right
         if (this.altDown || e.button == 1) {
+            this.handleAltDown();
+        }
+        if (e.button == 2 && this.activeTool && !this.activeTool.onRightMouseDown(e)) {
             this.handleAltDown();
         }
         this.mouseDown = true;
@@ -1446,7 +735,7 @@ class ImageEditor {
     }
 
     onMouseUp(e) {
-        if (e.button == 1) {
+        if (e.button == 1 || e.button == 2) {
             this.handleAltUp();
         }
         this.mouseDown = false;
@@ -1522,9 +811,16 @@ class ImageEditor {
         else {
             this.resize();
         }
+        if (!this.redrawInterval) {
+            this.redrawInterval = setInterval(() => this.redraw(), 250);
+        }
     }
 
     deactivate() {
+        if (this.redrawInterval) {
+            clearInterval(this.redrawInterval);
+            this.redrawInterval = null;
+        }
         if (this.onDeactivate) {
             this.onDeactivate();
         }
@@ -1541,9 +837,13 @@ class ImageEditor {
         if (this.layers.indexOf(layer) == -1) {
             throw new Error(`layer not found, ${layer}`);
         }
+        let oldLayer = this.activeLayer;
         this.activeLayer = layer;
         if (layer && layer.div) {
             layer.div.classList.add('image_editor_layer_preview-active');
+        }
+        for (let tool of Object.values(this.tools)) {
+            tool.onLayerChanged(oldLayer, layer);
         }
         this.redraw();
     }
@@ -1574,11 +874,31 @@ class ImageEditor {
         layer.ctx.drawImage(img, 0, 0);
         layer.hasAnyContent = true;
         this.addLayer(layer);
+        return layer;
     }
 
-    removeLayer(layer) {
+    /**
+     * Loads an image from a URL (data URL or object URL) and adds it as a new layer.
+     */
+    addImageLayerFromClipboard(src) {
+        let img = new Image();
+        img.onload = () => {
+            let layer = this.addImageLayer(img);
+            let [mouseX, mouseY] = this.canvasCoordToImageCoord(this.mouseX, this.mouseY);
+            layer.offsetX = mouseX - layer.width / 2;
+            layer.offsetY = mouseY - layer.height / 2;
+            this.activateTool('general');
+            this.redraw();
+        };
+        img.src = src;
+    }
+
+    removeLayer(layer, skipHistory = false) {
         let index = this.layers.indexOf(layer);
         if (index >= 0) {
+            if (!skipHistory) {
+                this.addHistoryEntry(new ImageEditorHistoryEntry(this, 'layer_remove', { layer: layer, index: index }));
+            }
             this.layers.splice(index, 1);
             this.canvasList.removeChild(layer.div);
             this.canvasList.removeChild(layer.menuPopover);
@@ -1589,7 +909,7 @@ class ImageEditor {
         }
     }
 
-    addLayer(layer) {
+    addLayer(layer, skipHistory = false) {
         layer.id = this.totalLayersEver++;
         this.layers.push(layer);
         layer.div = createDiv(null, 'image_editor_layer_preview');
@@ -1634,6 +954,9 @@ class ImageEditor {
         this.canvasList.insertBefore(layer.div, this.canvasList.firstChild);
         this.setActiveLayer(layer);
         this.sortLayers();
+        if (!skipHistory) {
+            this.addHistoryEntry(new ImageEditorHistoryEntry(this, 'layer_add', { layer: layer }));
+        }
     }
 
     sortLayers() {
@@ -1654,14 +977,23 @@ class ImageEditor {
         let layer = new ImageEditorLayer(this, img.naturalWidth, img.naturalHeight);
         layer.ctx.drawImage(img, 0, 0);
         layer.hasAnyContent = true;
-        this.addLayer(layer);
+        this.addLayer(layer, true);
         let layer2 = new ImageEditorLayer(this, img.naturalWidth, img.naturalHeight);
-        this.addLayer(layer2);
+        this.addLayer(layer2, true);
         let maskLayer = new ImageEditorLayer(this, img.naturalWidth, img.naturalHeight);
         maskLayer.isMask = true;
-        this.addLayer(maskLayer);
+        this.addLayer(maskLayer, true);
         this.realWidth = img.naturalWidth;
         this.realHeight = img.naturalHeight;
+        if (this.tools['sam2points']) {
+            this.tools['sam2points'].layerPoints = new Map();
+        }
+        if (this.tools['sam2bbox']) {
+            this.tools['sam2bbox'].bboxStartX = null;
+            this.tools['sam2bbox'].bboxStartY = null;
+            this.tools['sam2bbox'].bboxEndX = null;
+            this.tools['sam2bbox'].bboxEndY = null;
+        }
         this.offsetX = 0
         this.offsetY = 0;
         if (this.active) {
@@ -1671,36 +1003,26 @@ class ImageEditor {
     }
 
     doParamHides() {
-        let initImage = document.getElementById('input_initimage');
-        let maskImage = document.getElementById('input_maskimage');
-        if (initImage) {
-            initImage.dataset.has_data = 'true';
-            let parent = findParentOfClass(initImage, 'auto-input');
-            parent.style.display = 'none';
-            parent.dataset.visible_controlled = 'true';
-        }
-        if (maskImage) {
-            maskImage.dataset.has_data = 'true';
-            let parent = findParentOfClass(maskImage, 'auto-input');
-            parent.style.display = 'none';
-            parent.dataset.visible_controlled = 'true';
+        for (let paramId of ['input_initimage', 'input_maskimage']) {
+            let elem = document.getElementById(paramId);
+            if (elem) {
+                elem.dataset.has_data = 'true';
+                let parent = findParentOfClass(elem, 'auto-input');
+                parent.style.display = 'none';
+                parent.dataset.visible_controlled = 'true';
+            }
         }
     }
 
     unhideParams() {
-        let initImage = document.getElementById('input_initimage');
-        let maskImage = document.getElementById('input_maskimage');
-        if (initImage) {
-            delete initImage.dataset.has_data;
-            let parent = findParentOfClass(initImage, 'auto-input');
-            parent.style.display = '';
-            delete parent.dataset.visible_controlled;
-        }
-        if (maskImage) {
-            delete maskImage.dataset.has_data;
-            let parent = findParentOfClass(maskImage, 'auto-input');
-            parent.style.display = '';
-            delete parent.dataset.visible_controlled;
+        for (let paramId of ['input_initimage', 'input_maskimage']) {
+            let elem = document.getElementById(paramId);
+            if (elem) {
+                delete elem.dataset.has_data;
+                let parent = findParentOfClass(elem, 'auto-input');
+                parent.style.display = '';
+                delete parent.dataset.visible_controlled;
+            }
         }
     }
 
@@ -1796,12 +1118,19 @@ class ImageEditor {
         }
     }
 
-    drawSelectionBox(x, y, width, height, color, spacing, angle) {
+    drawSelectionBox(x, y, width, height, color, spacing, angle, offset = 0) {
         this.ctx.save();
-        this.ctx.strokeStyle = color;
         this.ctx.lineWidth = 1;
         this.ctx.beginPath();
         this.ctx.setLineDash([spacing, spacing]);
+        this.ctx.lineDashOffset = offset;
+        if (color == 'diff') {
+            this.ctx.globalCompositeOperation = 'difference';
+            this.ctx.strokeStyle = 'white';
+        }
+        else {
+            this.ctx.strokeStyle = color;
+        }
         this.ctx.translate(x + width / 2, y + height / 2);
         this.ctx.rotate(angle);
         this.ctx.moveTo(-width / 2 - 1, -height / 2 - 1);
@@ -1858,10 +1187,33 @@ class ImageEditor {
         this.drawSelectionBox(offsetX, offsetY, this.activeLayer.width * this.zoomLevel, this.activeLayer.height * this.zoomLevel, this.uiBorderColor, 8 * this.zoomLevel, this.activeLayer.rotation);
         if (this.hasSelection) {
             let [selectX, selectY] = this.imageCoordToCanvasCoord(this.selectX, this.selectY);
-            this.drawSelectionBox(selectX, selectY, this.selectWidth * this.zoomLevel, this.selectHeight * this.zoomLevel, this.uiColor, 8 * this.zoomLevel, 0);
+            let offset = (Math.floor(Date.now() / 250) % 4) * 4 * this.zoomLevel;
+            this.drawSelectionBox(selectX, selectY, this.selectWidth * this.zoomLevel, this.selectHeight * this.zoomLevel, 'diff', 8 * this.zoomLevel, 0, offset);
         }
         this.activeTool.draw();
         this.ctx.restore();
+    }
+
+    getImageWithBounds(x, y, width, height, format = 'image/png', layerOnly = null) {
+        x = Math.round(x);
+        y = Math.round(y);
+        width = Math.round(width);
+        height = Math.round(height);
+        let canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        let ctx = canvas.getContext('2d');
+        if (layerOnly != null) {
+            layerOnly.drawToBack(ctx, this.finalOffsetX - x, this.finalOffsetY - y, 1);
+        }
+        else {
+            for (let layer of this.layers) {
+                if (!layer.isMask) {
+                    layer.drawToBack(ctx, this.finalOffsetX - x, this.finalOffsetY - y, 1);
+                }
+            }
+        }
+        return canvas.toDataURL(format);
     }
 
     getFinalImageData(format = 'image/png') {
@@ -1948,5 +1300,63 @@ class ImageEditor {
         ctx2.globalCompositeOperation = 'luminosity';
         ctx2.drawImage(canvas, 0, 0);
         return canvas2.toDataURL(format);
+    }
+
+    clearSelectionOnLayer(layer) {
+        if (!this.hasSelection || this.selectWidth == 0 || this.selectHeight == 0) {
+            return;
+        }
+        let [cx1, cy1] = this.imageCoordToCanvasCoord(this.selectX, this.selectY);
+        let [lx1, ly1] = layer.canvasCoordToLayerCoord(cx1, cy1);
+        let [cx2, cy2] = this.imageCoordToCanvasCoord(this.selectX + this.selectWidth, this.selectY + this.selectHeight);
+        let [lx2, ly2] = layer.canvasCoordToLayerCoord(cx2, cy2);
+        let minX = Math.round(Math.min(lx1, lx2));
+        let minY = Math.round(Math.min(ly1, ly2));
+        let maxX = Math.round(Math.max(lx1, lx2));
+        let maxY = Math.round(Math.max(ly1, ly2));
+        minX = Math.max(0, Math.min(minX, layer.canvas.width));
+        minY = Math.max(0, Math.min(minY, layer.canvas.height));
+        maxX = Math.max(0, Math.min(maxX, layer.canvas.width));
+        maxY = Math.max(0, Math.min(maxY, layer.canvas.height));
+        let width = maxX - minX;
+        let height = maxY - minY;
+        if (width <= 0 || height <= 0) {
+            return;
+        }
+        layer.saveBeforeEdit();
+        layer.ctx.clearRect(minX, minY, width, height);
+        this.redraw();
+    }
+
+    /** Shows a debug image in a stacking modal. Accepts a data URL, Image, or Canvas. */
+    showDebugImage(imageSource) {
+        let container = document.getElementById('image_editor_debug_images');
+        let modal = document.getElementById('image_editor_debug_modal');
+        let img = document.createElement('img');
+        img.style.maxWidth = '100%';
+        img.style.display = 'block';
+        img.style.marginBottom = '8px';
+        img.style.border = '1px solid var(--light-border)';
+        if (typeof imageSource == 'string') {
+            img.src = imageSource;
+        }
+        else if (imageSource instanceof HTMLCanvasElement) {
+            img.src = imageSource.toDataURL('image/png');
+        }
+        else if (imageSource instanceof Image) {
+            img.src = imageSource.src;
+        }
+        if (!modal.classList.contains('show')) {
+            container.innerHTML = '';
+            $(modal).modal('show');
+        }
+        container.appendChild(img);
+    }
+
+    /** Closes the debug image modal and clears its contents. */
+    closeDebugImages() {
+        let container = document.getElementById('image_editor_debug_images');
+        container.innerHTML = '';
+        $('#image_editor_debug_modal').modal('hide');
     }
 }

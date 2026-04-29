@@ -1,4 +1,4 @@
-﻿using FreneticUtilities.FreneticExtensions;
+using FreneticUtilities.FreneticExtensions;
 using FreneticUtilities.FreneticToolkit;
 using Microsoft.AspNetCore.Builder;
 using Newtonsoft.Json;
@@ -82,51 +82,52 @@ public class ComfyUIBackendExtension : Extension
         StyleSheetFiles.Add("Assets/comfy_workflow_editor.css");
         T2IParamTypes.FakeTypeProviders.Add(DynamicParamGenerator);
         // Temporary: remove old pycache files where we used to have python files, to prevent Comfy boot errors
-        Utilities.RemoveBadPycacheFrom($"{FilePath}/ExtraNodes");
-        Utilities.RemoveBadPycacheFrom($"{FilePath}/ExtraNodes/SwarmWebHelper");
+        Utilities.RemoveBadPycacheFrom($"{FilePath}ExtraNodes");
+        Utilities.RemoveBadPycacheFrom($"{FilePath}ExtraNodes/SwarmWebHelper");
         T2IAPI.AlwaysTopKeys.Add("comfyworkflowraw");
         T2IAPI.AlwaysTopKeys.Add("comfyworkflowparammetadata");
-        if (Directory.Exists($"{FilePath}/DLNodes/ComfyUI_IPAdapter_plus"))
+        if (Directory.Exists($"{FilePath}DLNodes/ComfyUI_IPAdapter_plus"))
         {
             FeaturesSupported.UnionWith(["ipadapter", "cubiqipadapterunified"]);
             FeaturesDiscardIfNotFound.UnionWith(["ipadapter", "cubiqipadapterunified"]);
         }
-        if (Directory.Exists($"{FilePath}/DLNodes/comfyui_controlnet_aux"))
+        if (Directory.Exists($"{FilePath}DLNodes/comfyui_controlnet_aux"))
         {
             FeaturesSupported.UnionWith(["controlnetpreprocessors"]);
             FeaturesDiscardIfNotFound.UnionWith(["controlnetpreprocessors"]);
         }
-        if (Directory.Exists($"{FilePath}/DLNodes/ComfyUI-Frame-Interpolation"))
+        if (Directory.Exists($"{FilePath}DLNodes/ComfyUI-Frame-Interpolation"))
         {
             FeaturesSupported.UnionWith(["frameinterps"]);
             FeaturesDiscardIfNotFound.UnionWith(["frameinterps"]);
         }
-        if (Directory.Exists($"{FilePath}/DLNodes/ComfyUI-GIMM-VFI"))
+        if (Directory.Exists($"{FilePath}DLNodes/ComfyUI-GIMM-VFI"))
         {
             FeaturesSupported.UnionWith(["frameinterps_gimmvfi"]);
             FeaturesDiscardIfNotFound.UnionWith(["frameinterps_gimmvfi"]);
         }
-        if (Directory.Exists($"{FilePath}/DLNodes/ComfyUI-segment-anything-2"))
+        if (Directory.Exists($"{FilePath}DLNodes/ComfyUI-segment-anything-2"))
         {
             FeaturesSupported.UnionWith(["sam2"]);
             FeaturesDiscardIfNotFound.UnionWith(["sam2"]);
         }
-        if (Directory.Exists($"{FilePath}/DLNodes/ComfyUI_bitsandbytes_NF4"))
+        if (Directory.Exists($"{FilePath}DLNodes/ComfyUI_bitsandbytes_NF4"))
         {
             FeaturesSupported.UnionWith(["bnb_nf4"]);
             FeaturesDiscardIfNotFound.UnionWith(["bnb_nf4"]);
         }
-        if (Directory.Exists($"{FilePath}/DLNodes/ComfyUI-GGUF"))
+        if (Directory.Exists($"{FilePath}DLNodes/ComfyUI-GGUF"))
         {
             FeaturesSupported.UnionWith(["gguf"]);
             FeaturesDiscardIfNotFound.UnionWith(["gguf"]);
         }
-        if (Directory.Exists($"{FilePath}/DLNodes/ComfyUI-TeaCache"))
+        if (Directory.Exists($"{FilePath}DLNodes/ComfyUI-TeaCache"))
         {
             FeaturesSupported.UnionWith(["teacache"]);
             FeaturesDiscardIfNotFound.UnionWith(["teacache"]);
         }
         T2IParamTypes.ConcatDropdownValsClean(ref UpscalerModels, InternalListModelsFor("upscale_models", true).Select(u => $"model-{u}///Model: {u}"));
+        T2IParamTypes.ConcatDropdownValsClean(ref UpscalerModels, InternalListModelsFor("latent_upscale_models", true).Select(u => $"latentmodel-{u}///Latent Model: {u}"));
         T2IParamTypes.ConcatDropdownValsClean(ref YoloModels, InternalListModelsFor("yolov8", false));
         T2IParamTypes.ConcatDropdownValsClean(ref GligenModels, InternalListModelsFor("gligen", false));
         T2IParamTypes.ConcatDropdownValsClean(ref StyleModels, InternalListModelsFor("style_models", true));
@@ -296,8 +297,8 @@ public class ComfyUIBackendExtension : Extension
     public void LoadWorkflowFiles()
     {
         CustomWorkflows.Clear();
-        Directory.CreateDirectory($"{FilePath}/CustomWorkflows");
-        Directory.CreateDirectory($"{FilePath}/CustomWorkflows/Examples");
+        Directory.CreateDirectory($"{FilePath}CustomWorkflows");
+        Directory.CreateDirectory($"{FilePath}CustomWorkflows/Examples");
         string[] getCustomFlows(string path) => [.. Directory.EnumerateFiles($"{FilePath}/{path}", "*.*", new EnumerationOptions() { RecurseSubdirectories = true }).Select(f => f.Replace('\\', '/').After($"/{path}/")).Order()];
         ExampleWorkflowNames = getCustomFlows("ExampleWorkflows");
         string[] customFlows = getCustomFlows("CustomWorkflows");
@@ -306,7 +307,7 @@ public class ComfyUIBackendExtension : Extension
         {
             if (!customFlows.Contains($"Examples/{workflow}") && !customFlows.Contains($"Examples/{workflow}.deleted"))
             {
-                File.Copy($"{FilePath}/ExampleWorkflows/{workflow}", $"{FilePath}/CustomWorkflows/Examples/{workflow}");
+                File.Copy($"{FilePath}ExampleWorkflows/{workflow}", $"{FilePath}CustomWorkflows/Examples/{workflow}");
                 anyCopied = true;
             }
         }
@@ -443,7 +444,7 @@ public class ComfyUIBackendExtension : Extension
     }
 
     public static LockObject ValueAssignmentLocker = new();
-    
+
     /// <summary>Add handlers here to do additional parsing of RawObjectInfo data.</summary>
     public static List<Action<JObject>> RawObjectInfoParsers = [];
 
@@ -474,6 +475,10 @@ public class ComfyUIBackendExtension : Extension
             if (TryGetRequiredInputs(rawObjectInfo, "UpscaleModelLoader", "model_name", out JToken upscaleModels))
             {
                 T2IParamTypes.ConcatDropdownValsClean(ref UpscalerModels, upscaleModels.Select(u => $"model-{u}///Model: {u}"));
+            }
+            if (TryGetRequiredInputs(rawObjectInfo, "LatentUpscaleModelLoader", "model_name", out JToken latentUpscaleModels))
+            {
+                T2IParamTypes.ConcatDropdownValsClean(ref UpscalerModels, latentUpscaleModels.Select(u => $"latentmodel-{u}///Latent Model: {u}"));
             }
             if (TryGetRequiredInputs(rawObjectInfo, "SwarmKSampler", "sampler_name", out JToken swarmksamplerNames))
             {
@@ -551,13 +556,7 @@ public class ComfyUIBackendExtension : Extension
                             new JObject()
                             {
                                 ["class_type"] = "DownloadAndLoadSAM2Model",
-                                ["inputs"] = new JObject()
-                                {
-                                    ["model"] = $"sam2_hiera_{size}.safetensors",
-                                    ["segmentor"] = "automaskgenerator",
-                                    ["device"] = "cuda", // TODO: This should really be decided by the python, not by swarm's workflow generator - the python knows what the GPU supports, swarm does not
-                                    ["precision"] = "bf16"
-                                }
+                                ["inputs"] = Sam2ModelInputs(size, "automaskgenerator")
                             },
                             new JObject()
                             {
@@ -579,7 +578,7 @@ public class ComfyUIBackendExtension : Extension
                 {
                     ControlNetPreprocessors[key] = data;
                 }
-                else if (key.EndsWith("Preprocessor"))
+                else if (key.EndsWith("Preprocessor") && key != "MeshGraphormer+ImpactDetector-DepthMapPreprocessor")
                 {
                     ControlNetPreprocessors[key] = data;
                 }
@@ -607,13 +606,13 @@ public class ComfyUIBackendExtension : Extension
         }
     }
 
-    public static T2IRegisteredParam<string> CustomWorkflowParam, SamplerParam, SchedulerParam, RefinerSamplerParam, RefinerSchedulerParam, RefinerUpscaleMethod, UseIPAdapterForRevision, IPAdapterWeightType, VideoPreviewType, VideoFrameInterpolationMethod, Text2VideoFrameInterpolationMethod, GligenModel, YoloModelInternal, PreferredDType, UseStyleModel, TeaCacheMode, EasyCacheMode, SetClipDevice;
+    public static T2IRegisteredParam<string> CustomWorkflowParam, SamplerParam, SchedulerParam, RefinerSamplerParam, RefinerSchedulerParam, RefinerUpscaleMethod, UseIPAdapterForRevision, IPAdapterWeightType, VideoPreviewType, VideoFrameInterpolationMethod, GligenModel, YoloModelInternal, PreferredDType, UseStyleModel, TeaCacheMode, EasyCacheMode, SetClipDevice;
 
     public static T2IRegisteredParam<bool> AITemplateParam, DebugRegionalPrompting, ShiftedLatentAverageInit, UseCfgZeroStar, UseTCFG;
 
-    public static T2IRegisteredParam<double> IPAdapterWeight, IPAdapterStart, IPAdapterEnd, SelfAttentionGuidanceScale, SelfAttentionGuidanceSigmaBlur, PerturbedAttentionGuidanceScale, StyleModelMergeStrength, StyleModelApplyStart, StyleModelMultiplyStrength, RescaleCFGMultiplier, TeaCacheThreshold, TeaCacheStart, NunchakuCacheThreshold, EasyCacheThreshold, EasyCacheStart, EasyCacheEnd, RenormCFG;
+    public static T2IRegisteredParam<double> IPAdapterWeight, IPAdapterStart, IPAdapterEnd, SelfAttentionGuidanceScale, SelfAttentionGuidanceSigmaBlur, PerturbedAttentionGuidanceScale, StyleModelMergeStrength, StyleModelApplyStart, StyleModelMultiplyStrength, RescaleCFGMultiplier, TeaCacheThreshold, TeaCacheStart, NunchakuCacheThreshold, EasyCacheThreshold, EasyCacheStart, EasyCacheEnd, RenormCFG, NormalizedAttentionGuidanceScale, NormalizedAttentionGuidanceAlpha, NormalizedAttentionGuidanceTau;
 
-    public static T2IRegisteredParam<int> RefinerHyperTile, VideoFrameInterpolationMultiplier, Text2VideoFrameInterpolationMultiplier;
+    public static T2IRegisteredParam<int> RefinerHyperTile, VideoFrameInterpolationMultiplier;
 
     public static T2IRegisteredParam<string>[] ControlNetPreprocessorParams = new T2IRegisteredParam<string>[3], ControlNetUnionTypeParams = new T2IRegisteredParam<string>[3];
 
@@ -630,10 +629,11 @@ public class ComfyUIBackendExtension : Extension
              "lcm///LCM (for LCM models)", "uni_pc///UniPC (Unified Predictor-Corrector)", "uni_pc_bh2///UniPC BH2", "res_multistep///Res MultiStep (for Cosmos)", "res_multistep_ancestral///Res MultiStep Ancestral (randomizing, for Cosmos)",
             "ipndm///iPNDM (Improved Pseudo-Numerical methods for Diffusion Models)", "ipndm_v///iPNDM-V (Variable-Step)", "deis///DEIS (Diffusion Exponential Integrator Sampler)", "gradient_estimation///Gradient Estimation (Improving from Optimization Perspective)",
             "er_sde///ER-SDE-Solver (used with AlignYourSteps schedule)", "seeds_2///SEEDS 2 (Exponential SDE Solvers, variant of DPM++ SDE)", "seeds_3///SEEDS 3", "sa_solver///SA-Solver (Stochastic Adams)", "sa_solver_pece///SA-Solver PECE",
+            "exp_heun_2_x0///EXP Heun 2 x0", "exp_heun_2_x0_sde///EXP Heun 2 x0 SDE", "dpmpp_2m_sde_heun///DPM++ 2M SDE Heun", "dpmpp_2m_sde_heun_gpu///DPM++ 2M SDE Heun, GPU Seeded",
             // CFG++ variants
             "euler_cfg_pp///Euler CFG++ (Manifold-constrained CFG)", "euler_ancestral_cfg_pp///Euler Ancestral CFG++", "dpmpp_2m_cfg_pp///DPM++ 2M CFG++", "dpmpp_2s_ancestral_cfg_pp///DPM++ 2S Ancestral CFG++ (2x Slow)", "res_multistep_cfg_pp///Res MultiStep CFG++", "res_multistep_ancestral_cfg_pp///Res MultiStep Ancestral CFG++", "gradient_estimation_cfg_pp///Gradient Estimation CFG++"
         ],
-        Schedulers = ["normal///Normal", "karras///Karras", "exponential///Exponential", "simple///Simple", "ddim_uniform///DDIM Uniform", "sgm_uniform///SGM Uniform", "turbo///Turbo (for turbo models, max 10 steps)", "align_your_steps///Align Your Steps (NVIDIA, rec. 10 steps)", "beta///Beta", "linear_quadratic///Linear Quadratic (Mochi)", "ltxv///LTX-Video", "ltxv-image///LTXV-Image", "kl_optimal///KL Optimal (Nvidia AYS)"];
+        Schedulers = ["normal///Normal", "karras///Karras", "exponential///Exponential", "simple///Simple", "ddim_uniform///DDIM Uniform", "sgm_uniform///SGM Uniform", "turbo///Turbo (for turbo models, max 10 steps)", "align_your_steps///Align Your Steps (Model-specific behavior)", "beta///Beta", "linear_quadratic///Linear Quadratic (Mochi)", "ltxv///LTX-Video", "ltxv-image///LTXV-Image", "kl_optimal///KL Optimal (Nvidia AYS)", "flux2///Flux.2"];
 
     public static List<string> IPAdapterModels = ["None"], IPAdapterWeightTypes = ["standard", "prompt is more important", "style transfer"];
 
@@ -643,12 +643,38 @@ public class ComfyUIBackendExtension : Extension
 
     public static ConcurrentDictionary<string, JToken> ControlNetPreprocessors = new() { ["None"] = null };
 
-    public static T2IParamGroup ComfyGroup, ComfyAdvancedGroup;
+    public static T2IParamGroup ComfyAdvancedGroup;
+
+    public static T2IRegisteredParam<string> Sam2PointCoordsPositive, Sam2PointCoordsNegative, Sam2BBox, Sam2MaskPadding;
+
+    /// <summary>Creates the standard input set for a DownloadAndLoadSAM2Model node.</summary>
+    public static JObject Sam2ModelInputs(string size = "base_plus", string segmentor = "single_image")
+    {
+        return new JObject()
+        {
+            ["model"] = $"sam2_hiera_{size}.safetensors",
+            ["segmentor"] = segmentor,
+            ["device"] = "cuda", // TODO: This should really be decided by the python, not by swarm's workflow generator - the python knows what the GPU supports, swarm does not
+            ["precision"] = "bf16"
+        };
+    }
 
     /// <inheritdoc/>
     public override void OnInit()
     {
-        UseIPAdapterForRevision = T2IParamTypes.Register<string>(new("Use IP-Adapter", $"Select an IP-Adapter model to use IP-Adapter for image-prompt input handling.\nModels will automatically be downloaded when you first use them.\nNote if you use a custom model, you must also set your ReVision Model under Advanced Model Addons, otherwise CLIP Vision G will be presumed.\n<a target=\"_blank\" href=\"{Utilities.RepoDocsRoot}/Features/ImagePrompting.md\">See more docs here.</a>",
+        Sam2PointCoordsPositive = T2IParamTypes.Register<string>(new("SAM2 Positive Points", "Internal: JSON list of positive point coordinates for SAM2 point masking.",
+            "[]", IgnoreIf: "[]", FeatureFlag: "sam2", VisibleNormally: false, ExtraHidden: true, DoNotSave: true, DoNotPreview: true, AlwaysRetain: true, Toggleable: true
+            ));
+        Sam2PointCoordsNegative = T2IParamTypes.Register<string>(new("SAM2 Negative Points", "Internal: JSON list of negative point coordinates for SAM2 point masking.",
+            "[]", IgnoreIf: "[]", FeatureFlag: "sam2", VisibleNormally: false, ExtraHidden: true, DoNotSave: true, DoNotPreview: true, AlwaysRetain: true, Toggleable: true
+            ));
+        Sam2BBox = T2IParamTypes.Register<string>(new("SAM2 BBox", "Internal: JSON bounding box [x1,y1,x2,y2] for SAM2 bbox masking.",
+            "", IgnoreIf: "", FeatureFlag: "sam2", VisibleNormally: false, ExtraHidden: true, DoNotSave: true, DoNotPreview: true, AlwaysRetain: true, Toggleable: true
+            ));
+        Sam2MaskPadding = T2IParamTypes.Register<string>(new("SAM2 Mask Padding", "Internal: Number of pixels to dilate/expand the SAM2 mask boundary.",
+            "0", IgnoreIf: "0", FeatureFlag: "sam2", VisibleNormally: false, ExtraHidden: true, DoNotSave: true, DoNotPreview: true, AlwaysRetain: true, Toggleable: true
+            ));
+        UseIPAdapterForRevision = T2IParamTypes.Register<string>(new("Use IP-Adapter", $"Select an IP-Adapter model to use IP-Adapter for image-prompt input handling.\nModels will automatically be downloaded when you first use them.\nNote if you use a custom model, you must also set your CLIP-Vision Model under Advanced Model Addons, otherwise CLIP Vision G will be presumed.\n<a target=\"_blank\" href=\"{Utilities.RepoDocsRoot}/Features/ImagePrompting.md\">See more docs here.</a>",
             "None", IgnoreIf: "None", FeatureFlag: "ipadapter", GetValues: _ => IPAdapterModels, Group: T2IParamTypes.GroupImagePrompting, OrderPriority: 15, ChangeWeight: 1
             ));
         IPAdapterWeight = T2IParamTypes.Register<double>(new("IP-Adapter Weight", "Weight to use with IP-Adapter (if enabled).",
@@ -675,10 +701,9 @@ public class ComfyUIBackendExtension : Extension
         StyleModelApplyStart = T2IParamTypes.Register<double>(new("Style Model Apply Start", "When to start applying the Style Model, as a fraction of steps (if enabled).\nFor example, 0.25 starts applying a quarter (25%) of the way through.\nThis is probably off-scale due to scheduler behavior in ComfyUI internals. Very low values are recommend for practical usage.",
             "0", IgnoreIf: "0", Min: 0.0, Max: 1.0, Step: 0.01, FeatureFlag: "comfyui", Group: T2IParamTypes.GroupImagePrompting, ViewType: ParamViewType.SLIDER, OrderPriority: 14.7, IsAdvanced: true, Examples: ["0", "0.2", "0.5"], DependNonDefault: UseStyleModel.Type.ID
             ));
-        ComfyGroup = new("ComfyUI", Toggles: false, Open: false);
         ComfyAdvancedGroup = new("ComfyUI Advanced", Toggles: false, IsAdvanced: true, Open: false);
-        CustomWorkflowParam = T2IParamTypes.Register<string>(new("[ComfyUI] Custom Workflow", "What custom workflow to use in ComfyUI (built in the Comfy Workflow Editor tab).\nGenerally, do not use this directly.",
-            "", Toggleable: true, FeatureFlag: "comfyui", Group: ComfyGroup, IsAdvanced: true, ValidateValues: false, ChangeWeight: 8, Permission: PermStoredCustomWorkflows,
+        CustomWorkflowParam = T2IParamTypes.Register<string>(new("ComfyUI Custom Workflow", "What custom workflow to use in ComfyUI (built in the Comfy Workflow Editor tab).\nGenerally, do not use this directly.",
+            "", Toggleable: true, FeatureFlag: "comfyui", Group: T2IParamTypes.GroupSwarmInternal, IsAdvanced: true, ValidateValues: false, ChangeWeight: 8, Permission: PermStoredCustomWorkflows,
             GetValues: (_) => [.. CustomWorkflows.Keys.Order()],
             Clean: (_, val) => CustomWorkflows.ContainsKey(val) ? $"PARSED%{val}%{ComfyUIWebAPI.ReadCustomWorkflow(val)["prompt"]}" : val,
             MetadataFormat: v => v.StartsWith("PARSED%") ? v.After("%").Before("%") : v
@@ -690,7 +715,7 @@ public class ComfyUIBackendExtension : Extension
             "normal", Toggleable: true, FeatureFlag: "comfyui", Group: T2IParamTypes.GroupSampling, OrderPriority: -4, CanSectionalize: true, GetValues: (_) => Schedulers
             ));
         AITemplateParam = T2IParamTypes.Register<bool>(new("Enable AITemplate", "If checked, enables AITemplate for ComfyUI generations (UNet only). Only compatible with some GPUs.",
-            "false", IgnoreIf: "false", FeatureFlag: "aitemplate", Group: ComfyGroup, ChangeWeight: 5
+            "false", IgnoreIf: "false", FeatureFlag: "aitemplate", Group: T2IParamTypes.GroupAlternateGuidance, ChangeWeight: 5
             ));
         PreferredDType = T2IParamTypes.Register<string>(new("Preferred DType", "Preferred data type for models, when a choice is available.\n(Notably primarily affects Flux.1 models currently).\nIf disabled, will automatically decide.\n'fp8_e43fn' is recommended for large models.\n'Default' uses global default type, usually fp16 or bf16.",
             "automatic", FeatureFlag: "comfyui", Group: T2IParamTypes.GroupAdvancedSampling, IsAdvanced: true, Toggleable: true, OrderPriority: 9, GetValues: (_) => ["automatic///Automatic (decide by model)", "default///Default (16 bit)", "fp8_e4m3fn///FP8 e4m3fn (8 bit)", "fp8_e5m2///FP8 e5m2 (alt 8 bit)"]
@@ -715,6 +740,15 @@ public class ComfyUIBackendExtension : Extension
             ));
         UseTCFG = T2IParamTypes.Register<bool>(new("Use TCFG", "If enabled, use 'TCFG' (Tangential Damping Classifier-Free Guidance, defined <a target=\"_blank\" href=\"https://arxiv.org/abs/2503.18137\">in this paper</a>).\nThis may reduce CFG artifacts. Compatible with modern 'Flow' models.",
             "false", IgnoreIf: "false", FeatureFlag: "comfyui", Group: T2IParamTypes.GroupAlternateGuidance, IsAdvanced: true, OrderPriority: 17
+            ));
+        NormalizedAttentionGuidanceScale = T2IParamTypes.Register<double>(new("Normalized Attention Guidance Scale", "Scale for Normalized Attention Guidance, defined <a target=\"_blank\" href=\"https://arxiv.org/abs/2505.21179\">in this paper</a>).\nDesigned to when CFG Scale is set to 1 (CFG disabled), and gives back some negative prompting support.\n5 is a reasonable starter value for using this.\nDefaults to 0 (disabled).",
+            "0", IgnoreIf: "0", Min: 0, Max: 50, Step: 1, FeatureFlag: "comfyui", Group: T2IParamTypes.GroupAlternateGuidance, IsAdvanced: true, ViewType: ParamViewType.SLIDER, OrderPriority: 18
+            ));
+        NormalizedAttentionGuidanceAlpha = T2IParamTypes.Register<double>(new("Normalized Attention Guidance Alpha", "Alpha value for Normalized Attention Guidance, aka blending scale.\nIn other words, how strongly to mix NAG with the base generation.\n1 means fully NAG, 0 means fully base, 0.5 means half-n-half. 0.5 is a safe default.",
+            "0.5", Min: 0, Max: 1, Step: 0.01, FeatureFlag: "comfyui", Group: T2IParamTypes.GroupAlternateGuidance, IsAdvanced: true, Toggleable: true, ViewType: ParamViewType.SLIDER, OrderPriority: 18.1, DependNonDefault: NormalizedAttentionGuidanceScale.Type.ID
+            ));
+        NormalizedAttentionGuidanceTau = T2IParamTypes.Register<double>(new("Normalized Attention Guidance Tau", "Tau value for Normalized Attention Guidance.\nThis is a more internal value which modifies the guidance scaling.",
+            "1.5", Min: 0.5, Max: 10, Step: 0.01, FeatureFlag: "comfyui", Group: T2IParamTypes.GroupAlternateGuidance, IsAdvanced: true, Toggleable: true, ViewType: ParamViewType.SLIDER, OrderPriority: 18.2, DependNonDefault: NormalizedAttentionGuidanceScale.Type.ID
             ));
         RefinerUpscaleMethod = T2IParamTypes.Register<string>(new("Refiner Upscale Method", "How to upscale the image, if upscaling is used.",
             "pixel-lanczos", Group: T2IParamTypes.GroupRefiners, OrderPriority: -1, FeatureFlag: "comfyui", ChangeWeight: 1,
@@ -744,20 +778,14 @@ public class ComfyUIBackendExtension : Extension
             "256", Min: 64, Max: 2048, Step: 32, Toggleable: true, IsAdvanced: true, FeatureFlag: "comfyui", ViewType: ParamViewType.POT_SLIDER, Group: T2IParamTypes.GroupAdvancedSampling, OrderPriority: 20
             ));
         List<string> interpolators = ["RIFE", "FILM", "GIMM-VFI"];
-        Text2VideoFrameInterpolationMultiplier = T2IParamTypes.Register<int>(new("Text2Video Frame Interpolation Multiplier", "How many frames to interpolate between each frame in the video.\nHigher values are smoother, but make take significant time to save the output, and may have quality artifacts.",
-            "1", IgnoreIf: "1", Min: 1, Max: 10, Step: 1, FeatureFlag: "frameinterps,text2video", Group: T2IParamTypes.GroupText2Video, Permission: Permissions.ParamVideo, OrderPriority: 32, IsAdvanced: true
-            ));
-        Text2VideoFrameInterpolationMethod = T2IParamTypes.Register<string>(new("Text2Video Frame Interpolation Method", "How to interpolate frames in the video.\n'RIFE' or 'FILM' are two different decent interpolation model options.",
-            "RIFE", FeatureFlag: "frameinterps,text2video", Group: T2IParamTypes.GroupText2Video, Permission: Permissions.ParamVideo, GetValues: (_) => interpolators, OrderPriority: 33, DependNonDefault: Text2VideoFrameInterpolationMultiplier.Type.ID, IsAdvanced: true
-            ));
         VideoPreviewType = T2IParamTypes.Register<string>(new("Video Preview Type", "How to display previews for generating videos.\n'Animate' shows a low-res animated video preview.\n'iterate' shows one frame at a time while it goes.\n'one' displays just the first frame.\n'none' disables previews.",
             "animate", IgnoreIf: "animate", FeatureFlag: "comfyui", Group: T2IParamTypes.GroupAdvancedVideo, Permission: Permissions.ParamVideo, IsAdvanced: true, GetValues: (_) => ["animate", "iterate", "one", "none"]
             ));
         VideoFrameInterpolationMultiplier = T2IParamTypes.Register<int>(new("Video Frame Interpolation Multiplier", "How many frames to interpolate between each frame in the video.\nHigher values are smoother, but make take significant time to save the output, and may have quality artifacts.",
-            "1", IgnoreIf: "1", Min: 1, Max: 10, Step: 1, FeatureFlag: "frameinterps", Group: T2IParamTypes.GroupVideo, Permission: Permissions.ParamVideo, OrderPriority: 32, IsAdvanced: true
+            "1", IgnoreIf: "1", Min: 1, Max: 10, Step: 1, FeatureFlag: "frameinterps", Group: T2IParamTypes.GroupAdvancedVideo, Permission: Permissions.ParamVideo, OrderPriority: 32, IsAdvanced: true
             ));
         VideoFrameInterpolationMethod = T2IParamTypes.Register<string>(new("Video Frame Interpolation Method", "How to interpolate frames in the video.\n'RIFE' or 'FILM' are two different decent interpolation model options.",
-            "RIFE", FeatureFlag: "frameinterps", Group: T2IParamTypes.GroupVideo, Permission: Permissions.ParamVideo, GetValues: (_) => interpolators, OrderPriority: 33, DependNonDefault: VideoFrameInterpolationMultiplier.Type.ID, IsAdvanced: true
+            "RIFE", FeatureFlag: "frameinterps", Group: T2IParamTypes.GroupAdvancedVideo, Permission: Permissions.ParamVideo, GetValues: (_) => interpolators, OrderPriority: 33, DependNonDefault: VideoFrameInterpolationMultiplier.Type.ID, IsAdvanced: true
             ));
         GligenModel = T2IParamTypes.Register<string>(new("GLIGEN Model", "Optionally use a GLIGEN model.\nGLIGEN is only compatible with SDv1 at time of writing.",
             "None", IgnoreIf: "None", FeatureFlag: "comfyui", Group: T2IParamTypes.GroupRegionalPrompting, GetValues: (_) => GligenModels, IsAdvanced: true
@@ -800,6 +828,98 @@ public class ComfyUIBackendExtension : Extension
         SwarmSwarmBackend.ValidityChecks[BackendApiType.ID] = (backend, input) => ComfyUIAPIAbstractBackend.TryIsValid(input, backend.ExtensionData.GetValueOrDefault("ComfyNodeTypes", null) as HashSet<string>);
         SwarmSwarmBackend.ValidityChecks[BackendSelfStartType.ID] = SwarmSwarmBackend.ValidityChecks[BackendApiType.ID];
         ComfyUIWebAPI.Register();
+        AdminAPI.CheckForBackendUpdates.Add(CheckForUpdates);
+        AdminAPI.DoBackendUpdates.Add(DoBackendUpdates);
+    }
+
+    /// <summary>Enumerates all folders that have a ComfyUI install managed by swarm.</summary>
+    public static IEnumerable<string> ComfyInstallDirs()
+    {
+        foreach (ComfyUISelfStartBackend backend in Program.Backends.EnumerateT2IBackends.Select(b => b.Backend as ComfyUISelfStartBackend).Where(b => b is not null).DistinctBy(b => b.Settings.StartScript))
+        {
+            string script = backend.Settings.StartScript;
+            if (string.IsNullOrWhiteSpace(script))
+            {
+                continue;
+            }
+            yield return Path.GetFullPath(Directory.GetParent(script).FullName);
+        }
+    }
+
+    public async Task CheckForUpdates(LockObject locker, JObject backendsData)
+    {
+        string[] folders = [.. ComfyInstallDirs()];
+        // TODO: is a bunch of git fetches in parallel a rate limit issue? GitHub seems pretty chill about a `fetch` call (vs API is strict limits).
+        List<Task> tasks = [];
+        foreach (string folder in folders)
+        {
+            tasks.Add(Utilities.RunCheckedTask(async () =>
+            {
+                JObject updates = await AdminAPI.GetUpdatesDataFor(folder, true);
+                if (updates is null)
+                {
+                    Logs.Debug($"Check for updates found no updates for ComfyUI install at {folder}");
+                    return;
+                }
+                string altName = folders.Length == 1 ? "ComfyUI" : $"ComfyUI In Folder: {folder.Replace('\\', '/')}";
+                lock (locker)
+                {
+                    backendsData[altName] = updates;
+                }
+                Logs.Debug($"Check for updates found {updates["count"]} updates for ComfyUI install at {folder}");
+            }));
+        }
+        await Task.WhenAll(tasks); // Intentional force order for Comfy folders to be before nodes
+        tasks = [];
+        foreach (string folder in Directory.EnumerateDirectories($"{FilePath}DLNodes"))
+        {
+            tasks.Add(Utilities.RunCheckedTask(async () =>
+            {
+                string headTarget = ComfyUISelfStartBackend.ComfyNodeGitPins.TryGetValue(folder, out string pinCommit) ? pinCommit : null;
+                JObject nodeUpdates = await AdminAPI.GetUpdatesDataFor(folder, true, headTarget: headTarget);
+                if (nodeUpdates is null)
+                {
+                    Logs.Debug($"Check for updates found no updates for ComfyUI node at {folder}");
+                    return;
+                }
+                string nodeName = Path.GetFileName(folder);
+                lock (locker)
+                {
+                    backendsData[$"Comfy Node: {nodeName}"] = nodeUpdates;
+                }
+                Logs.Debug($"Check for updates found {nodeUpdates["count"]} updates for ComfyUI node at {folder}");
+            }));
+        }
+        await Task.WhenAll(tasks);
+    }
+
+    public async Task DoBackendUpdates(Action didWork, Action<string> didFail, bool aggressive, string[] toUpdate)
+    {
+        string[] folders = [.. ComfyInstallDirs()];
+        List<Task> tasks = [];
+        foreach (string folder in folders)
+        {
+            string altName = folders.Length == 1 ? "ComfyUI" : $"ComfyUI In Folder: {folder.Replace('\\', '/')}";
+            if (toUpdate.Contains(altName))
+            {
+                tasks.Add(Utilities.RunCheckedTask(async () =>
+                {
+                    await AdminAPI.DoGitUpdate(folder, aggressive, didWork, didFail);
+                }));
+            }
+        }
+        foreach (string folder in Directory.EnumerateDirectories($"{FilePath}DLNodes"))
+        {
+            string nodeName = Path.GetFileName(folder);
+            if (toUpdate.Contains($"Comfy Node: {nodeName}"))
+            {
+                tasks.Add(Utilities.RunCheckedTask(async () =>
+                {
+                    string headTarget = ComfyUISelfStartBackend.ComfyNodeGitPins.TryGetValue(folder, out string pinCommit) ? pinCommit : null;
+                    await AdminAPI.DoGitUpdate(folder, aggressive, didWork, didFail, targetCommit: headTarget);
+                }));
+            }
+        }
     }
 
     public BackendHandler.BackendType BackendApiType, BackendSelfStartType;

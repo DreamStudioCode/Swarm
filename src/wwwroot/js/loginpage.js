@@ -11,6 +11,13 @@ class LoginHandler {
         this.errorLoginFailedRatelimit = translatable("Login failed (ratelimit reached), please wait a minute before trying again.");
         this.messageLoggingIn = translatable("Logging in, please wait...");
         this.messageLoginSuccess = translatable("Login successful! Redirecting...");
+        if (this.passwordInput) {
+            this.passwordInput.addEventListener('keydown', (e) => {
+                if (e.key == 'Enter') {
+                    this.loginButton.click();
+                }
+            });
+        }
     }
 
     showError(message) {

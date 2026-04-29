@@ -342,10 +342,15 @@ function setSelectionRange(el, start, end) {
     let foundStart = false;
     let charCount = 0
     let endCharCount;
+    function isSpacer(node) { return node.tagName == 'BR' || (node.parentElement?.classList?.contains('wc_line_spacer')); }
     for (let i = 0; i < textNodes.length; i++) {
         let textNode = textNodes[i];
         endCharCount = charCount + (textNode.tagName == 'BR' ? 1 : textNode.textContent.length);
         if (!foundStart && start >= charCount && (i == textNodes.length - 1 ? start <= endCharCount : start < endCharCount)) {
+            range.setStart(textNode, start - charCount);
+            foundStart = true;
+        }
+        else if (!foundStart && start >= charCount && start == endCharCount && i + 1 < textNodes.length && isSpacer(textNodes[i + 1])) {
             range.setStart(textNode, start - charCount);
             foundStart = true;
         }
@@ -464,6 +469,42 @@ function toDataURL(url, callback) {
             callback(reader.result);
         }
         reader.readAsDataURL(xhr.response);
+    };
+    xhr.open('GET', url);
+    xhr.responseType = 'blob';
+    xhr.send();
+}
+
+/** Copies the image at the given URL (http(s) or data: URL) to the clipboard as image/png. */
+function copyImageToClipboard(url) {
+    if (!navigator.clipboard) {
+        let img = document.createElement('img');
+        img.src = url;
+        img.style.position = 'absolute';
+        img.style.opacity = '0';
+        img.style.left = '-999999px';
+        let focusedElement = document.activeElement;
+        document.body.appendChild(img);
+        let range = document.createRange();
+        range.selectNode(img);
+        let sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        document.execCommand('copy');
+        sel.removeAllRanges();
+        document.body.removeChild(img);
+        if (focusedElement) {
+            focusedElement.focus();
+        }
+        return;
+    }
+    let xhr = new XMLHttpRequest();
+    xhr.onload = function() {
+        let blob = xhr.response;
+        if (!blob) {
+            return;
+        }
+        navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
     };
     xhr.open('GET', url);
     xhr.responseType = 'blob';
@@ -832,7 +873,7 @@ function filterDistinctBy(array, map) {
 }
 
 /** Gets the current value of an input element (in a checkbox-compatible way). */
-function getInputVal(input) {
+function getInputVal(input, rawLists = false) {
     if (input.tagName == 'INPUT' && input.type == 'checkbox') {
         return input.checked;
     }
@@ -844,6 +885,9 @@ function getInputVal(input) {
     }
     else if (input.tagName == 'SELECT' && input.multiple) {
         let valSet = [...input.selectedOptions].map(option => option.value);
+        if (rawLists) {
+            return valSet;
+        }
         if (valSet.length > 0) {
             return valSet.join(',');
         }
@@ -886,6 +930,9 @@ function imageToData(src, callback, resize256 = false) {
                 context.drawImage(image, 0, 0, widthFixed, heightFixed);
                 callback(canvas.toDataURL('image/jpeg'));
         };
+        image.onerror = () => {
+            callback(null);
+        };
         image.src = src;
     }
     else {
@@ -896,6 +943,9 @@ function imageToData(src, callback, resize256 = false) {
                 callback(reader.result);
             };
             reader.readAsDataURL(xhr.response);
+        };
+        xhr.onerror = () => {
+            callback(null);
         };
         xhr.open('GET', src);
         xhr.responseType = 'blob';
@@ -1044,6 +1094,37 @@ function isVideoExt(filename) {
     return false;
 }
 
+/** Returns a mimetype if the given filename is for an audio file based on the extension, or boolean false if it is not. */
+function isAudioExt(filename) {
+    if (filename.startsWith('data:')) {
+        let semicolonIndex = filename.indexOf(';');
+        let colonIndex = filename.indexOf(':');
+        if (semicolonIndex >= 0 && colonIndex >= 0) {
+            let mimeType = filename.substring(colonIndex + 1, semicolonIndex);
+            if (mimeType.startsWith('audio/')) {
+                return mimeType;
+            }
+            return false;
+        }
+    }
+    let ext = filename.split('.').pop();
+    if (['mp3', 'wav', 'aac', 'ogg', 'flac'].includes(ext)) {
+        return `audio/${ext}`;
+    }
+    return false;
+}
+
+/** Returns 'video', 'audio', or 'image' based on the file source. */
+function getMediaType(src) {
+    if (isVideoExt(src)) {
+        return 'video';
+    }
+    if (isAudioExt(src)) {
+        return 'audio';
+    }
+    return 'image';
+}
+
 /** 'string.split' with a count limit, and without the stupid misbehavior of the default JS 'string.split'. */
 function splitWithTail(str, splitter, limit) {
     let parts = str.split(splitter);
@@ -1094,4 +1175,52 @@ function measureText(text, relativeDiv = null) {
     let width = div.offsetWidth;
     relativeDiv.removeChild(div);
     return width;
+}
+
+/** Unzips a gzip-compressed Uint8Array. */
+async function ungzip(gzippedBytes) {
+    gzippedBytes = gzippedBytes.slice(0, 899);
+    let ds = new DecompressionStream('gzip');
+    let writer = ds.writable.getWriter();
+    writer.write(gzippedBytes);
+    writer.close();
+    let chunks = [];
+    let reader = ds.readable.getReader();
+    while (true) {
+        let {done, value} = await reader.read();
+        if (done) {
+            break;
+        }
+        chunks.push(value);
+    }
+    return new Uint8Array(chunks.reduce((acc, chunk) => [...acc, ...chunk], []));
+}
+
+/** Trims leading spaces from a string. */
+function trimStartSpaces(text) {
+    let count = 0;
+    for (let i = 0; i < text.length; i++) {
+        if (text[i] != ' ') {
+            break;
+        }
+        count++;
+    }
+    return text.substring(count);
+}
+
+/** Trims trailing spaces from a string. */
+function trimEndSpaces(text) {
+    let count = 0;
+    for (let i = text.length - 1; i >= 0; i--) {
+        if (text[i] != ' ') {
+            break;
+        }
+        count++;
+    }
+    return text.substring(0, text.length - count);
+}
+
+/** Trims leading and trailing spaces from a string. */
+function trimSpaces(text) {
+    return trimStartSpaces(trimEndSpaces(text));
 }

@@ -1,4 +1,4 @@
-﻿using FreneticUtilities.FreneticExtensions;
+using FreneticUtilities.FreneticExtensions;
 using Newtonsoft.Json.Linq;
 using SwarmUI.Accounts;
 using SwarmUI.Backends;
@@ -36,7 +36,7 @@ namespace SwarmUI.Text2Image
         public static Action<PostBatchEventParams> PostBatchEvent;
 
         /// <summary>Feature flags that don't block a backend from running, such as model-specific flags.</summary>
-        public static HashSet<string> DisregardedFeatureFlags = ["sd3", "flux-dev", "text2video", "cascade", "sdxl"];
+        public static HashSet<string> DisregardedFeatureFlags = ["sd3", "flux-dev", "text2video", "cascade", "sdxl", "text2audio"];
 
         /// <summary>Parameters for <see cref="PostBatchEvent"/>.</summary>
         public record class PostBatchEventParams(T2IParamInput UserInput, ImageOutput[] Images);
@@ -61,12 +61,15 @@ namespace SwarmUI.Text2Image
             /// <summary>The time in milliseconds it took to generate, or -1 if unknown.</summary>
             public long GenTimeMS = -1;
 
-            /// <summary>If true, the image is a real final output. If false, there is something non-standard about this file (eg it's a secondary preview) and so should be excluded from grids/etc.</summary>
+            /// <summary>If true, the file is a real final output. If false, there is something non-standard about this file (eg it's a secondary preview) and so should be excluded from grids/etc.</summary>
             public bool IsReal = true;
 
             /// <summary>An action that will remove/discard this file as relevant.</summary>
             public Action RefuseImage;
         }
+
+        /// <summary>List of functions that take a pair of userinput and backend, and returns true if they can fit together, or false if the pair is not valid (add to user_input.RefusalReasons if so).</summary>
+        public static List<Func<T2IParamInput, BackendHandler.T2IBackendData, bool>> AltBackendValidators = [];
 
         /// <summary>Helper to create a function to match a backend to a user input request.</summary>
         public static Func<BackendHandler.T2IBackendData, bool> BackendMatcherFor(T2IParamInput user_input)
@@ -156,14 +159,25 @@ namespace SwarmUI.Text2Image
                         }
                     }
                 }
-                return backend.Backend.IsValidForThisBackend(user_input);
+                if (!backend.Backend.IsValidForThisBackend(user_input))
+                {
+                    return false;
+                }
+                foreach (Func<T2IParamInput, BackendHandler.T2IBackendData, bool> validator in AltBackendValidators)
+                {
+                    if (!validator(user_input, backend))
+                    {
+                        return false;
+                    }
+                }
+                return true;
             };
         }
 
         /// <summary>Internal handler route to create an image based on a user request.</summary>
-        public static async Task CreateImageTask(T2IParamInput user_input, string batchId, Session.GenClaim claim, Action<JObject> output, Action<string> setError, bool isWS, float backendTimeoutMin, Action<ImageOutput, string> saveImages)
+        public static async Task CreateImageTask(T2IParamInput user_input, string batchId, Session.GenClaim claim, Action<JObject> output, Action<string> setError, bool isWS, Action<ImageOutput, string> saveImages)
         {
-            await CreateImageTask(user_input, batchId, claim, output, setError, isWS, backendTimeoutMin, saveImages, true);
+            await CreateImageTask(user_input, batchId, claim, output, setError, isWS, Program.ServerSettings.Backends.PerRequestTimeoutMinutes, saveImages, true);
         }
 
         /// <summary>Internal handler route to create an image based on a user request.</summary>
@@ -335,7 +349,7 @@ namespace SwarmUI.Text2Image
                         ex = e2;
                     }
                 }
-                if (ex is AbstractT2IBackend.PleaseRedirectException)
+                if (ex is AbstractBackend.PleaseRedirectException)
                 {
                     claim.Extend(gens: 1);
                     await CreateImageTask(user_input, batchId, claim, output, setError, isWS, backendTimeoutMin, saveImages, false);

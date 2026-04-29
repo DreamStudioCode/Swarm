@@ -15,6 +15,7 @@
                     <select id="comfy_multigpu_select" style="width:5.8rem" onchange="comfyMultiGPUSelectChanged()">
                         <option value="" selected>-- MultiGPU --</option>
                         <option value="all">Use All</option>
+                        <option value="queue">Use Swarm Queue</option>
                         <option value="reserve">Reserve Exclusive</option>
                         <option value="none">Use One</option>
                     </select>
@@ -52,10 +53,7 @@
                 <input class="form-check-input translate" type="checkbox" id="comfy_save_enable_simple" title="Enable this workflow in the Simple tab"> Enable In Simple Tab
             </span>
             <br>
-            <span class="form-check form-switch display-inline-block translate">
-                <input class="form-check-input translate" type="checkbox" id="comfy_save_use_image" title="Enable/disable image"> Use Image
-            </span>
-            <div id="comfy_save_image" class="comfy_save_image"></div>
+            <div id="comfy_save_image_block"></div>
         </div>
         <div class="modal-footer">
             <button type="button" class="btn btn-primary translate" onclick="comfySaveModalSaveNow()">Save Workflow</button>

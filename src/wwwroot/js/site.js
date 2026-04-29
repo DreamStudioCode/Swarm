@@ -69,6 +69,13 @@ function enableSliderForBox(div) {
 }
 
 function showError(message) {
+    let excludeErrorMessages = (typeof getUserSetting == 'function' ? getUserSetting('ui.HideErrorMessages', '') : '').split('|').map(x => x.trim());
+    for (let excludeMessage of excludeErrorMessages) {
+        if (excludeMessage && message.includes(excludeMessage)) {
+            console.log(`Error message ${message} contains excluded message ${excludeMessage}, not showing.`);
+            return;
+        }
+    }
     let container = getRequiredElementById('center_toast');
     let box = getRequiredElementById('error_toast_box');
     getRequiredElementById('error_toast_content').innerText = message;
@@ -157,16 +164,26 @@ function genericRequest(url, in_data, callback, depth = 0, errorHandle = null) {
             fail(genericServerErrorMsg.get());
             return;
         }
-        if (data.error_id && data.error_id == 'invalid_session_id') {
+        if (data.error_id) {
             if (depth > 3) {
                 fail(failedDepth.get());
                 return;
             }
-            console.log('Session refused, will get new one and try again.');
-            getSession(() => {
-                genericRequest(url, in_data, callback, depth + 1);
-            });
-            return;
+            if (data.error_id == 'invalid_session_id') {
+                console.log('Session refused, will get new one and try again.');
+                getSession(() => {
+                    genericRequest(url, in_data, callback, depth + 1, errorHandle);
+                });
+                return;
+            }
+            if (url == 'GetNewSession' && data.error_id == 'bad_impersonate') {
+                console.log(`Failed to impersonate user ${impersonateTargetUserId}, will clear and try again.`);
+                impersonateTargetUserId = null;
+                getSession(() => {
+                    genericRequest(url, in_data, callback, depth + 1, errorHandle);
+                });
+                return;
+            }
         }
         if (data.error) {
             console.log(`Tried making generic request ${url} but failed with error: ${data.error}`);
@@ -182,6 +199,7 @@ let lastServerVersion = null;
 let versionIsWrong = false;
 let lastSessionCheck = 0;
 let haveBadSession = false;
+let impersonateTargetUserId = new URLSearchParams(window.location.search).get('impersonate')?.trim() || null;
 
 let serverHasUpdated = translatable(`The server has updated since you opened the page, please refresh.`);
 
@@ -201,7 +219,16 @@ function getSession(callback) {
     }
     lastSessionCheck = Date.now();
     haveBadSession = true;
-    genericRequest('GetNewSession', {}, data => {
+    let inData = {};
+    let impersonateContainer = document.getElementById('impersonate_user_container');
+    if (impersonateContainer) {
+        impersonateContainer.style.display = impersonateTargetUserId ? 'block' : 'none';
+        if (impersonateTargetUserId) {
+            inData.impersonateUser = impersonateTargetUserId;
+            getRequiredElementById('impersonate_user_name').innerText = impersonateTargetUserId;
+        }
+    }
+    genericRequest('GetNewSession', inData, data => {
         haveBadSession = false;
         console.log("Session started.");
         session_id = data.session_id;
@@ -225,6 +252,15 @@ function getSession(callback) {
             callback();
         }
     });
+}
+
+function stopImpersonatingUser() {
+    if (!impersonateTargetUserId) {
+        return;
+    }
+    let url = new URL(window.location.href);
+    url.searchParams.delete('impersonate');
+    window.location.href = url.toString();
 }
 
 function sendServerDebugMessage(message) {
@@ -252,6 +288,10 @@ function triggerChangeFor(elem) {
 
 function textPromptDoCount(elem, countElem = null, prefix = '') {
     let tokenCount = countElem ?? elem.parentElement.querySelector('.auto-input-prompt-tokencount');
+    if (!permissions.hasPermission('use_tokenizer')) {
+        tokenCount.innerText = '';
+        return;
+    }
     function countTokens() {
         elem.dataset.has_token_count_running = true;
         genericRequest('CountTokens', { text: elem.value, skipPromptSyntax: true }, data => {
@@ -490,75 +530,124 @@ function getToggleHtml(toggles, id, name, extraClass = '', func = 'doToggleEnabl
     return toggles ? `<span class="form-check form-switch toggle-switch display-inline-block${extraClass}"><input class="auto-slider-toggle form-check-input" type="checkbox" id="${id}_toggle" title="Enable/disable ${name}" onclick="${func}('${id}')" onchange="${func}('${id}')" autocomplete="off"><div class="auto-slider-toggle-content"></div></span>` : '';
 }
 
-let loadImageFileDedup = false;
+let loadMediaFileDedup = false;
 
-function clearImageFileInput(elem) {
+function clearMediaFileInput(elem) {
     let parent = findParentOfClass(elem, 'auto-input');
-    let preview = parent.querySelector('.auto-input-image-preview');
+    let preview = parent.querySelector('.auto-input-preview');
     let label = parent.querySelector('.auto-file-input-filename');
     delete elem.dataset.filedata;
     label.textContent = "";
     preview.innerHTML = '';
     elem.value = '';
-    loadImageFileDedup = true;
+    loadMediaFileDedup = true;
     triggerChangeFor(elem);
-    loadImageFileDedup = false;
+    loadMediaFileDedup = false;
 }
 
-function setImageFileInput(elem, file) {
+function setMediaFileInput(elem, file, type) {
     if (!file) {
-        clearImageFileInput(elem);
+        clearMediaFileInput(elem);
         return;
     }
     let parent = findParentOfClass(elem, 'auto-input');
-    let preview = parent.querySelector('.auto-input-image-preview');
+    let preview = parent.querySelector('.auto-input-preview');
     let label = parent.querySelector('.auto-file-input-filename');
     let name = file.name;
     if (name.length > 30) {
         name = `${name.substring(0, 27)}...`;
     }
-    let longName = file.name.length > 500 ? file.name.substring(0, 150) + '...' : file.name;
     label.textContent = name;
     let reader = new FileReader();
     reader.addEventListener("load", () => {
-        setImageFileDirect(elem, reader.result, name, longName);
+        if (file.type.startsWith('video/')) {
+            type = 'video';
+        }
+        else if (file.type.startsWith('image/')) {
+            type = 'image';
+        }
+        else if (file.type.startsWith('audio/')) {
+            type = 'audio';
+        }
+        setMediaFileDirect(elem, reader.result, type, name, file.name);
     }, false);
     reader.readAsDataURL(file);
 }
 
-function setImageFileDirect(elem, src, name, longName = null, callback = null) {
+function setMediaFileDirect(elem, src, type, name, longName = null, callback = null) {
     let parent = findParentOfClass(elem, 'auto-input');
-    let preview = parent.querySelector('.auto-input-image-preview');
+    let preview = parent.querySelector('.auto-input-preview');
     let label = parent.querySelector('.auto-file-input-filename');
     elem.dataset.filedata = src;
-    preview.innerHTML = `<button class="interrupt-button auto-input-image-remove-button" title="Remove image">&times;</button><img alt="Image preview" />`;
-    let img = preview.querySelector('img');
+    let button = `<button class="interrupt-button auto-input-remove-button" title="Remove ${type}">&times;</button>`;
+    let img;
+    if (type == 'image') {
+        preview.innerHTML = `${button}<img alt="Image preview" />`;
+        img = preview.querySelector('img');
+    }
+    else if (type == 'audio') {
+        preview.innerHTML = `${button}<audio alt="Audio preview" controls></audio>`;
+        img = preview.querySelector('audio');
+    }
+    else if (type == 'video') {
+        preview.innerHTML = `${button}<video alt="Video preview" loop muted autoplay></video>`;
+        img = preview.querySelector('video');
+    }
     img.onload = () => {
-        label.textContent = `${name} (${img.naturalWidth}x${img.naturalHeight}, ${describeAspectRatio(img.naturalWidth, img.naturalHeight)})`;
-        elem.dataset.width = img.naturalWidth;
-        elem.dataset.height = img.naturalHeight;
-        elem.dataset.filename = longName || name;
-        elem.dataset.resolution = `${img.naturalWidth}x${img.naturalHeight}`;
-        loadImageFileDedup = true;
+        let shortName = name.length > 30 ? `${name.substring(0, 27)}...` : name;
+        if (type == 'image') {
+            label.textContent = `${shortName} (${img.naturalWidth}x${img.naturalHeight}, ${describeAspectRatio(img.naturalWidth, img.naturalHeight)})`;
+            elem.dataset.width = img.naturalWidth;
+            elem.dataset.height = img.naturalHeight;
+            elem.dataset.resolution = `${img.naturalWidth}x${img.naturalHeight}`;
+        }
+        else if (type == 'audio') {
+            label.textContent = `${shortName} (${img.duration}s)`;
+            elem.dataset.duration = `${img.duration}`;
+        }
+        else if (type == 'video') {
+            label.textContent = `${shortName} (${img.duration}s) (${img.videoWidth}x${img.videoHeight}, ${describeAspectRatio(img.videoWidth, img.videoHeight)})`;
+            elem.dataset.duration = `${img.duration}`;
+            elem.dataset.width = img.videoWidth;
+            elem.dataset.height = img.videoHeight;
+            elem.dataset.resolution = `${img.videoWidth}x${img.videoHeight}`;
+        }
+        longName = longName && longName.length > 500 ? longName.substring(0, 150) + '...' : longName;
+        elem.dataset.filename = longName || shortName;
+        loadMediaFileDedup = true;
         triggerChangeFor(elem);
-        loadImageFileDedup = false;
+        loadMediaFileDedup = false;
         if (callback) {
             callback();
         }
     };
-    img.src = src;
+    if (type == 'video') {
+        img.addEventListener('loadeddata', () => {
+            img.onload();
+        });
+        img.innerHTML = `<source src="${src}">`;
+    }
+    else if (type == 'audio') {
+        img.addEventListener('loadedmetadata', () => {
+            img.onload();
+        });
+        img.src = src;
+    }
+    else {
+        img.src = src;
+    }
     preview.firstChild.addEventListener('click', () => {
-        clearImageFileInput(elem);
+        clearMediaFileInput(elem);
     });
 }
 
-function load_image_file(elem) {
-    if (loadImageFileDedup) {
+function load_media_file(elem, type) {
+    if (loadMediaFileDedup) {
         return;
     }
     updateFileDragging({ target: elem }, true);
     let file = elem.files[0];
-    setImageFileInput(elem, file);
+    setMediaFileInput(elem, file, type);
 }
 
 function autoSelectWidth(elem) {
@@ -780,10 +869,10 @@ function htmlWithParen(text) {
     let prefix = text.substring(0, start);
     let mid = text.substring(start, end + 1);
     let suffix = text.substring(end + 1);
-    return `${htmlWithParen(prefix)}<span class='parens'>${escapeHtml(mid)}</span>${htmlWithParen(suffix)}`;
+    return `${htmlWithParen(prefix)}<span class="parens">${escapeHtml(mid)}</span>${htmlWithParen(suffix)}`;
 }
 
-function makeDropdownInput(featureid, id, paramid, name, description, values, defaultVal, toggles = false, popover_button = true, alt_names = null) {
+function makeDropdownInput(featureid, id, paramid, name, description, values, defaultVal, toggles = false, popover_button = true, alt_names = null, reparse_alt_names = true) {
     name = escapeHtml(name);
     featureid = featureid ? ` data-feature-require="${featureid}"` : '';
     let [popover, featureid2] = getPopoverElemsFor(id, popover_button);
@@ -798,8 +887,9 @@ function makeDropdownInput(featureid, id, paramid, name, description, values, de
         let value = values[i];
         let alt_name = alt_names && alt_names[i] ? alt_names[i] : value;
         let selected = value == defaultVal ? ' selected="true"' : '';
-        let cleanName = htmlWithParen(alt_name);
-        html += `<option data-cleanname="${cleanName}" value="${escapeHtmlNoBr(value)}"${selected}>${cleanName}</option>\n`;
+        let simpleName = reparse_alt_names ? htmlWithParen(alt_name) : escapeHtmlNoBr(value);
+        let cleanName = reparse_alt_names ? htmlWithParen(alt_name) : alt_name;
+        html += `<option data-cleanname="${escapeHtmlNoBr(cleanName)}" value="${escapeHtmlNoBr(value)}"${selected}>${simpleName}</option>\n`;
     }
     html += `
         </select>
@@ -828,37 +918,228 @@ function makeMultiselectInput(featureid, id, paramid, name, description, values,
     return html;
 }
 
-function onImageInputPaste(e) {
+function onFileInputPaste(e, type) {
+    let types = type.split(',');
     let element = findParentOfClass(e.target, 'auto-input').querySelector('input[type="file"]');
     let files = e.clipboardData.files;
-    if (files.length > 0 && files[0].type.startsWith('image/')) {
+    if (files.length > 0 && types.some(t => files[0].type.startsWith(t))) {
         element.files = files;
         triggerChangeFor(element);
     }
 }
 
-function makeImageInput(featureid, id, paramid, name, description, toggles = false, popover_button = true) {
+function realClickFileInput(elem) {
+    if (typeof elem == 'string') {
+        elem = getRequiredElementById(elem);
+    }
+    elem.dataset.is_real_click = true;
+    elem.click();
+    delete elem.dataset.is_real_click;
+}
+
+function fileInputOnClick(e) {
+    if (e.target.dataset.is_real_click) {
+        return;
+    }
+    e.preventDefault();
+}
+
+function makeImageInput(featureid, id, paramid, name, description, toggles = false, popover_button = true, can_upload = true, show_input_browser_button = true) {
     name = escapeHtml(name);
     featureid = featureid ? ` data-feature-require="${featureid}"` : '';
     let [popover, featureid2] = getPopoverElemsFor(id, popover_button);
     featureid += featureid2;
     let html = `
     <div class="auto-input auto-file-box"${featureid}>
-        <label class="auto-image-input-label">
+        <label class="auto-file-input-label">
             <span class="auto-input-name">${getToggleHtml(toggles, id, name)}${translateableHtml(name)}${popover}</span>
-            <input type="text" id="${id}_pastebox" size="14" maxlength="0" placeholder="Ctrl+V: Paste Image" onpaste="onImageInputPaste(arguments[0])">
+            ${can_upload ? `
+                <input type="text" id="${id}_pastebox" size="14" maxlength="0" placeholder="Ctrl+V: Paste Image" onpaste="onFileInputPaste(arguments[0], 'image/,video/')">
+                <a class="auto-file-input-button basic-button" onclick="realClickFileInput('${id}')">${translateableHtml("Upload")}</a>
+            ` : ''}
+            ${show_input_browser_button ? `<a class="auto-file-input-button basic-button" onclick="inputBrowserHelper.openInputBrowser('${id}', ['image', 'video'])">${translateableHtml("Select")}</a>` : ''}
         </label>
         <label for="${id}" class="auto-file-label drag_image_target">
-            <input class="auto-file" type="file" accept="image/png, image/jpeg, image/webp, image/gif" id="${id}" data-param_id="${paramid}" onchange="load_image_file(this)" ondragover="updateFileDragging(arguments[0], false)" ondragleave="updateFileDragging(arguments[0], true)" autocomplete="off">
+            <input class="auto-file" type="file" accept="image/png, image/jpeg, image/webp, image/gif, video/mp4, video/webm, video/quicktime, video/mov" id="${id}" data-param_id="${paramid}" onchange="load_media_file(this, 'image')" onclick="fileInputOnClick(arguments[0])" ondragover="updateFileDragging(arguments[0], false)" ondragleave="updateFileDragging(arguments[0], true)" autocomplete="off">
             <div class="auto-file-input">
-                <a class="auto-file-input-button basic-button">${translateableHtml("Choose File")}</a>
                 <span class="auto-file-input-filename"></span>
+                <br>
             </div>
         </label>
-        <div class="auto-input-image-preview"></div>
+        <div class="auto-input-preview"></div>
     </div>`;
     return html;
 }
+
+function makeAudioInput(featureid, id, paramid, name, description, toggles = false, popover_button = true, can_upload = true, show_input_browser_button = true) {
+    name = escapeHtml(name);
+    featureid = featureid ? ` data-feature-require="${featureid}"` : '';
+    let [popover, featureid2] = getPopoverElemsFor(id, popover_button);
+    featureid += featureid2;
+    let html = `
+    <div class="auto-input auto-file-box"${featureid}>
+        <label class="auto-file-input-label">
+            <span class="auto-input-name">${getToggleHtml(toggles, id, name)}${translateableHtml(name)}${popover}</span>
+            ${can_upload ? `
+                <input type="text" id="${id}_pastebox" size="14" maxlength="0" placeholder="Ctrl+V: Paste Audio" onpaste="onFileInputPaste(arguments[0], 'audio/')">
+                <a class="auto-file-input-button basic-button" onclick="realClickFileInput('${id}')">${translateableHtml("Upload")}</a>
+            ` : ''}
+            ${show_input_browser_button ? `<a class="auto-file-input-button basic-button" onclick="inputBrowserHelper.openInputBrowser('${id}', ['audio'])">${translateableHtml("Select")}</a>` : ''}
+        </label>
+        <label for="${id}" class="auto-file-label drag_audio_target">
+            <input class="auto-file" type="file" accept="audio/wav, audio/wave, audio/mp3, audio/aac, audio/ogg, audio/flac" id="${id}" data-param_id="${paramid}" onchange="load_media_file(this, 'audio')" onclick="fileInputOnClick(arguments[0])" ondragover="updateFileDragging(arguments[0], false)" ondragleave="updateFileDragging(arguments[0], true)" autocomplete="off">
+            <div class="auto-file-input">
+                <span class="auto-file-input-filename"></span>
+                <br>
+            </div>
+        </label>
+        <div class="auto-input-preview"></div>
+    </div>`;
+    return html;
+}
+
+
+function makeVideoInput(featureid, id, paramid, name, description, toggles = false, popover_button = true, can_upload = true, show_input_browser_button = true) {
+    name = escapeHtml(name);
+    featureid = featureid ? ` data-feature-require="${featureid}"` : '';
+    let [popover, featureid2] = getPopoverElemsFor(id, popover_button);
+    featureid += featureid2;
+    let html = `
+    <div class="auto-input auto-file-box"${featureid}>
+        <label class="auto-file-input-label">
+            <span class="auto-input-name">${getToggleHtml(toggles, id, name)}${translateableHtml(name)}${popover}</span>
+            ${can_upload ? `
+                <input type="text" id="${id}_pastebox" size="14" maxlength="0" placeholder="Ctrl+V: Paste Video" onpaste="onFileInputPaste(arguments[0], 'video/')">
+                <a class="auto-file-input-button basic-button" onclick="realClickFileInput('${id}')">${translateableHtml("Upload")}</a>
+            ` : ''}
+            ${show_input_browser_button ? `<a class="auto-file-input-button basic-button" onclick="inputBrowserHelper.openInputBrowser('${id}', ['video'])">${translateableHtml("Select")}</a>` : ''}
+        </label>
+        <label for="${id}" class="auto-file-label drag_video_target">
+            <input class="auto-file" type="file" accept="video/mp4, video/webm, video/quicktime, video/mov" id="${id}" data-param_id="${paramid}" onchange="load_media_file(this, 'video')" onclick="fileInputOnClick(arguments[0])" ondragover="updateFileDragging(arguments[0], false)" ondragleave="updateFileDragging(arguments[0], true)" autocomplete="off">
+            <div class="auto-file-input">
+                <span class="auto-file-input-filename"></span>
+                <br>
+            </div>
+        </label>
+        <div class="auto-input-preview"></div>
+    </div>`;
+    return html;
+}
+
+class InputBrowserHelper {
+
+    constructor() {
+        this.inputImageBrowser = null;
+        this.inputImageBrowserTargetElemId = null;
+        this.currentMediaType = ['image'];
+        this.uploadContainer = getRequiredElementById('input_image_browser_upload_container');
+    }
+
+    /** Rebuilds the modal upload row to match the current media filter (image/video vs audio-only vs video-only). */
+    rebuildModalUploadArea() {
+        let html;
+        if (this.currentMediaType.length == 1 && this.currentMediaType[0] == 'audio') {
+            html = makeAudioInput(null, 'input_browser_modal_upload', null, 'Upload to inputs', '', false, false, true, false);
+        }
+        else if (this.currentMediaType.length == 1 && this.currentMediaType[0] == 'video') {
+            html = makeVideoInput(null, 'input_browser_modal_upload', null, 'Upload to inputs', '', false, false, true, false);
+        }
+        else {
+            html = makeImageInput(null, 'input_browser_modal_upload', null, 'Upload to inputs', '', false, false, true, false);
+        }
+        this.uploadContainer.innerHTML = html;
+        let fileInput = document.getElementById('input_browser_modal_upload');
+        if (fileInput) {
+            fileInput.onchange = () => {
+                this.handleModalUpload(fileInput);
+            };
+        }
+    }
+
+    /** Reads the chosen file as a data URL and saves it under inputs/ via AddImageToHistory (same API for all media types). */
+    handleModalUpload(fileInput) {
+        let file = fileInput.files[0];
+        if (!file) {
+            return;
+        }
+        updateFileDragging({ target: fileInput }, true);
+        let reader = new FileReader();
+        reader.addEventListener('load', () => {
+            let name = file.name;
+            let format = null;
+            if (file.name.endsWith('.png')) {
+                name = name.substring(0, name.length - 4);
+                format = 'PNG';
+            }
+            else if (file.name.endsWith('.jpg')) {
+                name = name.substring(0, name.length - 4);
+                format = 'JPG';
+            }
+            else if (file.name.endsWith('.webp')) {
+                name = name.substring(0, name.length - 5);
+                format = 'WEBP';
+            }
+            let data = {
+                ['image']: reader.result,
+                ['Override Outpath Format']: `inputs/${this.inputImageBrowser.folder}/${name}`.replaceAll('[', '')
+            }
+            if (format) {
+                data['Image Format'] = format;
+            }
+            genericRequest('AddImageToHistory', data, res => {
+                clearMediaFileInput(fileInput);
+                if (this.inputImageBrowser) {
+                    this.inputImageBrowser.lightRefresh();
+                }
+                mainGenHandler.gotImageResult(res.images[0].image, res.images[0].metadata, '0');
+            });
+        }, false);
+        reader.readAsDataURL(file);
+    }
+    
+    /** Lists image files under the inputs/ directory for the input image browser. */
+    listInputFiles(path, isRefresh, callback, depth) {
+        path = path ? `inputs/${path}` : 'inputs/';
+        listOutputHistoryFolderAndFiles(path, isRefresh, (folders, files) => {
+            files = files.filter(f => this.currentMediaType.includes(getMediaType(f.data.src)));
+            callback(folders, files);
+        }, depth);
+    }
+
+    /** Describes an image for the input image browser display. */
+    describeInputFile(file) {
+        let data = describeOutputFile(file);
+        data.buttons = [];
+        return data;
+    }
+
+    /** Called when an image is selected from the input image browser. */
+    selectInputFile(file) {
+        let inputElem = getRequiredElementById(this.inputImageBrowserTargetElemId);
+        if (!inputElem) {
+            return;
+        }
+        let type = getMediaType(file.name);
+        setMediaFileDirect(inputElem, file.data.src, type, file.name, file.name, () => {
+            inputElem.dataset.filedata = file.name;
+        });
+        $('#input_image_browser_modal').modal('hide');
+    }
+
+    openInputBrowser(inputElemId, type) {
+        this.currentMediaType = type;
+        this.rebuildModalUploadArea();
+        this.inputImageBrowserTargetElemId = inputElemId;
+        if (!this.inputImageBrowser) {
+            this.inputImageBrowser = new GenPageBrowserClass('input_image_browser_container', this.listInputFiles.bind(this), 'inputimagebrowser', 'Thumbnails', this.describeInputFile.bind(this), this.selectInputFile.bind(this));
+        }
+        $('#input_image_browser_modal').modal('show');
+        this.inputImageBrowser.navigate('');
+        this.inputImageBrowser.lightRefresh();
+    }
+}
+
+inputBrowserHelper = new InputBrowserHelper();
 
 let chromeIsDumbFileName = null, chromeIsDumbFileUris = null;
 

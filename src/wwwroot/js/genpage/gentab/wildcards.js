@@ -42,7 +42,7 @@ class WildcardHelpers {
     toggleExperimentalEditor() {
         let content = null;
         if (this.contentsElem) {
-            content = getTextContent(this.contentsElem);
+            content = this.getProperEditorContent();
         }
         if (this.experimentalEditorElem.checked) {
             this.experimentalEditorSpotElem.innerHTML = '<div class="editable-textbox" id="edit_wildcard_contents" style="min-height: 15lh" contenteditable="true"></div>';
@@ -81,22 +81,13 @@ class WildcardHelpers {
         }
         this.curWildcardMenuWildcard = card;
         this.testNameElem.innerText = card.name;
-        let choice = Math.floor(Math.random() * card.options.length);
-        let val = card.options[choice];
-        this.testResultElem.value = val;
         let button = this.testAgainButtonElem;
-        if (val.includes('<')) {
-            button.disabled = true;
-            genericRequest('TestPromptFill', {'prompt': val}, data => {
-                button.disabled = false;
-                this.testResultElem.value = data.result;
-                $('#test_wildcard_modal').modal('show');
-            });
-        }
-        else {
+        button.disabled = true;
+        genericRequest('TestPromptFill', { 'prompt': `<wildcard:${card.name}>` }, data => {
             button.disabled = false;
+            this.testResultElem.value = data.result;
             $('#test_wildcard_modal').modal('show');
-        }
+        });
     }
 
     /** Test a wildcard again, using the same wildcard as before, in the same modal.
@@ -128,19 +119,73 @@ class WildcardHelpers {
             return;
         }
         let [start, end] = getTextSelRange(this.contentsElem);
-        let contents = getTextContent(this.contentsElem);
-        let lines = contents.split('\n');
+        let children = this.contentsElem.children;
+        let lines = [];
+        let nextLinePrepend = '';
+        let realLines = 0;
+        for (let child of children) {
+            let textContent = getTextContent(child);
+            if (textContent == '\n') {
+                textContent = '\u2009';
+                start++; end++;
+            }
+            if (child.classList.contains('wc_line')) {
+                lines.push(nextLinePrepend + textContent);
+                nextLinePrepend = '';
+                realLines++;
+            }
+            else if (textContent != '\\') {
+                if (textContent.startsWith('\\')) {
+                    textContent = textContent.substring(1);
+                    nextLinePrepend += textContent;
+                }
+                else if (textContent.endsWith('\\')) {
+                    textContent = textContent.substring(0, textContent.length - 1);
+                    lines[lines.length - 1] += textContent;
+                }
+                else {
+                    lines.push(textContent);
+                }
+            }
+        }
+        if (nextLinePrepend != '') {
+            lines.push(nextLinePrepend);
+        }
+        if (realLines == 0 && this.contentsElem.textContent.length > 0) {
+            lines = [];
+            lines.push(...getTextContent(this.contentsElem).trim().split('\n'));
+        }
+        if (lines.length == 0) {
+            lines = [''];
+        }
+        if (lines.length > this.contentsElem.dataset.lines) {
+            start++; end++;
+        }
+        this.contentsElem.dataset.lines = lines.length;
         let html = '';
+        let charCount = 0;
         for (let i = 0; i < lines.length; i++) {
             let line = lines[i];
+            if (line.startsWith('\u2009') && line != '\u2009') {
+                line = line.substring(1);
+                if (start > charCount) { start--; }
+                if (end > charCount) { end--; }
+            }
+            else if (line.endsWith('\u2009') && line != '\u2009') {
+                line = line.substring(0, line.length - 1);
+                if (start > charCount + line.length) { start--; }
+                if (end > charCount + line.length) { end--; }
+            }
             let trimLine = line.trim();
-            let clazz = `wc_line_${i % 2}`;
+            let clazz = `wc_line wc_line_${i % 2}`;
             if (trimLine.startsWith('#')) {
                 clazz += ' wc_line_comment';
             }
-            html += `<span class="${clazz}">${line}</span>`;
+            charCount += trimLine.length == 0 ? 1 : line.length;
+            html += `<div class="${clazz}">${trimLine.length == 0 ? '\u2009' : line}</div>`;
             if (i < lines.length - 1) {
-                html += '<br>';
+                charCount++;
+                html += '<div class="wc_line_spacer">\\</div>';
             }
         }
         this.contentsElem.innerHTML = html;
@@ -152,33 +197,59 @@ class WildcardHelpers {
         if (card == null) {
             return;
         }
-        this.curWildcardMenuWildcard = card;
-        clearImageFileInput(this.imageElem);
-        this.enableImageElem.checked = false;
-        let curImg = document.getElementById('current_image_img');
-        this.nameElem.value = card.name;
-        setTextContent(this.contentsElem, card.raw);
-        this.processContents();
-        this.errorBoxElem.innerText = '';
-        this.modalMayClose = true;
-        let run = () => {
-            triggerChangeFor(this.enableImageElem);
-            $(this.modalElem).modal('show');
-        };
-        if (curImg && curImg.tagName == 'IMG') {
-            setImageFileDirect(this.imageElem, curImg.src, 'cur', 'cur', () => {
-                this.enableImageElem.checked = false;
+        let openEditor = (fullCard) => {
+            this.curWildcardMenuWildcard = fullCard;
+            clearMediaFileInput(this.imageElem);
+            this.enableImageElem.checked = false;
+            let curImg = currentImageHelper.getCurrentImage();
+            this.nameElem.value = fullCard.name;
+            setTextContent(this.contentsElem, fullCard.raw);
+            this.processContents();
+            this.errorBoxElem.innerText = '';
+            this.modalMayClose = true;
+            let run = () => {
+                triggerChangeFor(this.enableImageElem);
+                $(this.modalElem).modal('show');
+            };
+            if (curImg && curImg.tagName == 'IMG') {
+                setMediaFileDirect(this.imageElem, curImg.src, 'image', 'cur', 'cur', () => {
+                    this.enableImageElem.checked = false;
+                    run();
+                });
+            }
+            else {
                 run();
-            });
+            }
+        };
+        if (card.raw === '') {
+            openEditor(card);
         }
         else {
-            run();
+            genericRequest('DescribeModel', { subtype: 'Wildcards', modelName: card.name }, data => {
+                openEditor(data);
+            });
         }
     }
 
+    /** Shows an error message in the wildcard modal. */
     wildcardModalError(error) {
         console.log(`Wildcard modal error: ${error}`);
         this.errorBoxElem.innerText = error;
+    }
+
+    /** Gets the proper editor content for the wildcard contents edit box, accounting for which editor mode is in use. */
+    getProperEditorContent() {
+        if (this.contentsElem.tagName == 'TEXTAREA') {
+            return this.contentsElem.value.trimEnd();
+        }
+        let children = this.contentsElem.children;
+        let content = '';
+        for (let child of children) {
+            if (child.classList.contains('wc_line')) {
+                content += getTextContent(child) + '\n';
+            }
+        }
+        return content.trimEnd();
     }
 
     /** Saves the edits to a wildcard from the modal created by {@link WildcardHelpers#editWildcard}. */
@@ -198,7 +269,7 @@ class WildcardHelpers {
             this.wildcardModalError('Cannot save a wildcard as a folder, give it a filename, or remove the trailing slash');
             return;
         }
-        let content = getTextContent(this.contentsElem).trim();
+        let content = this.getProperEditorContent();
         if (content == '') {
             this.wildcardModalError('At least one entry is required');
             return;
@@ -244,19 +315,21 @@ class WildcardHelpers {
         if (card == null) {
             return;
         }
-        let name = card.name;
-        let i = 2;
-        while (`${name.toLowerCase()} - ${i}` in this.wildcardNameCheck) {
-            i++;
-        }
-        let data = {
-            'card': `${name} - ${i}`,
-            'options': card.raw,
-            'preview_image': card.image && card.image != 'imgs/model_placeholder.jpg' ? card.image : '',
-            'preview_image_metadata': null
-        }
-        genericRequest('EditWildcard', data, resData => {
-            wildcardsBrowser.browser.refresh();
+        genericRequest('DescribeModel', { subtype: 'Wildcards', modelName: card.name }, fullCard => {
+            let name = fullCard.name;
+            let i = 2;
+            while (`${name.toLowerCase()} - ${i}` in this.wildcardNameCheck) {
+                i++;
+            }
+            let data = {
+                'card': `${name} - ${i}`,
+                'options': fullCard.raw,
+                'preview_image': fullCard.image && fullCard.image != 'imgs/model_placeholder.jpg' ? fullCard.image : '',
+                'preview_image_metadata': null
+            }
+            genericRequest('EditWildcard', data, resData => {
+                wildcardsBrowser.browser.refresh();
+            });
         });
     }
 
@@ -275,18 +348,18 @@ class WildcardHelpers {
         }
         let prefix = promptBox.value.substring(0, cursorPos);
         let suffix = promptBox.value.substring(cursorPos);
-        let trimmed = prefix.trim();
+        let trimmed = trimSpaces(prefix);
         let match = this.matchWildcard(trimmed, model.name);
         if (match && match.length > 0) {
             let last = match[match.length - 1];
-            if (trimmed.endsWith(last.trim())) {
-                promptBox.value = (trimmed.substring(0, trimmed.length - last.length).trim() + ' ' + suffix).trim();
+            if (trimmed.endsWith(trimSpaces(last))) {
+                promptBox.value = (trimSpaces(trimmed.substring(0, trimmed.length - last.length)) + ' ' + suffix).trim();
                 triggerChangeFor(promptBox);
                 return;
             }
         }
         let wildcardText = `<wildcard:${model.name}>`;
-        promptBox.value = `${prefix.trim()} ${wildcardText} ${suffix.trim()}`.trim();
+        promptBox.value = `${trimSpaces(prefix)} ${wildcardText} ${trimSpaces(suffix)}`.trim();
         promptBox.selectionStart = cursorPos + wildcardText.length + 1;
         promptBox.selectionEnd = cursorPos + wildcardText.length + 1;
         promptBox.focus();
@@ -314,7 +387,14 @@ class WildcardHelpers {
             delete this.wildcardDataCache[name + "____READ_NOW"];
         }
         genericRequest('DescribeModel', { subtype: 'Wildcards', modelName: name }, data => {
-            giveResult(data.options);
+            giveResult(data.raw.split('\n').map(line => {
+                line = line.trim();
+                let comment = line.indexOf('#');
+                if (comment != -1) {
+                    line = line.substring(0, comment).trim();
+                }
+                return line;
+            }).filter(line => line));
         }, 0, e => giveResult(null));
         return result;
     }

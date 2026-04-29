@@ -1,4 +1,4 @@
-﻿using FreneticUtilities.FreneticExtensions;
+using FreneticUtilities.FreneticExtensions;
 using FreneticUtilities.FreneticToolkit;
 using SwarmUI.Core;
 using SwarmUI.Utils;
@@ -118,14 +118,20 @@ public class T2IPromptHandling
     public static bool TryInterpretNumberRange(string inputVal, PromptTagContext context, out string number)
     {
         (string preDash, string postDash) = inputVal.BeforeAndAfter('-');
-        if (long.TryParse(preDash.Trim(), out long int1) && long.TryParse(postDash.Trim(), out long int2))
+        preDash = preDash.Trim();
+        postDash = postDash.Trim();
+        if (long.TryParse(preDash, out long int1) && long.TryParse(postDash, out long int2))
         {
             number = $"{context.Input.GetWildcardRandom().NextInt64(int1, int2 + 1)}";
             return true;
         }
-        if (double.TryParse(preDash.Trim(), out double num1) && double.TryParse(postDash.Trim(), out double num2))
+        if (double.TryParse(preDash, out double num1) && double.TryParse(postDash, out double num2))
         {
-            number = $"{context.Input.GetWildcardRandom().NextDouble() * (num2 - num1) + num1}";
+            int decimals1 = preDash.Contains('.') ? preDash.Length - preDash.IndexOf('.') : 0;
+            int decimals2 = postDash.Contains('.') ? postDash.Length - postDash.IndexOf('.') : 0;
+            int useDecimals = Math.Max(decimals1, decimals2);
+            double randVal = context.Input.GetWildcardRandom().NextDouble() * (num2 - num1) + num1;
+            number = randVal.ToString($"F{useDecimals - 1}");
             return true;
         }
         number = null;
@@ -516,7 +522,7 @@ public class T2IPromptHandling
             string matched = T2IParamTypes.GetBestModelInList(lora, context.Loras);
             if (matched is null)
             {
-                context.TrackWarning($"Lora '{lora}' does not exist and will be ignored.");
+                context.TrackWarning($"Lora '{lora}' does not exist and will be ignored (out of {context.Loras.Length} existing loras).");
                 return null;
             }
             if (matched.EndsWith(".safetensors"))
@@ -603,7 +609,7 @@ public class T2IPromptHandling
             context.SectionID = T2IParamInput.SectionID_VideoSwap;
             return $"<videoswap//cid={T2IParamInput.SectionID_VideoSwap}>";
         };
-        PromptTagLengthEstimators["video"] = estimateAsSectionBreak;
+        PromptTagLengthEstimators["videoswap"] = estimateAsSectionBreak;
         string autoConfine(string data, PromptTagContext context)
         {
             if (context.SectionID < 10)

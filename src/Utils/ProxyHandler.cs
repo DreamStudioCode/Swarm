@@ -1,4 +1,4 @@
-﻿using FreneticUtilities.FreneticExtensions;
+using FreneticUtilities.FreneticExtensions;
 using SwarmUI.Core;
 using System.Diagnostics;
 using System.IO;
@@ -77,7 +77,14 @@ public class PublicProxyHandler
                 string line;
                 while ((line = sr.ReadLine()) is not null)
                 {
-                    Logs.Debug($"{Name} says: {line}");
+                    if (Name == "Ngrok" && line.Contains("lvl=info msg=\"join connections\" obj=join id="))
+                    {
+                        Logs.Verbose($"{Name} says: {line}");
+                    }
+                    else
+                    {
+                        Logs.Debug($"{Name} says: {line}");
+                    }
                     if (Name == "Ngrok")
                     {
                         string[] parts = line.SplitFast(' ');

@@ -18,8 +18,9 @@
         <div id="text_prompt_segment_other_inputs"></div>
     </div>
     <div class="modal-footer">
+        <span id="text_prompt_segment_error" class="modal_error_bottom"></span>
         <button type="button" class="btn btn-secondary basic-button translate" onclick="$('#text_prompt_segment_modal').modal('hide')">Cancel</button>
-        <button type="button" class="btn btn-primary basic-button translate" onclick="promptPlusButton.segmentModalSubmit()">Add</button>
+        <button type="button" id="text_prompt_segment_add_button" class="btn btn-primary basic-button translate" onclick="promptPlusButton.segmentModalSubmit()">Add</button>
     </div>
 @WebUtil.ModalFooter()
 @WebUtil.ModalHeader("text_prompt_region_modal", "Add Prompt Syntax: Regional Prompt")
@@ -155,11 +156,20 @@
             <option value="3">VideoSwap</option>
         </select></div>
         Description: <textarea class="auto-text auto-text-block translate" id="edit_model_description" rows="3" placeholder="Model description text..."></textarea>
+        <div>Linked Preset: <select id="edit_model_preset_id" class="modal_text_extra"></select></div>
         <div id="edit_model_image_block"></div>
     </div>
     <div class="modal-footer">
         <button type="button" class="btn btn-primary basic-button translate" onclick="save_edit_model()">Save</button>
         <button type="button" class="btn btn-secondary basic-button translate" onclick="$('#edit_model_modal').modal('hide')">Cancel</button>
+    </div>
+@WebUtil.ModalFooter()
+@WebUtil.ModalHeader("view_raw_header_modal", """Raw Header for <span id="view_raw_header_modal_title"></span>""")
+    <div class="modal-body">
+        <div class="view_raw_header_modal_content"><pre id="view_raw_header_modal_content"></pre></div>
+    </div>
+    <div class="modal-footer">
+        <button type="button" class="btn btn-secondary basic-button translate" onclick="$('#view_raw_header_modal').modal('hide')">Close</button>
     </div>
 @WebUtil.ModalFooter()
 @WebUtil.ModalHeader("edit_wildcard_modal", """Edit Wildcard: <input type="text" class="modal_text_extra" id="edit_wildcard_name" placeholder="Wildcard Name" />""")
@@ -247,6 +257,41 @@
     </div>
 @WebUtil.ModalFooter()
 
+<!-- =================================== Input Image Browser Modal =================================== -->
+
+@WebUtil.ModalHeader("input_image_browser_modal", "Select From Inputs")
+    <div class="modal-body input-image-browser-modal-body">
+        <div id="input_image_browser_upload_container" class="input-image-browser-upload-bar"></div>
+        <div id="input_image_browser_container" class="input-image-browser-container"></div>
+    </div>
+    <div class="modal-footer">
+        <button type="button" class="btn btn-secondary basic-button translate" onclick="$('#input_image_browser_modal').modal('hide')">Cancel</button>
+    </div>
+@WebUtil.ModalFooter()
+
+<!-- =================================== Debug Modals =================================== -->
+
+@WebUtil.ModalHeader("image_editor_debug_modal", "Debug Images")
+    <div class="modal-body" style="max-height:70vh;overflow-y:auto;">
+        <div id="image_editor_debug_images"></div>
+    </div>
+    <div class="modal-footer">
+        <button type="button" class="btn btn-secondary basic-button translate" onclick="$('#image_editor_debug_modal').modal('hide')">Close</button>
+    </div>
+@WebUtil.ModalFooter()
+@WebUtil.ModalHeader("image_editor_paste_modal", "Paste Image as Layer")
+    <div class="modal-body">
+        <span class="translate">Your browser has not allowed Swarm to directly access your clipboard. Instead, paste an image from your clipboard into the box below with CTRL+V to add it as a new layer.</span>
+        <br><br>
+        <label class="auto-file-input-label">
+            <input type="text" id="image_editor_paste_pastebox" class="auto-text auto-text-block" size="14" maxlength="0" placeholder="Ctrl+V: Paste Image" autocomplete="off" />
+        </label>
+    </div>
+    <div class="modal-footer">
+        <button type="button" class="btn btn-secondary basic-button translate" onclick="$('#image_editor_paste_modal').modal('hide')">Cancel</button>
+    </div>
+@WebUtil.ModalFooter()
+
 <!-- =================================== Preset Modals =================================== -->
 
 @WebUtil.ModalHeader("export_presets_modal", "Export Presets")
@@ -291,12 +336,12 @@
         <p class="translate">Select the checkbox next to inputs you want included in the preset.<br>By default this will override values entirely. For text inputs, use <code>{value}</code> to include the current UI value instead of overriding.</p>
         <div id="new_preset_modal_inputs"></div>
         <div class="advanced_input_checkbox advanced_input_checkbox_presets">
-            <input type="checkbox" id="preset_advanced_options_checkbox" onclick="preset_toggle_advanced()"/>
+            <input type="checkbox" id="preset_advanced_options_checkbox" onclick="preset_toggle_advanced()" autocomplete="off"/>
             <span class="translate" onclick="preset_toggle_advanced_checkbox_manual()">Display Advanced Options?</span>
         </div>
         <div id="new_preset_modal_advanced_inputs" style="display:none;"></div>
         <div class="advanced_input_checkbox advanced_input_checkbox_presets">
-            <input type="checkbox" id="preset_hidden_options_checkbox" onclick="preset_toggle_hidden()"/>
+            <input type="checkbox" id="preset_hidden_options_checkbox" onclick="preset_toggle_hidden()" autocomplete="off"/>
             <span class="translate" onclick="preset_toggle_hidden_checkbox_manual()">Display Normally-Hidden Options?</span>
         </div>
         <div id="new_preset_modal_hidden_inputs" style="display:none;"></div>

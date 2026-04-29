@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
 
-# Ensure correct local path.
-SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-cd "$SCRIPT_DIR/.."
-
 source ./launchtools/linux-path-fix.sh
 
 mkdir -p ./src/bin
@@ -32,6 +28,7 @@ if [ -f ./src/bin/must_rebuild ]; then
         rm -rf ./src/bin/live_release_backup
         mv ./src/bin/live_release ./src/bin/live_release_backup
     fi
+    rm -rf ./src/bin/extensions
     rm ./src/bin/must_rebuild
 fi
 

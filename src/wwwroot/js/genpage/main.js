@@ -29,7 +29,7 @@ let autoCompletionsOptimize = false;
 
 let mainGenHandler = new GenerateHandler();
 
-let pageTitleSuffix = document.title.split(' - ')[1];
+let pageTitleSuffix = document.title.split(' - ').slice(1).join(' - ');
 let curAutoTitle = "Page is loading...";
 
 let featureSetChangedCallbacks = [];
@@ -80,6 +80,7 @@ function updateCurrentStatusDirect(data) {
         total = 0;
     }
     getRequiredElementById('alt_interrupt_button').classList.toggle('interrupt-button-none', total == 0);
+    getRequiredElementById('simple_interrupt_button').classList.toggle('interrupt-button-none', total == 0);
     let oldInterruptButton = document.getElementById('interrupt_button');
     if (oldInterruptButton) {
         oldInterruptButton.classList.toggle('interrupt-button-none', total == 0);
@@ -168,7 +169,7 @@ function reviseStatusBar() {
 
 /** Array of functions called on key events (eg model selection change) to update displayed features.
  * Return format [array addMe, array removeMe]. For example `[[], ['sd3']]` indicates that the 'sd3' feature flag is not currently supported (eg by current model).
- * Can use 'curModelCompatClass', 'curModelArch' to check the current model architecture. Note these values may be null.
+ * Can use 'currentModelHelper.curCompatClass', 'currentModelHelper.curArch' to check the current model architecture. Note these values may be null.
  * */
 let featureSetChangers = [];
 
@@ -176,7 +177,7 @@ function reviseBackendFeatureSet() {
     currentBackendFeatureSet = Array.from(currentBackendFeatureSet);
     let addMe = [], removeMe = [];
     function doCompatFeature(compatClass, featureFlag) {
-        if (curModelCompatClass && curModelCompatClass.startsWith(compatClass)) {
+        if (currentModelHelper.curCompatClass && currentModelHelper.curCompatClass.startsWith(compatClass)) {
             addMe.push(featureFlag);
         }
         else {
@@ -185,7 +186,7 @@ function reviseBackendFeatureSet() {
     }
     function doAnyCompatFeature(compatClasses, featureFlag) {
         for (let compatClass of compatClasses) {
-            if (curModelCompatClass && curModelCompatClass.startsWith(compatClass)) {
+            if (currentModelHelper.curCompatClass && currentModelHelper.curCompatClass.startsWith(compatClass)) {
                 addMe.push(featureFlag);
                 return;
             }
@@ -194,7 +195,7 @@ function reviseBackendFeatureSet() {
     }
     function doAnyArchFeature(archIds, featureFlag) {
         for (let archId of archIds) {
-            if (curModelArch && curModelArch.startsWith(archId)) {
+            if (currentModelHelper.curArch && currentModelHelper.curArch.startsWith(archId)) {
                 addMe.push(featureFlag);
                 return;
             }
@@ -203,9 +204,10 @@ function reviseBackendFeatureSet() {
     }
     doCompatFeature('stable-diffusion-v3', 'sd3');
     doCompatFeature('stable-cascade-v1', 'cascade');
-    doAnyArchFeature(['Flux.1-dev', 'hunyuan-video'], 'flux-dev');
+    doAnyArchFeature(['Flux.1-dev', 'flux.2-dev', 'flux.2-klein-4b', 'flux.2-klein-9b', 'hunyuan-video'], 'flux-dev');
     doCompatFeature('stable-diffusion-xl-v1', 'sdxl');
-    doAnyCompatFeature(['genmo-mochi-1', 'lightricks-ltx-video', 'hunyuan-video', 'nvidia-cosmos-1', `wan-21`, `wan-22`], 'text2video');
+    doAnyCompatFeature(['genmo-mochi-1', 'lightricks-ltx-video', 'hunyuan-video', 'nvidia-cosmos-1', `wan-21`, `wan-22`, 'kandinsky5-vidlite', 'kandinsky5-vidpro'], 'text2video');
+    doAnyCompatFeature(['ace-step-1_5'], 'text2audio');
     for (let changer of featureSetChangers) {
         let [add, remove] = changer();
         addMe.push(...add);
@@ -335,7 +337,7 @@ function loadUserData(callback) {
             for (let val of data.autocompletions) {
                 let split = val.split('\n');
                 let datalist = autoCompletionsList[val[0]];
-                let entry = { name: split[0], low: split[1].replaceAll(' ', '_').toLowerCase(), clean: split[1], raw: val, count: 0 };
+                let entry = { name: split[0], low: split[1].replaceAll(' ', '_').toLowerCase(), clean: split[1], raw: val, count: 0, tag: 0 };
                 if (split.length > 2) {
                     entry.tag = split[2];
                 }
@@ -373,8 +375,9 @@ function loadUserData(callback) {
             language = data.language;
         }
         allPresetsUnsorted = data.presets;
+        modelPresetLinkManager.loadFromServer(data.model_preset_links);
         sortPresets();
-        presetBrowser.update();
+        presetBrowser.lightRefresh();
         if (shouldApplyDefault) {
             shouldApplyDefault = false;
             let defaultPreset = getPresetByTitle('default');
@@ -390,23 +393,14 @@ function loadUserData(callback) {
 }
 
 function updateAllModels(models) {
-    coreModelMap = models;
-    allModels = models['Stable-Diffusion'];
-    let selector = getRequiredElementById('current_model');
-    let selectorVal = selector.value;
-    selector.innerHTML = '';
-    let emptyOption = document.createElement('option');
-    emptyOption.value = '';
-    emptyOption.innerText = '';
-    selector.appendChild(emptyOption);
-    for (let model of allModels) {
-        let option = document.createElement('option');
-        let clean = cleanModelName(model);
-        option.value = clean;
-        option.innerText = clean;
-        selector.appendChild(option);
+    simplifiedMap = {};
+    for (let key of Object.keys(models)) {
+        simplifiedMap[key] = models[key].map(model => {
+            return model[0];
+        });
     }
-    selector.value = selectorVal;
+    coreModelMap = simplifiedMap;
+    allModels = simplifiedMap['Stable-Diffusion'];
     pickle2safetensor_load();
     modelDownloader.reloadFolders();
 }
@@ -481,15 +475,17 @@ function installTensorRT() {
     });
 }
 
-function clearPromptImages() {
+function clearPromptImages(hideRevision = true) {
     let promptImageArea = getRequiredElementById('alt_prompt_image_area');
     promptImageArea.innerHTML = '';
     let clearButton = getRequiredElementById('alt_prompt_image_clear_button');
     clearButton.style.display = 'none';
-    autoRevealRevision();
+    if (hideRevision) {
+        hideRevisionInputs(false);
+    }
 }
 
-function hideRevisionInputs() {
+function hideRevisionInputs(doClear = true) {
     let revisionGroup = document.getElementById('input_group_imageprompting');
     let revisionToggler = document.getElementById('input_group_content_imageprompting_toggle');
     if (revisionGroup) {
@@ -499,6 +495,9 @@ function hideRevisionInputs() {
         revisionGroup.style.display = 'none';
     }
     genTabLayout.altPromptSizeHandle();
+    if (doClear) {
+        clearPromptImages(false);
+    }
 }
 
 function showRevisionInputs(toggleOn = false) {
@@ -526,30 +525,70 @@ function autoRevealRevision() {
     }
 }
 
+let promptImageReplaceTarget = null;
+
+function setPromptImageReplaceTarget(target) {
+    if (promptImageReplaceTarget) {
+        promptImageReplaceTarget.classList.remove('image-drop-replace-target');
+    }
+    promptImageReplaceTarget = target;
+    if (promptImageReplaceTarget) {
+        promptImageReplaceTarget.classList.add('image-drop-replace-target');
+    }
+}
+
+function getPromptImageDropReplaceTarget(e) {
+    if (uiImprover.getFileList(e.dataTransfer, e).length == 0) {
+        return null;
+    }
+    let target = e.target.closest('.alt-prompt-image-container');
+    if (!target || !target.querySelector('.alt-prompt-image')) {
+        return null;
+    }
+    return target;
+}
+
 function imagePromptAddImage(file) {
-    let clearButton = getRequiredElementById('alt_prompt_image_clear_button');
-    let promptImageArea = getRequiredElementById('alt_prompt_image_area');
+    let replaceTarget = promptImageReplaceTarget;
+    setPromptImageReplaceTarget(null);
+    let existingImage = replaceTarget ? replaceTarget.querySelector('.alt-prompt-image') : null;
+    if (replaceTarget && !existingImage) {
+        replaceTarget = null;
+    }
     let reader = new FileReader();
     reader.onload = (e) => {
         let data = e.target.result;
-        let imageContainer = createDiv(null, 'alt-prompt-image-container');
-        let imageRemoveButton = createSpan(null, 'alt-prompt-image-container-remove-button', '&times;');
-        imageRemoveButton.addEventListener('click', (e) => {
-            imageContainer.remove();
-            autoRevealRevision();
-            genTabLayout.altPromptSizeHandle();
-        });
-        imageRemoveButton.title = 'Remove this image';
-        imageContainer.appendChild(imageRemoveButton);
-        let imageObject = new Image();
-        imageObject.src = data;
-        imageObject.height = 128;
-        imageObject.className = 'alt-prompt-image';
-        imageObject.dataset.filedata = data;
-        imageContainer.appendChild(imageObject);
+        if (replaceTarget && !replaceTarget.isConnected) {
+            imagePromptAddImage(file);
+            return;
+        }
+        if (existingImage) {
+            existingImage.src = data;
+            existingImage.height = 128;
+            existingImage.dataset.filedata = data;
+        }
+        else {
+            let promptImageArea = getRequiredElementById('alt_prompt_image_area');
+            let imageContainer = createDiv(null, 'alt-prompt-image-container');
+            let imageRemoveButton = createSpan(null, 'alt-prompt-image-container-remove-button', '&times;');
+            imageRemoveButton.addEventListener('click', () => {
+                imageContainer.remove();
+                autoRevealRevision();
+                genTabLayout.altPromptSizeHandle();
+            });
+            imageRemoveButton.title = 'Remove this image';
+            imageContainer.appendChild(imageRemoveButton);
+            let imageObject = new Image();
+            imageObject.src = data;
+            imageObject.height = 128;
+            imageObject.className = 'alt-prompt-image';
+            imageObject.dataset.filedata = data;
+            imageContainer.appendChild(imageObject);
+            promptImageArea.appendChild(imageContainer);
+        }
+        let clearButton = getRequiredElementById('alt_prompt_image_clear_button');
         clearButton.style.display = '';
         showRevisionInputs(true);
-        promptImageArea.appendChild(imageContainer);
         genTabLayout.altPromptSizeHandle();
     };
     reader.readAsDataURL(file);
@@ -576,6 +615,25 @@ function imagePromptInputHandler() {
             }
         }
     });
+    let updateReplaceTarget = (e) => {
+        setPromptImageReplaceTarget(getPromptImageDropReplaceTarget(e));
+    };
+    dragArea.addEventListener('dragenter', updateReplaceTarget, true);
+    dragArea.addEventListener('dragover', updateReplaceTarget, true);
+    dragArea.addEventListener('dragleave', (e) => {
+        if (!dragArea.contains(e.relatedTarget)) {
+            setPromptImageReplaceTarget(null);
+        }
+    }, true);
+    dragArea.addEventListener('drop', (e) => {
+        setPromptImageReplaceTarget(getPromptImageDropReplaceTarget(e));
+    }, true);
+    document.addEventListener('drop', () => {
+        setPromptImageReplaceTarget(null);
+    }, true);
+    document.addEventListener('dragend', () => {
+        setPromptImageReplaceTarget(null);
+    }, true);
 }
 imagePromptInputHandler();
 
@@ -754,6 +812,7 @@ function genpageLoad() {
         imageHistoryBrowser.navigate('');
         initialModelListLoad();
         genericRequest('ListT2IParams', {}, data => {
+            modelsHelpers.loadClassesFromServer(data.models, data.model_compat_classes, data.model_classes);
             updateAllModels(data.models);
             wildcardHelpers.newWildcardList(data.wildcards);
             [rawGenParamTypesFromServer, rawGroupMapFromServer] = buildParameterList(data.list, data.groups);
@@ -768,7 +827,7 @@ function genpageLoad() {
             reviseStatusBar();
             getRequiredElementById('advanced_options_checkbox').checked = localStorage.getItem('display_advanced') == 'true';
             toggle_advanced();
-            setCurrentModel();
+            currentModelHelper.ensureCurrentModel();
             loadUserData(() => {
                 if (permissions.hasPermission('view_backends_list')) {
                     loadBackendTypesMenu();

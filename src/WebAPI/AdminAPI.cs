@@ -1,4 +1,4 @@
-﻿using FreneticUtilities.FreneticDataSyntax;
+using FreneticUtilities.FreneticDataSyntax;
 using FreneticUtilities.FreneticExtensions;
 using FreneticUtilities.FreneticToolkit;
 using Hardware.Info;
@@ -36,9 +36,11 @@ public static class AdminAPI
         API.RegisterAPICall(InstallExtension, true, Permissions.ManageExtensions);
         API.RegisterAPICall(UpdateExtension, true, Permissions.ManageExtensions);
         API.RegisterAPICall(UninstallExtension, true, Permissions.ManageExtensions);
+        API.RegisterAPICall(SetExtensionEnabled, true, Permissions.ManageExtensions);
         API.RegisterAPICall(AdminListUsers, false, Permissions.ManageUsers);
         API.RegisterAPICall(AdminAddUser, true, Permissions.ManageUsers);
         API.RegisterAPICall(AdminSetUserPassword, true, Permissions.ManageUsers);
+        API.RegisterAPICall(AdminSetUserOAuthEmail, true, Permissions.ManageUsers);
         API.RegisterAPICall(AdminChangeUserSettings, true, Permissions.ManageUsers);
         API.RegisterAPICall(AdminDeleteUser, true, Permissions.ManageUsers);
         API.RegisterAPICall(AdminGetUserInfo, false, Permissions.ManageUsers);
@@ -49,6 +51,12 @@ public static class AdminAPI
         API.RegisterAPICall(AdminDeleteRole, true, Permissions.ConfigureRoles);
         API.RegisterAPICall(AdminListPermissions, false, Permissions.ConfigureRoles);
     }
+
+    /// <summary>Async actions that check for backend updates, and add them to the JObject (within the lock!).</summary>
+    public static List<Func<LockObject, JObject, Task>> CheckForBackendUpdates = [];
+
+    /// <summary>Async actions that apply backend updates if backend is in the given array of requested updates, and trigger a counter action when updates are successful or a log when failed.</summary>
+    public static List<Func<Action, Action<string>, bool, string[], Task>> DoBackendUpdates = [];
 
     public static JObject AutoConfigToParamData(AutoConfiguration config, bool hideRestricted = false)
     {
@@ -62,6 +70,7 @@ public static class AdminAPI
                 throw new Exception($"[ServerSettings] Unknown type '{data.Field.FieldType}' for field '{data.Field.Name}'!");
             }
             object val = config.GetFieldValueOrDefault<object>(key);
+            object defVal = config.TryGetFieldInternalData(key, out _).Default;
             if (val is AutoConfiguration subConf)
             {
                 val = AutoConfigToParamData(subConf);
@@ -81,7 +90,7 @@ public static class AdminAPI
                 typeName = typeName == "LIST" ? "LIST" : "DROPDOWN";
                 val_names = data.Field.GetCustomAttribute<SettingsOptionsAttribute>()?.Names ?? null;
             }
-            output[key] = new JObject()
+            JObject settingObj = new()
             {
                 ["type"] = typeName.ToLowerFast(),
                 ["name"] = data.Name,
@@ -91,6 +100,11 @@ public static class AdminAPI
                 ["value_names"] = val_names == null ? null : new JArray(val_names),
                 ["is_secret"] = isSecret
             };
+            if (!data.IsSection && !isSecret)
+            {
+                settingObj["default_value"] = JToken.FromObject(defVal is List<string> defList ? defList.JoinString(" || ") : defVal);
+            }
+            output[key] = settingObj;
         }
         return output;
     }
@@ -399,7 +413,7 @@ public static class AdminAPI
     public static async Task<JObject> GetServerResourceInfo(Session session)
     {
         NvidiaUtil.NvidiaInfo[] gpuInfo = NvidiaUtil.QueryNvidia();
-        MemoryStatus memStatus = SystemStatusMonitor.HardwareInfo.MemoryStatus;
+        MemoryStatus memStatus = SystemStatusMonitor.HardwareInfo?.MemoryStatus ?? new();
         JObject result = new()
         {
             ["cpu"] = new JObject()
@@ -566,51 +580,99 @@ public static class AdminAPI
         return new JObject() { ["users"] = list };
     }
 
+    public static async Task<JObject> GetUpdatesDataFor(string folder, bool nullOnNone, bool tryPatches = true, string headTarget = null)
+    {
+        headTarget ??= "HEAD";
+        string fetchResult = await Utilities.RunGitProcess("fetch", folder);
+        Logs.Debug($"Git fetch of {folder} says: {fetchResult}");
+        string commitRaw = (await Utilities.RunGitProcess($"rev-list {headTarget}..origin", folder)).Trim().Replace("\r", "");
+        string[] commits;
+        if (commitRaw.StartsWith("fatal: "))
+        {
+            Logs.Error($"Git rev-list failed for folder '{folder}' with message: {commitRaw}");
+            if (tryPatches)
+            {
+                string autofixme = await Utilities.RunGitProcess("remote set-head origin --auto", folder);
+                Logs.Debug($"Autofix for git rev-list failure: {autofixme}");
+                return await GetUpdatesDataFor(folder, nullOnNone, false, headTarget);
+            }
+            commits = ["(unknown revisions, see error in logs. Use Aggressive Update to auto-resolve most issues.)"];
+            return new JObject() { ["count"] = 1, ["preview"] = JArray.FromObject(commits) };
+        }
+        commits = commitRaw.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        int updatesCount = commits.Length;
+        if (commits.Length > 6)
+        {
+            commits = [.. commits[0..2], "...", .. commits[^3..]];
+        }
+        if (nullOnNone && updatesCount == 0)
+        {
+            return null;
+        }
+        for (int i = 0; i < commits.Length; i++)
+        {
+            if (commits[i].Length > 5)
+            {
+                string showOutput = await Utilities.RunGitProcess($"show --no-patch --format=%h^%ci^%s {commits[i]}", folder);
+                string[] parts = showOutput.SplitFast('^', 2);
+                if (parts.Length < 2)
+                {
+                    Logs.Error($"Cannot parse commit details for commit '{commits[i]}': yielded '{showOutput}' with split {parts.Length}");
+                    commits[i] = $"{commits[i]}: (unknown commit details, see error in logs)";
+                }
+                else
+                {
+                    DateTimeOffset date = DateTimeOffset.Parse(parts[1].Trim()).ToUniversalTime();
+                    string dateFormat = $"{date:yyyy-MM-dd HH:mm:ss}";
+                    commits[i] = $"{dateFormat}: {parts[2]}";
+                }
+            }
+        }
+        List<string> updatesPreview = [.. commits];
+        return new JObject()
+        {
+            ["count"] = updatesCount,
+            ["preview"] = JArray.FromObject(updatesPreview)
+        };
+    }
+
     [API.APIDescription("Do a scan for any available updates to SwarmUI, extensions, or backends.",
         """
-            "server_updates_count": 0,
-            "server_updates_preview": ["name1", ..., "name6"], // capped to just a few
-            "extension_updates": ["name1", ...],
-            "backend_updates": ["name1", ...]
+            "server": {
+                "count": 0,
+                "preview": ["name1", ..., "name6"] // capped to just a few
+            },
+            "extensions": {
+                "MyExtension": {
+                    "count": 0,
+                    "preview": []
+                }
+            },
+            "backends": {
+                "MyBackend": {
+                    "count": 0,
+                    "preview": []
+                }
+            }
         """)]
     public static async Task<JObject> CheckForUpdates(Session session)
     {
         Logs.Debug($"User {session.User.UserID} requested check for updates.");
         List<Task> fetchTasks = [];
         LockObject locker = new();
-        List<string> extensions = [];
-        int serverUpdates = 0;
-        List<string> updatesPreview = [];
-        List<string> backendUpdates = [];
+        JObject result = [], extensions = [], backends = [];
         fetchTasks.Add(Utilities.RunCheckedTask(async () =>
         {
-            await Utilities.RunGitProcess("fetch");
-            string[] commits = (await Utilities.RunGitProcess("rev-list HEAD..origin")).Trim().Replace("\r", "").Split('\n', StringSplitOptions.RemoveEmptyEntries);
-            serverUpdates = commits.Length;
-            if (commits.Length > 6)
+            JObject serverData = await GetUpdatesDataFor(Environment.CurrentDirectory, false);
+            if (serverData is null)
             {
-                commits = [.. commits[0..2], "...", .. commits[^3..]];
+                return;
             }
-            for (int i = 0; i < commits.Length; i++)
+            lock (locker)
             {
-                if (commits[i].Length > 5)
-                {
-                    string showOutput = await Utilities.RunGitProcess($"show --no-patch --format=%h^%ci^%s {commits[i]}");
-                    string[] parts = showOutput.SplitFast('^', 2);
-                    if (parts.Length < 2)
-                    {
-                        Logs.Error($"Cannot parse commit details for commit '{commits[i]}': yielded '{showOutput}' with split {parts.Length}");
-                        commits[i] = $"{commits[i]}: (unknown commit details, see error in logs)";
-                    }
-                    else
-                    {
-                        DateTimeOffset date = DateTimeOffset.Parse(parts[1].Trim()).ToUniversalTime();
-                        string dateFormat = $"{date:yyyy-MM-dd HH:mm:ss}";
-                        commits[i] = $"{dateFormat}: {parts[2]}";
-                    }
-                }
+                result["server"] = serverData;
             }
-            updatesPreview = [.. commits];
+            Logs.Debug($"Check for updates found {serverData["count"]} updates to SwarmUI core.");
         }, "check for core update"));
         foreach (Extension extension in Program.Extensions.Extensions.Where(e => !e.IsCore))
         {
@@ -618,29 +680,90 @@ public static class AdminAPI
             fetchTasks.Add(Utilities.RunCheckedTask(async () =>
             {
                 string path = Path.GetFullPath(Utilities.CombinePathWithAbsolute(Environment.CurrentDirectory, ext.FilePath));
-                await Utilities.RunGitProcess("fetch", path);
-                string priorHash = (await Utilities.RunGitProcess("rev-parse HEAD", path)).Trim();
-                string remoteHash = (await Utilities.RunGitProcess("rev-parse origin", path)).Trim();
-                Logs.Debug($"Update checker: current hash for {ext.ExtensionName} is {priorHash}, origin hash is {remoteHash}");
-                if (priorHash != remoteHash)
+                JObject extData = await GetUpdatesDataFor(path, true);
+                if (extData is null)
                 {
-                    lock (locker)
-                    {
-                        extensions.Add(ext.ExtensionName);
-                    }
+                    Logs.Debug($"Check for updates found no updates to extension '{ext.ExtensionName}'.");
+                    return;
                 }
+                lock (locker)
+                {
+                    extensions[ext.ExtensionName] = extData;
+                }
+                Logs.Debug($"Check for updates found {extData["count"]} updates to extension '{ext.ExtensionName}'.");
             }, "check for extension update"));
         }
-        await Task.WhenAll(fetchTasks);
-        Logs.Debug($"Update check complete - {serverUpdates} Swarm commits, {extensions.Count} extensions, {backendUpdates.Count} backends.");
-        // TODO: Backends
-        return new()
+        foreach (Func<LockObject, JObject, Task> backendCheck in CheckForBackendUpdates)
         {
-            ["server_updates_count"] = serverUpdates,
-            ["server_updates_preview"] = JArray.FromObject(updatesPreview),
-            ["extension_updates"] = JArray.FromObject(extensions),
-            ["backend_updates"] = JArray.FromObject(backendUpdates)
-        };
+            fetchTasks.Add(Utilities.RunCheckedTask(async () =>
+            {
+                await backendCheck(locker, backends);
+            }, "check for backend update"));
+        }
+        await Task.WhenAll(fetchTasks);
+        result["extensions"] = extensions;
+        result["backends"] = backends;
+        return result;
+    }
+
+    public static async Task DoGitUpdate(string folder, bool aggressive, Action didWork, Action<string> didFail, string targetCommit = null)
+    {
+        string priorHash = (await Utilities.RunGitProcess("rev-parse HEAD", folder)).Trim();
+        if (targetCommit is not null && priorHash == targetCommit)
+        {
+            Logs.Debug($"Already at target commit {targetCommit} for folder {folder}, skipping update.");
+            return;
+        }
+        string pullResult = await Utilities.RunGitProcess(aggressive ? "pull --autostash" : "pull", folder);
+        Logs.Debug($"Git pull of {folder} says: {pullResult}");
+        if (aggressive)
+        {
+            if (pullResult.Contains("There is no tracking information for the current branch") || pullResult.Contains("You are not currently on a branch"))
+            {
+                string checkout = await Utilities.RunGitProcess("checkout master --force", folder);
+                Logs.Debug($"Aggressive checkout: {checkout}");
+                string branch = await Utilities.RunGitProcess("branch --set-upstream-to=origin/master master", folder);
+                Logs.Debug($"Aggressive set-branch: {branch}");
+            }
+            string fetch = await Utilities.RunGitProcess("fetch", folder);
+            Logs.Debug($"Aggressive fetch: {fetch}");
+            string addAny = await Utilities.RunGitProcess("add .", folder); // reset excludes untracked, so add all
+            Logs.Debug($"Aggressive add: {addAny}");
+            string reset = await Utilities.RunGitProcess("reset --hard HEAD", folder);
+            Logs.Debug($"Aggressive reset: {reset}");
+            string repull = await Utilities.RunGitProcess("pull --autostash", folder); // Should already be good, but make sure
+            Logs.Debug($"Aggressive repull: {repull}");
+        }
+        else
+        {
+            if (pullResult.Contains("error: ") && pullResult.Contains("files would be overwritten by merge:"))
+            {
+                didFail($"Update for folder '{folder}' failed: git pull failed because you have local changes to source files.\nPlease remove them, or enable Aggressive Updates.");
+                return;
+            }
+            else if (pullResult.Contains("You are not currently on a branch"))
+            {
+                didFail($"Update for folder '{folder}' failed: git pull failed with a 'not currently on a branch' message.\nPlease swap to the master branch, or enable Aggressive Updates.");
+                return;
+            }
+            else if (pullResult.EndsWith("Aborting"))
+            {
+                Logs.Warning($"Git refused to pull updates for folder '{folder}' and aborted, with message: {pullResult}");
+                didFail($"Update for folder '{folder}' failed: git aborted for an unknown reason. Check server logs for details.\nPlease swap to the master branch, or enable Aggressive Updates.");
+                return;
+            }
+        }
+        if (targetCommit is not null)
+        {
+            string resetBack = await Utilities.RunGitProcess($"reset --hard {targetCommit}", folder);
+            Logs.Debug($"Reset back to target commit {targetCommit}: {resetBack}");
+        }
+        string localHash = (await Utilities.RunGitProcess("rev-parse HEAD", folder)).Trim();
+        Logs.Debug($"Updater: prior hash was {priorHash}, new hash is {localHash}");
+        if (localHash != priorHash)
+        {
+            didWork();
+        }
     }
 
     [API.APIDescription("Causes swarm to update, then close and restart itself. If there's no update to apply, won't restart.",
@@ -649,51 +772,68 @@ public static class AdminAPI
             "result": "No changes found." // or any other applicable human-readable English message
         """)]
     public static async Task<JObject> UpdateAndRestart(Session session,
-        [API.APIParameter("True to also update any extensions.")] bool updateExtensions = false,
-        [API.APIParameter("True to also update any backends.")] bool updateBackends = false, // TODO: Impl
+        [API.APIParameter("Add extensionsToUpdate: ['name'] and backendsToUpdate: ['name', 'name'] to update extensions/backends. Match names to CheckForUpdates output.")] JObject raw,
+        [API.APIParameter("True to include the SwarmUI core in the updates.")] bool doUpdateServer = false,
+        [API.APIParameter("True to perform an *aggressive* git update (forcibly override common git issues).")] bool aggressive = false,
         [API.APIParameter("True to always rebuild and restart even if there's no visible update.")] bool force = false)
     {
         Logs.Warning($"User {session.User.UserID} requested update-and-restart.");
-        string priorHash = (await Utilities.RunGitProcess("rev-parse HEAD")).Trim();
-        string pullResult = await Utilities.RunGitProcess("pull");
-        if (pullResult.Contains("error: Your local changes to the following files would be overwritten by merge:"))
+        long updates = 0;
+        List<Task> tasks = [];
+        void didWork() => Interlocked.Increment(ref updates);
+        List<string> fails = [];
+        void didFail(string msg)
         {
-            return new JObject() { ["error"] = "Git pull failed because you have local changes to source files.\nPlease remove them, or manually run 'git pull --autostash', or 'git fetch origin && git checkout -f master' in the SwarmUI folder." };
-        }
-        string localHash = (await Utilities.RunGitProcess("rev-parse HEAD")).Trim();
-        Logs.Debug($"Updater: prior hash was {priorHash}, new hash is {localHash}");
-        long updates = localHash != priorHash ? 1 : 0;
-        List<Task> pullTasks = [];
-        if (updateExtensions)
-        {
-            foreach (Extension extension in Program.Extensions.Extensions.Where(e => !e.IsCore))
+            Logs.Error($"Failed to apply update: {msg}");
+            lock (fails)
             {
-                Extension ext = extension; // lambda capture
-                pullTasks.Add(Utilities.RunCheckedTask(async () =>
-                {
-                    string path = Path.GetFullPath(Utilities.CombinePathWithAbsolute(Environment.CurrentDirectory, ext.FilePath));
-                    string priorExtHash = (await Utilities.RunGitProcess("rev-parse HEAD", path)).Trim();
-                    await Utilities.RunGitProcess("pull", path);
-                    string localExtHash = (await Utilities.RunGitProcess("rev-parse HEAD", path)).Trim();
-                    Logs.Debug($"Updater: prior hash for {ext.ExtensionName} was {priorHash}, new hash is {localHash}");
-                    if (priorExtHash != localExtHash)
-                    {
-                        Interlocked.Increment(ref updates);
-                    }
-                }));
+                fails.Add(msg);
             }
         }
-        await Task.WhenAll(pullTasks);
-        if (Interlocked.Read(ref updates) == 0 && !force)
+        if (doUpdateServer)
         {
-            return new JObject() { ["success"] = false, ["result"] = "No changes found." };
+            tasks.Add(Utilities.RunCheckedTask(async () =>
+            {
+                await DoGitUpdate(Environment.CurrentDirectory, aggressive, didWork, didFail);
+            }, "update core"));
+        }
+        if (raw.TryGetValue("extensionsToUpdate", out JToken extToken) && extToken is JArray updateExtensions)
+        {
+            string[] toUpdate = [.. updateExtensions.Select(v => $"{v}")];
+            Logs.Debug($"Request updates to extensions: {toUpdate.JoinString(", ")}");
+            foreach (Extension extension in Program.Extensions.Extensions.Where(e => !e.IsCore && toUpdate.Contains(e.ExtensionName)))
+            {
+                Extension ext = extension; // lambda capture
+                tasks.Add(Utilities.RunCheckedTask(async () =>
+                {
+                    string path = Path.GetFullPath(Utilities.CombinePathWithAbsolute(Environment.CurrentDirectory, ext.FilePath));
+                    await DoGitUpdate(path, aggressive, didWork, didFail);
+                }, $"update extension {extension.ExtensionName}"));
+            }
+        }
+        if (raw.TryGetValue("backendsToUpdate", out JToken backToken) && backToken is JArray updateBackends)
+        {
+            string[] toUpdate = [.. updateBackends.Select(v => $"{v}")];
+            Logs.Debug($"Request updates to backends: {toUpdate.JoinString(", ")}");
+            foreach (Func<Action, Action<string>, bool, string[], Task> backendUpdate in DoBackendUpdates)
+            {
+                tasks.Add(Utilities.RunCheckedTask(async () =>
+                {
+                    await backendUpdate(didWork, didFail, aggressive, toUpdate);
+                }, "update backend"));
+            }
+        }
+        await Task.WhenAll(tasks);
+        if ((Interlocked.Read(ref updates) == 0 || fails.Count > 0) && !force)
+        {
+            return new JObject() { ["success"] = false, ["result"] = fails.Count > 0 ? fails.JoinString("\n") : "No changes found." };
         }
         File.WriteAllText("src/bin/must_rebuild", "yes");
         Program.RequestRestart();
-        return new JObject() { ["success"] = true, ["result"] = "Update successful. Restarting... (please wait a moment, then refresh the page)" };
+        return new JObject() { ["success"] = true, ["result"] = fails.Count > 0 ? fails.JoinString("\n") + "\nRestarting..." : "Update successful. Restarting... (please wait a moment, then refresh the page)" };
     }
 
-    [API.APIDescription("Installs an extension from the known extensions list. Does not trigger a restart. Does signal required rebuild.",
+    [API.APIDescription("Installs an extension from the known extensions list. Does not trigger a restart.",
         """
             "success": true
         """)]
@@ -705,18 +845,57 @@ public static class AdminAPI
         {
             return new JObject() { ["error"] = "Unknown extension." };
         }
-        string extensionsFolder = Utilities.CombinePathWithAbsolute(Environment.CurrentDirectory, "src/Extensions");
-        string folder = Utilities.CombinePathWithAbsolute(extensionsFolder, ext.FolderName);
-        if (Directory.Exists(folder))
+        Program.Extensions.CleanDisabledExtensions();
+        foreach (string folderName in ext.FolderNames)
         {
-            return new JObject() { ["error"] = "Extension already installed." };
+            if (Directory.Exists($"./src/Extensions/{folderName}"))
+            {
+                return new JObject() { ["error"] = "Extension already installed." };
+            }
+            Program.Extensions.RemoveDisabledExtensionSetting(folderName);
         }
-        await Utilities.RunGitProcess($"clone {ext.URL}", extensionsFolder);
-        File.WriteAllText("src/bin/must_rebuild", "yes");
+        Program.SaveSettingsFile();
+        await Utilities.RunGitProcess($"clone {ext.URL}", Path.GetFullPath("./src/Extensions"));
         return new JObject() { ["success"] = true };
     }
 
-    [API.APIDescription("Triggers an extension update for an installed extension. Does not trigger a restart. Does signal required rebuild.",
+    [API.APIDescription("Enables or disables an installed extension. Does not trigger a restart.",
+        """
+            "success": true
+        """)]
+    public static async Task<JObject> SetExtensionEnabled(Session session,
+        [API.APIParameter("The extension name (disable) or folder name (enable).")] string extensionName,
+        [API.APIParameter("True to enable the extension, false to disable it.")] bool enabled)
+    {
+        if (enabled)
+        {
+            if (!Program.Extensions.RemoveDisabledExtensionSetting(extensionName))
+            {
+                return new JObject() { ["error"] = "Unknown extension." };
+            }
+        }
+        else
+        {
+            Extension extension = Program.Extensions.Extensions.FirstOrDefault(e => e.ExtensionName == extensionName);
+            if (extension is null)
+            {
+                return new JObject() { ["error"] = "Unknown extension." };
+            }
+            if (extension.IsCore)
+            {
+                return new JObject() { ["error"] = "Core extensions cannot be enabled/disabled." };
+            }
+            if (!Program.Extensions.AddDisabledExtensionSetting(ExtensionsManager.GetFolderNameFromPath(extension.FilePath)))
+            {
+                return new JObject() { ["error"] = "Extension is already disabled." };
+            }
+        }
+        Program.SaveSettingsFile();
+        Logs.Debug($"User {session.User.UserID} {(enabled ? "enabled" : "disabled")} extension '{extensionName}'. Restart required to apply.");
+        return new JObject() { ["success"] = true };
+    }
+
+    [API.APIDescription("Triggers an extension update for an installed extension. Does not trigger a restart.",
         """
             "success": true // or false if no update available
         """)]
@@ -737,29 +916,33 @@ public static class AdminAPI
         {
             return new JObject() { ["success"] = false };
         }
-        File.WriteAllText("src/bin/must_rebuild", "yes");
         return new JObject() { ["success"] = true };
     }
 
-    [API.APIDescription("Triggers an extension uninstallation for an installed extension. Does not trigger a restart. Does signal required rebuild.",
+    [API.APIDescription("Triggers an extension uninstallation for an installed extension. Does not trigger a restart.",
         """
             "success": true
         """)]
     public static async Task<JObject> UninstallExtension(Session session,
-        [API.APIParameter("The name of the extension to uninstall.")] string extensionName)
+        [API.APIParameter("The name (if loaded) or folder name (if disabled) of the extension to uninstall.")] string extensionName)
     {
         Extension ext = Program.Extensions.Extensions.FirstOrDefault(e => e.ExtensionName == extensionName);
-        if (ext is null)
+        string folder = ext?.FilePath;
+        if (folder is null)
+        {
+            if (!Program.Extensions.RemoveDisabledExtensionSetting(extensionName))
+            {
+                return new JObject() { ["error"] = "Unknown extension." };
+            }
+            Program.SaveSettingsFile();
+            folder = $"src/Extensions/{extensionName}/";
+        }
+        string path = Path.GetFullPath($"{Environment.CurrentDirectory}/{folder}");
+        if (!Directory.Exists(path))
         {
             return new JObject() { ["error"] = "Unknown extension." };
         }
-        string path = Path.GetFullPath(Utilities.CombinePathWithAbsolute(Environment.CurrentDirectory, ext.FilePath));
         Logs.Debug($"Will clear out Extension path: {path}");
-        if (!Directory.Exists(path))
-        {
-            return new JObject() { ["error"] = "Extension has invalid path, cannot delete." };
-        }
-        File.WriteAllText("src/bin/must_rebuild", "yes");
         try
         {
             FileSystem.DeleteDirectory(path, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin, UICancelOption.ThrowException);
@@ -811,10 +994,9 @@ public static class AdminAPI
     public static async Task<JObject> AdminListUsers(Session session)
     {
         List<string> users = [.. Program.Sessions.UserDatabase.FindAll().Select(u => u.ID)];
+        users.Remove("__shared");
         return new JObject() { ["users"] = JArray.FromObject(users) };
     }
-
-    public static AsciiMatcher UsernameValidator = new(AsciiMatcher.BothCaseLetters + AsciiMatcher.Digits + "_");
 
     [API.APIDescription("Admin route to create a new user account.",
         """
@@ -826,7 +1008,7 @@ public static class AdminAPI
         [API.APIParameter("Initial password for the new user.")] string password,
         [API.APIParameter("Initial role for the new user.")] string role)
     {
-        string cleaned = UsernameValidator.TrimToMatches(name).ToLowerFast();
+        string cleaned = SessionHandler.UsernameValidator.TrimToMatches(name).ToLowerFast();
         if (cleaned.Length < 3)
         {
             return new JObject() { ["error"] = "Username must be at least 3 characters long, A-Z 0-9 only." };
@@ -839,22 +1021,10 @@ public static class AdminAPI
         {
             return new JObject() { ["error"] = "Username or password too long." };
         }
-        lock (Program.Sessions.DBLock)
+        User user = Program.Sessions.RegisterUser(cleaned, password, role, true);
+        if (user is null)
         {
-            User existing = Program.Sessions.GetUser(cleaned, false);
-            if (existing is not null)
-            {
-                return new JObject() { ["error"] = "A user by that name already exists." };
-            }
-            User.DatabaseEntry userData = new() { ID = cleaned, RawSettings = "\n" };
-            User user = new(Program.Sessions, userData);
-            user.Settings.Roles = [role];
-            user.Settings.TrySetFieldModified(nameof(User.Settings.Roles), true);
-            user.Data.PasswordHashed = Utilities.HashPassword(cleaned, password);
-            user.Data.IsPasswordSetByAdmin = true;
-            user.BuildRoles();
-            user.Save();
-            Program.Sessions.Users.TryAdd(cleaned, user);
+            return new JObject() { ["error"] = "A user by that name already exists, or registration failed." };
         }
         return new JObject() { ["success"] = true };
     }
@@ -892,6 +1062,24 @@ public static class AdminAPI
         user.Data.IsPasswordSetByAdmin = true;
         user.BuildRoles();
         user.Save();
+        return new JObject() { ["success"] = true };
+    }
+
+    [API.APIDescription("Admin route to force-set a user's OAuth email.",
+        """
+            "success": true
+        """)]
+    [API.APINonfinalMark]
+    public static async Task<JObject> AdminSetUserOAuthEmail(Session session,
+        [API.APIParameter("The name of the user.")] string name,
+        [API.APIParameter("The OAuth email to set for the user, or empty string to clear it.")] string email)
+    {
+        User user = Program.Sessions.GetUser(name, false);
+        if (user is null)
+        {
+            return new JObject() { ["error"] = "No user by that name exists." };
+        }
+        user.SetOAuthEmail(email);
         return new JObject() { ["success"] = true };
     }
 
@@ -960,6 +1148,7 @@ public static class AdminAPI
             "user_id": "useridhere",
             "password_set_by_admin": true, // false if set by user
             "settings": { ... }, // User settings, same format as GetUserSettings
+            "oauth_email": "", // OAuth email associated with the user, if any
             "max_t2i": 32 // actual value of max t2i simultaneous, calculated from current roles and available backends
         """)]
     [API.APINonfinalMark]
@@ -976,6 +1165,7 @@ public static class AdminAPI
             ["user_id"] = user.UserID,
             ["password_set_by_admin"] = user.Data.IsPasswordSetByAdmin,
             ["settings"] = AutoConfigToParamData(user.Settings, false),
+            ["oauth_email"] = user.Data.OAuthEmail,
             ["max_t2i"] = user.CalcMaxT2ISimultaneous
         };
     }
@@ -1047,7 +1237,7 @@ public static class AdminAPI
     public static async Task<JObject> AdminAddRole(Session session,
         [API.APIParameter("The name of the new role.")] string name)
     {
-        string cleaned = UsernameValidator.TrimToMatches(name).ToLowerFast();
+        string cleaned = SessionHandler.UsernameValidator.TrimToMatches(name).ToLowerFast();
         if (cleaned.Length < 3)
         {
             return new JObject() { ["error"] = "Role name must be at least 3 characters long, A-Z 0-9 only." };
