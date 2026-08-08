@@ -287,6 +287,9 @@ class ModelDownloaderUtil {
             if (versId) {
                 for (let vers of rawData.modelVersions) {
                     for (let vFile of vers.files) {
+                        if (vFile.type == "Text Encoder" || vFile.type == "VAE") {
+                            continue;
+                        }
                         if ((vFile.name.endsWith(`.safetensors`) || vFile.name.endsWith(`.sft`) || vFile.name.endsWith(`.gguf`)) && splitWithTail(vFile.downloadUrl || '', '?', 2)[0].endsWith(`/${versId}`)) {
                             rawVersion = vers;
                             file = vFile;
@@ -299,6 +302,9 @@ class ModelDownloaderUtil {
                 baseLoop:
                 for (let vers of rawData.modelVersions) {
                     for (let vFile of vers.files) {
+                        if (vFile.type == "Text Encoder" || vFile.type == "VAE") {
+                            continue;
+                        }
                         if (vFile.name.endsWith(`.safetensors`) || vFile.name.endsWith(`.sft`) || vFile.name.endsWith(`.gguf`)) {
                             rawVersion = vers;
                             file = vFile;
@@ -371,7 +377,11 @@ class ModelDownloaderUtil {
                         let url = videos[0].url;
                         let video = document.createElement('video');
                         video.crossOrigin = 'Anonymous';
-                        video.onloadeddata = () => {
+                        video.preload = 'auto';
+                        video.onloadedmetadata = () => {
+                            video.currentTime = 0.001;
+                        };
+                        video.onseeked = () => {
                             let canvas = document.createElement('canvas');
                             canvas.width = video.videoWidth;
                             canvas.height = video.videoHeight;

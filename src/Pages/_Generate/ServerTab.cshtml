@@ -91,6 +91,12 @@
                         <p id="dotnet_missing_message" class="card-text">
                             You do not seem to have DotNET @Utilities.DotNetVersMissing installed - this will be required in a future version of SwarmUI.
                             <br>Please install DotNET SDK @(Utilities.DotNetVersMissing).0 from <a target="_blank" href="https://dotnet.microsoft.com/en-us/download/dotnet/@(Utilities.DotNetVersMissing).0">https://dotnet.microsoft.com/en-us/download/dotnet/@(Utilities.DotNetVersMissing).0</a>
+                            @if (WebUtil.IsWindows())
+                            {
+                                <span data-requiredpermission="install">
+                                    <br>Or click here: <button id="dotnet_install_update_button" class="basic-button translate" onclick="genericRequest('InstallDotnetUpdate', {}, () => {});getRequiredElementById('dotnet_install_update_button').disabled = true">Install DotNET SDK @(Utilities.DotNetVersMissing).0</button>
+                                </span>
+                            }
                         </p>
                     </div>
                 </div>
@@ -255,7 +261,7 @@
                     <tr>
                         <td>@ext.Name</td>
                         <td><code>(Disabled)</code></td>
-                        <td>@ExtensionsManager.HtmlTags(ext.Tags)</td>
+                        <td class="@(ext.IsDangerTags ? "ext-danger-license" : "")">@ExtensionsManager.HtmlTags(ext.Tags)</td>
                         <td>@ext.Author</td>
                         <td>@ext.Description</td>
                         <td>@(ext.URL == "" ? "(Missing)" : new HtmlString($"<a target=\"_blank\" href=\"{ext.URL}\">Here</a>"))</td>
@@ -279,11 +285,11 @@
                     <th>License</th>
                     <th>Actions</th>
                 </tr>
-                @foreach (ExtensionsManager.ExtensionInfo ext in Program.Extensions.KnownExtensions.Where(e => !e.FolderNames.Any(fn => Program.Extensions.LoadedExtensionFolders.Contains(fn)) && !e.Tags.Contains("hidden")))
+                @foreach (ExtensionsManager.ExtensionInfo ext in Program.Extensions.KnownExtensions.Where(e => !e.FolderNames.Any(fn => Program.Extensions.LoadedExtensionFolders.Contains(fn)) && !e.Tags.Contains("hidden")).OrderBy(e => e.IsDangerTags ? 1 : 0))
                 {
                     <tr>
                         <td>@ext.Name</td>
-                        <td>@ExtensionsManager.HtmlTags(ext.Tags)</td>
+                        <td class="@(ext.IsDangerTags ? "ext-danger-license" : "")">@ExtensionsManager.HtmlTags(ext.Tags)</td>
                         <td>@ext.Author</td>
                         <td>@ext.Description</td>
                         <td><a target="_blank" href="@ext.URL">Here</a></td>

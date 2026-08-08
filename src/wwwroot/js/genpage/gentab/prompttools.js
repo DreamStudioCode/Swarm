@@ -48,10 +48,13 @@ class PromptTabCompleteClass {
             let prefixLow = prefix.toLowerCase();
             return this.getOrderedMatches(allPresets.map(p => p.title), prefixLow);
         });
+        this.registerAltPrefix('p', 'preset');
+        this.registerPrefix('param', 'Read a raw parameter value.', (prefix) => { 
+            return ['\nRead a parameter value, for example "<param:CFG Scale>" or "<param:cfgscale>" to read the value of CFG Scale.'];
+        });
         this.registerPrefix('param[param_id]', 'Set a raw parameter value directly.', (prefix) => { 
             return ['\nSet a parameter value directly, for example "<param[CFG Scale]:1>" or "<param[cfgscale]:1>" to set CFG Scale to 1.', '\nYou can combine with sub-syntax, eg "<param[cfgscale]:<random:1,2,3>>" to set CFG Scale to a random value.'];
         });
-        this.registerAltPrefix('p', 'preset');
         this.registerPrefix('embed', 'Use a pretrained CLIP TI Embedding', (prefix) => {
             let prefixLow = prefix.toLowerCase();
             return this.getOrderedMatches(Object.values(modelsHelpers.models['Embedding']).map(m => {return {raw: true, name: `<embed:${m.cleanName}>`, clean_html: m.cleanDropdown()};}), prefixLow);
@@ -135,6 +138,9 @@ class PromptTabCompleteClass {
             return [];
         }, true);
         this.registerPrefix('refiner', 'Add a section of prompt text that is only used for the Refine/Upscale pass.', (prefix) => {
+            return [];
+        }, true);
+        this.registerPrefix('pixeldecoder', 'Add a section of prompt text that is only used for the PiD pixel-decoder upscale pass.', (prefix) => {
             return [];
         }, true);
         this.registerPrefix('video', 'Add a section of prompt text that replaces the prompt for the image-to-video generation pass.', (prefix) => {
@@ -457,6 +463,7 @@ class PromptPlusButton {
         enableSlidersIn(this.segmentModalOther);
         this.populateDropdownFromSource('input_sampler', this.segmentModalSampler, 'text_prompt_segment_sampler_toggle');
         this.populateDropdownFromSource('input_scheduler', this.segmentModalScheduler, 'text_prompt_segment_scheduler_toggle');
+        this.regionModalTypeInput = getRequiredElementById('text_prompt_region_type');
         this.regionModalOther = getRequiredElementById('text_prompt_region_other_inputs');
         this.regionModalOther.innerHTML =
             makeGenericPopover('text_prompt_region_x', 'Prompt Syntax: Region Left X', 'Left X', "The left X coordinate of the region's box.", '')
@@ -492,6 +499,11 @@ class PromptPlusButton {
         this.regionModalCanvasCtx = null;
         this.regionModalMain = getRequiredElementById('text_prompt_region_modal');
         this.regionModalMain.addEventListener('mousemove', (e) => this.regionModalMouseMove(e));
+        let regionType = localStorage.getItem('text_prompt_region_type');
+        if (regionType) {
+            this.regionModalTypeInput.value = regionType;
+            this.regionModalTypeChange();
+        }
         document.addEventListener('mouseup', (e) => {
             this.regionModalCanvasMouseDown = false;
             this.regionModalCanvasMouseClick = null;
@@ -523,18 +535,24 @@ class PromptPlusButton {
             this.regionModalProcessChanges();
             $('#text_prompt_region_modal').modal('show');
         }});
-        buttons.push({ key: 'image', key_html: 'Upload Prompt Image', title: "Upload an image to use as an image-prompt", action: () => {
+        buttons.push({ key: 'image', key_html: 'Upload Prompt Image/Video/Audio', title: "Upload an image, video, or audio file to use as a prompt input", action: () => {
             this.autoHideMenu();
             let input = document.createElement('input');
             input.type = 'file';
-            input.accept = 'image/*';
+            input.accept = 'image/*,video/*,audio/*';
             input.onchange = (e) => {
                 let file = e.target.files[0];
-                if (file && file.type.startsWith('image/')) {
+                if (file && (file.type.startsWith('image/') || file.type.startsWith('video/') || file.type.startsWith('audio/'))) {
                     imagePromptAddImage(file);
                 }
             };
             input.click();
+        }});
+        buttons.push({ key: 'select_image', key_html: 'Select Prompt Image/Video/Audio', title: "Select an image, video, or audio prompt input from the inputs browser", action: () => {
+            this.autoHideMenu();
+            inputBrowserHelper.openInputBrowser(null, ['image', 'video', 'audio'], file => {
+                imagePromptAddImageData(file.data.src, getMediaType(file.name), file.name, file.name);
+            });
         }});
         buttons.push({ key: 'other', key_html: 'Other...', title: "Add some other prompt syntax (that doesn't have its own menu)", action: () => {
             let text = this.altTextBox.value.trim();
@@ -643,6 +661,21 @@ class PromptPlusButton {
             }
             destSelect.appendChild(opt);
         }
+    }
+
+    regionModalTypeChange() {
+        let type = this.regionModalTypeInput.value;
+        if (type == 'region') {
+            for (let elem of [this.regionModalX, this.regionModalY, this.regionModalWidth, this.regionModalHeight, this.regionModalStrength, this.regionModalInpaint, this.regionModalInpaintStrength]) {
+                findParentOfClass(elem, 'auto-input').style.display = '';
+            }
+        }
+        else if (type == 'ideogram') {
+            for (let elem of [this.regionModalX, this.regionModalY, this.regionModalWidth, this.regionModalHeight, this.regionModalStrength, this.regionModalInpaint, this.regionModalInpaintStrength]) {
+                findParentOfClass(elem, 'auto-input').style.display = 'none';
+            }
+        }
+        localStorage.setItem('text_prompt_region_type', type);
     }
 
     regionModalClear() {
@@ -803,9 +836,17 @@ class PromptPlusButton {
 
     regionModalSubmit() {
         $('#text_prompt_region_modal').modal('hide');
+        let x = parseFloat(this.regionModalX.value), y = parseFloat(this.regionModalY.value), w = parseFloat(this.regionModalWidth.value), h = parseFloat(this.regionModalHeight.value);
+        x = Math.max(0, Math.min(1, x));
+        y = Math.max(0, Math.min(1, y));
+        w = Math.max(0, Math.min(1, w + x)) - x;
+        h = Math.max(0, Math.min(1, h + y)) - y;
+        if (this.regionModalTypeInput.value == 'ideogram') {
+            this.applyNewSyntax(`{"type": "obj", "bbox": [${Math.round(y * 1000)}, ${Math.round(x * 1000)}, ${Math.round((y + h) * 1000)}, ${Math.round((x + w) * 1000)}], "desc": "${this.regionModalMainText.value.trim()}"}`);
+            return;
+        }
         let key = this.regionModalInpaint.checked ? 'object' : 'region';
         let inpaint = this.regionModalInpaint.checked ? `,${this.regionModalInpaintStrength.value}` : '';
-        let x = parseFloat(this.regionModalX.value), y = parseFloat(this.regionModalY.value), w = parseFloat(this.regionModalWidth.value), h = parseFloat(this.regionModalHeight.value);
         x = Math.max(0, Math.min(1, x));
         y = Math.max(0, Math.min(1, y));
         w = Math.max(0, Math.min(1, w + x)) - x;

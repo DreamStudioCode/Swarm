@@ -62,6 +62,7 @@ class WildcardHelpers {
             this.modalMayClose = false;
         });
         this.processContents();
+        textPromptAddKeydownHandler(this.contentsElem);
     }
 
     /** Applies a new wildcard list from the server. */
@@ -182,7 +183,7 @@ class WildcardHelpers {
                 clazz += ' wc_line_comment';
             }
             charCount += trimLine.length == 0 ? 1 : line.length;
-            html += `<div class="${clazz}">${trimLine.length == 0 ? '\u2009' : line}</div>`;
+            html += `<div class="${clazz}">${trimLine.length == 0 ? '\u2009' : escapeHtmlNoBr(line)}</div>`;
             if (i < lines.length - 1) {
                 charCount++;
                 html += '<div class="wc_line_spacer">\\</div>';
@@ -335,7 +336,7 @@ class WildcardHelpers {
 
     /** Small util to match a wildcard syntax entry in a prompt. */
     matchWildcard(prompt, wildcard) {
-        let matcher = new RegExp(`<(wildcard(?:\\[\\d+(?:-\\d+)?\\])?):${regexEscape(wildcard)}>`, 'g');
+        let matcher = new RegExp(`<((?:wildcard|wc)(?:\\[\\d+(?:-\\d+)?\\])?):${regexEscape(wildcard)}>`, 'g');
         return prompt.match(matcher);
     }
 

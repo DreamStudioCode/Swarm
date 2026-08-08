@@ -26,7 +26,7 @@ class AdvancedPopover {
             this.textInput.placeholder = 'Search...';
             this.textInput.addEventListener('input', (e) => {
                 this.buildList();
-                this.optionArea.style.width = (this.optionArea.offsetWidth + this.overExtendBy) + 'px';
+                this.fitOptionAreaWidth();
             });
             this.textInput.addEventListener('keydown', (e) => {
                 this.onKeyDown(e);
@@ -45,7 +45,15 @@ class AdvancedPopover {
             this.textInput.focus();
         }
         this.created = Date.now();
-        this.optionArea.style.width = (this.optionArea.offsetWidth + this.overExtendBy) + 'px';
+        this.fitOptionAreaWidth();
+        this.scrollFix();
+    }
+
+    /** Size the option list to its text content (not the parent/viewport width). */
+    fitOptionAreaWidth() {
+        this.optionArea.style.width = 'max-content';
+        let contentW = this.optionArea.offsetWidth;
+        this.optionArea.style.width = `${Math.min(contentW + this.overExtendBy, window.innerWidth - 40)}px`;
     }
 
     remove() {
@@ -211,20 +219,22 @@ class AdvancedPopover {
         let y;
         let maxHeight;
         let extraHeight = (this.textInput ? this.textInput.offsetHeight : 0) + 32;
-        let rawExpected = Math.min(this.expectedHeight, this.heightLimit);
+        let halfCap = Math.max(48, window.innerHeight * 0.45 - extraHeight);
+        let rawExpected = Math.min(this.expectedHeight, this.heightLimit, halfCap);
         let expected = rawExpected + extraHeight;
         if (this.targetY + expected < window.innerHeight) {
             y = this.targetY;
             maxHeight = rawExpected;
         }
         else if (this.flipYHeight != null && this.targetY > window.innerHeight / 2) {
+            maxHeight = Math.min(Math.max(0, this.targetY - this.flipYHeight - extraHeight), rawExpected);
+            expected = maxHeight + extraHeight;
             y = Math.max(0, this.targetY - this.flipYHeight - expected);
             this.popover.classList.add('sui_popover_reverse');
-            maxHeight = Math.min(this.targetY - this.flipYHeight - 32, rawExpected);
         }
         else {
             y = this.targetY;
-            maxHeight = window.innerHeight - y - extraHeight - 10;
+            maxHeight = Math.min(rawExpected, window.innerHeight - y - extraHeight - 10);
         }
         this.popover.style.top = `${y}px`;
         this.optionArea.style.maxHeight = `${maxHeight}px`;
@@ -523,8 +533,22 @@ class UIImprovementHandler {
         }
         let popId = `uiimprover_${elem.id}`;
         let rect = elem.getBoundingClientRect();
-        let buttons = [...elem.options].filter(o => o.style.display != 'none').map(o => { return { key_html: o.dataset.cleanname, title: o.title, key: o.innerText, searchable: `${o.dataset.cleanname} ${o.innerText} ${o.value}`, action: () => { elem.value = o.value; triggerChangeFor(elem); } }; })
-        this.lastPopover = new AdvancedPopover(popId, buttons, true, rect.x, rect.y, elem.parentElement, elem.selectedIndex < 0 ? null : elem.selectedOptions[0].innerText, 0);
+        let options = [...elem.options].filter(o => o.style.display != 'none');
+        /* TEMP Firefox v152 bugfix: if elem options duplicate, rebuild the options list */
+        let duplicates = options.filter(o => options.findLastIndex(o2 => o2.value == o.value) != options.indexOf(o));
+        if (duplicates.length > 0) {
+            console.log(`Duplicate value found for ${elem.id}: ${duplicates.map(o => o.value).join(', ')}`);
+            options = [... elem.options];
+            let newOptions = options.filter(o => o.style.display == 'none' || options.findIndex(o2 => o2.value == o.value) == options.indexOf(o));
+            let val = elem.value;
+            elem.innerHTML = '';
+            for (let o of newOptions) {
+                elem.appendChild(o);
+            }
+            elem.value = val;
+        }
+        let buttons = [...elem.options].filter(o => o.style.display != 'none').map(o => { return { key_html: o.dataset.cleanname, title: o.title, key: o.innerText, searchable: `${o.dataset.cleanname} ${o.innerText} ${o.value}`, action: () => { o.selected = true; triggerChangeFor(elem); } }; });
+        this.lastPopover = new AdvancedPopover(popId, buttons, true, rect.x, rect.y, document.body, elem.selectedIndex < 0 ? null : elem.selectedOptions[0].innerText, 0);
         e.preventDefault();
         e.stopPropagation();
         return false;

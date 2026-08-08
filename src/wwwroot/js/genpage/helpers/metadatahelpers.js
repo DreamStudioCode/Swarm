@@ -93,11 +93,17 @@ function interpretMetadata(metadata) {
     if (metadata) {
         metadata = metadata.trim();
         if (metadata.startsWith('{')) {
-            let json = JSON.parse(metadata);
-            if ('sui_image_params' in json) {
+            let json = null;
+            try {
+                json = JSON.parse(metadata);
+            }
+            catch (e) {
+                console.error(`Error parsing metadata '${metadata}': ${e}`);
+            }
+            if (json && 'sui_image_params' in json) {
                 // It's swarm, we're good
             }
-            else if ("Prompt" in json) {
+            else if (json && "Prompt" in json) {
                 // Fooocus
                 json = remapMetadataKeys(json, fooocusMetadataMap);
                 metadata = JSON.stringify({ 'sui_image_params': json });
@@ -232,24 +238,75 @@ function parseMetadata(data, callback) {
 let metadataKeyFormatCleaners = [];
 let promptCidMatcher = new RegExp('\<(.*?)//cid=\\d+>', 'g');
 
-function formatMetadata(metadata) {
+function formatMetadataEntry(entry) {
+    return `<span class="param_view_block tag-text tag-type-${entry.hash}${entry.added}"><span class="param_view_name" title="${escapeHtmlNoBr(entry.keyTitle)}">${escapeHtml(entry.key)}:</span> ${entry.valueHtml}${entry.extras}</span>`;
+}
+
+/** Combines media filenames, resolutions, and durations into their corresponding parameter metadata values. */
+function combineMediaMetadata(data) {
+    if (!data.sui_extra_data) {
+        return;
+    }
+    let mediaTypes = ['image', 'audio', 'video', 'image_list', 'audio_list', 'video_list'];
+    for (let filenameKey of Object.keys(data.sui_extra_data).filter(key => key.endsWith('_filename'))) {
+        let paramId = filenameKey.substring(0, filenameKey.length - '_filename'.length);
+        let param = getParamById(paramId);
+        if (!param || !mediaTypes.includes(param.type)) {
+            continue;
+        }
+        let filenames = data.sui_extra_data[filenameKey];
+        let resolutions = data.sui_extra_data[`${paramId}_resolution`];
+        let durations = data.sui_extra_data[`${paramId}_duration`];
+        let values = data.sui_image_params[paramId];
+        let isList = param.type.endsWith('_list');
+        let filenameList = Array.isArray(filenames) ? filenames : [filenames];
+        let resolutionList = Array.isArray(resolutions) ? resolutions : [resolutions];
+        let durationList = Array.isArray(durations) ? durations : [durations];
+        let valueList = Array.isArray(values) ? values : [values];
+        let combined = [];
+        let count = isList ? Math.max(filenameList.length, valueList.length) : 1;
+        for (let i = 0; i < count; i++) {
+            let value = filenameList[i] || valueList[i];
+            if (!value) {
+                continue;
+            }
+            let duration = durationList[i];
+            if (duration) {
+                let durationNumber = parseFloat(duration);
+                value += ` (${Number.isNaN(durationNumber) ? duration : roundTo(durationNumber, 0.01)}s)`;
+            }
+            if (resolutionList[i]) {
+                value += ` (${resolutionList[i]})`;
+            }
+            combined.push(value);
+        }
+        if (combined.length > 0) {
+            data.sui_image_params[paramId] = isList ? combined : combined[0];
+        }
+        delete data.sui_extra_data[filenameKey];
+        delete data.sui_extra_data[`${paramId}_resolution`];
+        delete data.sui_extra_data[`${paramId}_duration`];
+    }
+}
+
+function getFormattedMetadataEntries(metadata) {
     if (!metadata) {
-        return '';
+        return { entries: [], error: '' };
     }
     let data;
     try {
         let readable = interpretMetadata(metadata);
         if (!readable) {
-            return '';
+            return { entries: [], error: '' };
         }
         data = JSON.parse(readable);
     }
     catch (e) {
         console.log(`Error parsing metadata '${metadata}': ${e}`);
-        return `Broken metadata: ${escapeHtml(metadata)}`;
+        return { entries: [], error: `Broken metadata: ${escapeHtml(metadata)}` };
     }
-    let result = '';
     function appendObject(obj) {
+        let result = [];
         if (obj) {
             for (let key of Object.keys(obj)) {
                 let val = obj[key];
@@ -257,6 +314,7 @@ function formatMetadata(metadata) {
                     for (let cleaner of metadataKeyFormatCleaners) {
                         key = cleaner(key);
                     }
+                    let id = key;
                     let hash = Math.abs(hashCode(key.toLowerCase().replaceAll(' ', '').replaceAll('_', ''))) % 10;
                     let title = '';
                     let keyTitle = '';
@@ -264,6 +322,9 @@ function formatMetadata(metadata) {
                     let extras = '';
                     if (key.includes('model') || key.includes('lora') || key.includes('embedding')) {
                         added += ' param_view_block_model';
+                    }
+                    if (key == 'parser_warnings') {
+                        added += ' param_view_block_parser_warnings';
                     }
                     if (key.includes('prompt')) {
                         extras = `<button title="Click to copy" class="basic-button prompt-copy-button" onclick="copyText('${escapeHtmlNoBr(escapeJsString(`${val}`))}');doNoticePopover('Copied!', 'notice-pop-green');">&#x29C9;</button>`;
@@ -283,18 +344,32 @@ function formatMetadata(metadata) {
                             }
                         }
                     }
-                    result += `<span class="param_view_block tag-text tag-type-${hash}${added}"><span class="param_view_name" title="${escapeHtmlNoBr(keyTitle)}">${escapeHtml(key)}</span>: `;
+                    let valueHtml, compareValue;
                     if (typeof val == 'object') {
-                        appendObject(val);
+                        valueHtml = appendObject(val).map(entry => formatMetadataEntry(entry)).join(', ');
+                        compareValue = JSON.stringify(val);
                     }
                     else {
-                        result += `<span class="param_view tag-text-soft tag-type-${hash}" title="${escapeHtmlNoBr(title)}">${escapeHtml(`${val}`)}</span>`;
+                        valueHtml = `<span class="param_view tag-text-soft tag-type-${hash}" title="${escapeHtmlNoBr(title)}">${escapeHtml(`${val}`)}</span>`;
+                        compareValue = `${val}`;
                     }
-                    result += `${extras}</span>, `;
+                    result.push({ id: id, key: key, keyTitle: keyTitle, hash: hash, added: added, extras: extras, valueHtml: valueHtml, compareValue: compareValue });
                 }
             }
         }
+        return result;
     };
+    let entries = [];
+    function appendEntries(newEntries, breakAfter = false) {
+        if (newEntries.length == 0) {
+            return;
+        }
+        if (breakAfter) {
+            newEntries[newEntries.length - 1].breakAfter = true;
+        }
+        entries.push(...newEntries);
+    }
+    combineMediaMetadata(data);
     if ('swarm_version' in data.sui_image_params && 'sui_extra_data' in data) {
         data.sui_extra_data['Swarm Version'] = data.sui_image_params.swarm_version;
         delete data.sui_image_params.swarm_version;
@@ -308,13 +383,11 @@ function formatMetadata(metadata) {
                 delete data.sui_extra_data.original_prompt;
             }
         }
-        appendObject({ 'prompt': prompt });
-        result += '\n<br>';
+        appendEntries(appendObject({ 'prompt': prompt }), true);
         delete data.sui_image_params.prompt;
     }
     if ('negativeprompt' in data.sui_image_params && data.sui_image_params.negativeprompt) {
-        appendObject({ 'negativeprompt': data.sui_image_params.negativeprompt });
-        result += '\n<br>';
+        appendEntries(appendObject({ 'negativeprompt': data.sui_image_params.negativeprompt }), true);
         delete data.sui_image_params.negativeprompt;
     }
     if ('loras' in data.sui_image_params && 'loraweights' in data.sui_image_params) {
@@ -326,7 +399,7 @@ function formatMetadata(metadata) {
         for (let i = 0; i < loras.length; i++) {
             let lora = loras[i];
             let weight = `${loraWeights[i]}`;
-            if (loraSectionConfinement && loraSectionConfinement[i] != 0) {
+            if (loraSectionConfinement && loraSectionConfinement[i] > 0) {
                 let name = loraHelper.confinementNames[loraSectionConfinement[i]] || loraSectionConfinement[i];
                 weight = `${weight} (${name})`;
             }
@@ -362,15 +435,29 @@ function formatMetadata(metadata) {
     for (let key of Object.keys(data.sui_image_params)) {
         paramMap[key] = data.sui_image_params[key];
     }
-    appendObject(paramMap);
-    result += '\n<br>';
+    appendEntries(appendObject(paramMap), true);
     if ('sui_extra_data' in data) {
         if ('prep_time' in data.sui_extra_data && 'generation_time' in data.sui_extra_data) {
             data.sui_extra_data['Generation Time'] = `${data.sui_extra_data.prep_time} prep, ${data.sui_extra_data.generation_time} gen`;
             delete data.sui_extra_data.prep_time;
             delete data.sui_extra_data.generation_time;
         }
-        appendObject(data.sui_extra_data);
+        appendEntries(appendObject(data.sui_extra_data));
+    }
+    return { entries: entries, error: '' };
+}
+
+function formatMetadata(metadata) {
+    let formatted = getFormattedMetadataEntries(metadata);
+    if (formatted.error) {
+        return formatted.error;
+    }
+    let result = '';
+    for (let entry of formatted.entries) {
+        result += `${formatMetadataEntry(entry)}, `;
+        if (entry.breakAfter) {
+            result += '\n<br>';
+        }
     }
     return result;
 }

@@ -8,6 +8,7 @@ class ModelCompatClass {
         this.isImage2Video = data.is_image2video;
         this.lorasTargetTextEnc = data.loras_target_text_enc;
         this.isAudioModel = data.is_audio_model;
+        this.resolutionPrecision = data.resolution_precision || 16;
     }
 }
 
@@ -562,7 +563,7 @@ class ModelBrowserWrapper {
                         'author': '(Internal)',
                         'architecture': 'VAE',
                         'class': 'VAE',
-                        'description': 'Use the VAE sepcified in your User Settings, or use the VAE built-in to your Stable Diffusion model',
+                        'description': translate('Use the VAE sepcified in your User Settings, the system default VAE for the selected model class, or the VAE built-in to the selected model'),
                         'preview_image': '/imgs/automatic.jpg',
                         'is_supported_model_format': true,
                         'local': true,
@@ -578,7 +579,7 @@ class ModelBrowserWrapper {
                         'author': '(Internal)',
                         'architecture': 'VAE',
                         'class': 'VAE',
-                        'description': 'Use the VAE built-in to your Stable Diffusion model',
+                        'description': translate('Use the system default VAE for the selected model class, or the VAE built-in to the selected model'),
                         'preview_image': '/imgs/none.jpg',
                         'is_supported_model_format': true,
                         'local': true,
@@ -970,8 +971,8 @@ function monitorPromptChangeForEmbed(promptText, type) {
     if (countNew != countOld || (countNew > 0 && countEndsNew != countEndsOld)) {
         sdEmbedBrowser.rebuildSelectedClasses();
     }
-    let countNewWc = promptText.split(`<wildcard`).length - 1;
-    let countOldWc = last.split(`<wildcard`).length - 1;
+    let countNewWc = (promptText.split(`<wildcard`).length - 1) + (promptText.split(`<wc`).length - 1);
+    let countOldWc = (last.split(`<wildcard`).length - 1) + (last.split(`<wc`).length - 1);
     if (countNewWc != countOldWc || (countNewWc > 0 && countEndsNew != countEndsOld)) {
         wildcardsBrowser.rebuildSelectedClasses();
     }
@@ -1036,6 +1037,7 @@ function trt_modal_create() {
     let rangeSelect = getRequiredElementById('tensorrt_aspect_range');
     let batchSize = getRequiredElementById('tensorrt_batch_size');
     let maxBatch = getRequiredElementById('tensorrt_max_batch_size');
+    let contextLen = getRequiredElementById('tensorrt_context');
     let createButton = getRequiredElementById('trt_create_button');
     let resultBox = getRequiredElementById('tensorrt_create_result_box');
     let data = {
@@ -1043,7 +1045,8 @@ function trt_modal_create() {
         'aspect': aspectSelect.value,
         'aspectRange': rangeSelect.value,
         'optBatch': batchSize.value,
-        'maxBatch': maxBatch.value
+        'maxBatch': maxBatch.value,
+        'contextLen': contextLen.value
     };
     createButton.disabled = true;
     resultBox.innerText = 'Creating TensorRT engine, please wait...';
@@ -1183,10 +1186,18 @@ class CurrentModelHelper {
             $('#nunchaku_installer').modal('show');
             return true;
         }
-        let imageVidToggler = document.getElementById('input_group_content_imagetovideo_toggle');
-        let isImageVidToggled = imageVidToggler && imageVidToggler.checked;
-        let videoModel = isImageVidToggled ? document.getElementById('input_videomodel')?.value : '';
-        if ((this.curSpecialFormat == 'gguf' || videoModel.endsWith('.gguf')) && !currentBackendFeatureSet.includes('gguf') && !localStorage.getItem('hide_gguf_check')) {
+        let hasGGUFModel = false;
+        for (let param of gen_param_types) {
+            if (param.type != 'model') {
+                continue;
+            }
+            let modelInput = document.getElementById(`input_${param.id}`);
+            if (isParamEnabled(param) && modelInput?.value.endsWith('.gguf')) {
+                hasGGUFModel = true;
+                break;
+            }
+        }
+        if ((this.curSpecialFormat == 'gguf' || hasGGUFModel) && !currentBackendFeatureSet.includes('gguf') && !localStorage.getItem('hide_gguf_check')) {
             $('#gguf_installer').modal('show');
             return true;
         }

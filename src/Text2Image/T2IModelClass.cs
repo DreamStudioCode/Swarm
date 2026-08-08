@@ -57,6 +57,15 @@ public record class T2IModelCompatClass
     /// <summary>If true, this is a model that primarily operates on audio.</summary>
     public bool IsAudioModel = false;
 
+    /// <summary>If true, this model samples video and audio together in a single joint AV latent.</summary>
+    public bool HasJointAVLatents = false;
+
+    /// <summary>What family of shared latent space this model works in.</summary>
+    public T2IVAEFamily VaeFamily = null;
+
+    /// <summary>The minimum valid multiplier for resolution that models of this family can handle.</summary>
+    public int ResolutionPrecision = 16;
+
     /// <summary>Get a networkable JObject for this compat class.</summary>
     public JObject ToNetData()
     {
@@ -67,7 +76,22 @@ public record class T2IModelCompatClass
             ["loras_target_text_enc"] = LorasTargetTextEnc,
             ["is_text2video"] = IsText2Video,
             ["is_image2video"] = IsImage2Video,
-            ["is_audio_model"] = IsAudioModel
+            ["is_audio_model"] = IsAudioModel,
+            ["has_joint_av_latents"] = HasJointAVLatents,
+            ["resolution_precision"] = ResolutionPrecision,
+            ["vae_family"] = VaeFamily?.ID
         };
     }
+}
+
+public record class T2IVAEFamily
+{
+    /// <summary>ID of this model VAE family.</summary>
+    public string ID;
+
+    /// <summary>ID of the known-VAE file from common models.</summary>
+    public string KnownVaeID;
+
+    /// <summary>The ID of the relevant model compat class.</summary>
+    public string CompatClassID;
 }

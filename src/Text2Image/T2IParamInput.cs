@@ -13,7 +13,7 @@ namespace SwarmUI.Text2Image;
 public class T2IParamInput
 {
     /// <summary>Core section ID numbers.</summary>
-    public static int SectionID_BaseOnly = 5, SectionID_Refiner = 1, SectionID_Video = 2, SectionID_VideoSwap = 3;
+    public static int SectionID_BaseOnly = 5, SectionID_Refiner = 1, SectionID_Video = 2, SectionID_VideoSwap = 3, SectionID_PixelDecoder = 4;
 
     /// <summary>Parameter IDs that must be loaded early on, eg extracted from presets in prompts early. Primarily things that affect backend selection.</summary>
     public static readonly string[] ParamsMustLoadEarly = ["model", "images", "internalbackendtype", "exactbackendid"];
@@ -225,6 +225,9 @@ public class T2IParamInput
         ["9:21"] = (320, 768)
     };
 
+    /// <summary>Resolution precision currently in use.</summary>
+    public int TargetResolutionPrecision = 16;
+
     /// <summary>Gets the desired image width.</summary>
     public int GetImageWidth(int def = 512)
     {
@@ -235,7 +238,7 @@ public class T2IParamInput
         if (TryGet(T2IParamTypes.SideLength, out int sideLen) && TryGet(T2IParamTypes.AspectRatio, out string aspect) && ResolutionAspectReferences.TryGetValue(aspect, out (int, int) resRef))
         {
             // NOTE: This math must match params.js AspectRatio
-            return (int)Utilities.RoundToPrecision(resRef.Item1 * (sideLen / 512.0), 16);
+            return (int)Utilities.RoundToPrecision(resRef.Item1 * (sideLen / 512.0), TargetResolutionPrecision);
         }
         return Get(T2IParamTypes.Width, def);
     }
@@ -253,7 +256,7 @@ public class T2IParamInput
         }
         if (TryGet(T2IParamTypes.SideLength, out int sideLen) && TryGet(T2IParamTypes.AspectRatio, out string aspect) && ResolutionAspectReferences.TryGetValue(aspect, out (int, int) resRef))
         {
-            return (int)Utilities.RoundToPrecision(resRef.Item2 * (sideLen / 512.0), 16);
+            return (int)Utilities.RoundToPrecision(resRef.Item2 * (sideLen / 512.0), TargetResolutionPrecision);
         }
         return Get(T2IParamTypes.Height, def);
     }
@@ -281,9 +284,9 @@ public class T2IParamInput
         {
             return file.AsBase64;
         }
-        else if (val is List<Image> imgList)
+        else if (val is IEnumerable<MediaFile> mediaList)
         {
-            return imgList.Select(img => img.AsBase64).JoinString("|");
+            return mediaList.Select(media => media.AsBase64).JoinString("|");
         }
         else if (val is List<string> strList)
         {
@@ -324,6 +327,11 @@ public class T2IParamInput
                 return JToken.FromObject(mf.SourceFilePath);
             }
             return null;
+        }
+        if (val is IEnumerable<MediaFile> mediaFiles)
+        {
+            List<string> sourceFiles = [.. mediaFiles.Where(file => !string.IsNullOrEmpty(file.SourceFilePath)).Select(file => file.SourceFilePath)];
+            return sourceFiles.Count > 0 ? JArray.FromObject(sourceFiles) : null;
         }
         if (val is string str)
         {

@@ -180,8 +180,11 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
         if (CanIdle)
         {
             Idler.Backend = this;
-            using CancellationTokenSource cancel = Utilities.TimedCancel(TimeSpan.FromMinutes(1));
-            Idler.ValidateCall = () => SendGet<JObject>("object_info", cancel.Token).Wait();
+            Idler.ValidateCall = () =>
+            {
+                using CancellationTokenSource cancel = Utilities.TimedCancel(TimeSpan.FromMinutes(1));
+                SendGet<JObject>("features", cancel.Token).Wait();
+            };
             Idler.Start();
         }
     }
@@ -303,11 +306,12 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
         float curPercent = 0;
         void yieldProgressUpdate()
         {
+            Logs.Verbose($"Progress [{batchId}]: {nodesDone}/{expectedNodes}, curPercent={curPercent * 100:00.0}");
             JObject toSend = new()
             {
                 ["batch_index"] = batchId,
                 ["request_id"] = $"{user_input.UserRequestId}",
-                ["overall_percent"] = (nodesDone + curPercent) / (float)expectedNodes,
+                ["overall_percent"] = (nodesDone + curPercent) / (float)(expectedNodes + 1),
                 ["current_percent"] = curPercent
             };
             if (previewMetadata is not null)
@@ -422,7 +426,14 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
                                 currentNode = nodeId;
                                 goto case "execution_cached";
                             case "execution_cached":
-                                nodesDone++;
+                                if (json.Value<JObject>("data").TryGetValue("nodes", out JToken nodes) && nodes is JArray nodeArr)
+                                {
+                                    nodesDone += nodeArr.Count;
+                                }
+                                else
+                                {
+                                    nodesDone++;
+                                }
                                 curPercent = 0;
                                 hasInterrupted = false;
                                 yieldProgressUpdate();
@@ -437,7 +448,7 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
                                 break;
                             case "executed":
                                 nodesDone = expectedNodes;
-                                curPercent = 0;
+                                curPercent = 1;
                                 yieldProgressUpdate();
                                 break;
                             case "execution_start":
@@ -516,7 +527,7 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
                                     ["comfy_index"] = index
                                 };
                             }
-                            takeOutput(new T2IEngine.ImageOutput() { File = new Image(output[preBytes..], mediaType), IsReal = isReal, GenTimeMS = firstStep == 0 ? -1 : (Environment.TickCount64 - firstStep) });
+                            takeOutput(new T2IEngine.ImageOutput() { File = new Image(output[preBytes..], mediaType), IsReal = isReal, BackendInternalHint = currentNode, GenTimeMS = firstStep == 0 ? -1 : (Environment.TickCount64 - firstStep) });
                         }
                         else
                         {
@@ -1080,6 +1091,7 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
             copyParam(T2IParamTypes.QwenModel);
             copyParam(T2IParamTypes.MistralModel);
             copyParam(T2IParamTypes.GemmaModel);
+            copyParam(T2IParamTypes.GptOssModel);
         }
         WorkflowGenerator wg = new() { UserInput = input, ModelFolderFormat = ModelFolderFormat, Features = [.. SupportedFeatures] };
         JObject workflow = wg.Generate();

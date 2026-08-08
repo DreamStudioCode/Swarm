@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Html;
 using SwarmUI.Utils;
 using System.IO;
 using System.Reflection;
+using System.Runtime.Loader;
 
 namespace SwarmUI.Core;
 
@@ -15,9 +16,39 @@ public class ExtensionsManager
     /// <summary>Hashset of folder names of all extensions currently loaded.</summary>
     public HashSet<string> LoadedExtensionFolders = [];
 
+    /// <summary>Hashset of dependency names that are considered "core" and should not be loaded from the extension's folder.</summary>
+    public HashSet<string> CoreDependencyNames = [];
+
     /// <summary>Simple holder of information about extensions available online.</summary>
     public record class ExtensionInfo(string Name, string Author, string License, string Description, string URL, string OldURL, string[] Tags, string[] FolderNames)
     {
+        public bool IsDangerTags => Tags.Contains("lowquality") || Tags.Contains("conflicts") || Tags.Contains("beta");
+    }
+
+    private class SwarmExtensionLoadContext(ExtensionsManager manager, string name, string extensionDir) : AssemblyLoadContext(name, isCollectible: false)
+    {
+        /// <summary>Host wins, then we probe the extension's folder for private deps.</summary>
+        protected override Assembly Load(AssemblyName name)
+        {
+            string dependency = Path.Combine(extensionDir, name.Name + ".dll");
+            try
+            {
+                Default.LoadFromAssemblyName(name);
+                // We only get here if host successfully loads the assembly.
+                if (File.Exists(dependency) && !manager.CoreDependencyNames.Contains(name.Name))
+                {
+                    Logs.Warning($"Extension {Name} ships {name.Name}.dll but host already has it loaded; using host copy.");
+                }
+                return null;
+            }
+            catch (FileNotFoundException) { }
+            if (!File.Exists(dependency))
+            {
+                return null;
+            }
+            Logs.Debug($"Extension {Name} loading private dep {name.Name} from {dependency}");
+            return LoadFromAssemblyPath(dependency);
+        }
     }
 
     public static HtmlString HtmlTags(string[] tags)
@@ -36,6 +67,7 @@ public class ExtensionsManager
                 "paid" => "<span class=\"tag paid-tag\" title=\"Requires a paid account\">Paid</span>",
                 "beta" => "<span class=\"tag beta-tag\" title=\"Not ready for general use\">Beta</span>",
                 "conflicts" => "<span class=\"tag beta-tag\" title=\"may conflict with core systems or with other extensions (eg overrides core features)\">Conflicts</span>",
+                "lowquality" => "<span class=\"tag lowquality-tag\" title=\"This extension has known quality issues, such as improper implementation methods or a fully vibecoded development approach, adding significant changes outside of the intended scope, or simply is a feature that does not work as well as one might hope\">Low-Quality</span>",
                 "none" => "<span class=\"tag\" title=\"No tags\">None</span>",
                 _ => $"<abbr class=\"tag\" title=\"Unrecognized tag\">{t}</abbr>"
             };
@@ -44,6 +76,11 @@ public class ExtensionsManager
 
     /// <summary>List of known online available extensions.</summary>
     public List<ExtensionInfo> KnownExtensions = [];
+
+    private Assembly LoadInExtensionContext(string dllName, string targetPath)
+    {
+        return new SwarmExtensionLoadContext(this, dllName, Path.GetDirectoryName(targetPath)).LoadFromAssemblyPath(targetPath);
+    }
 
     public static string ReferenceCsproj =
         """
@@ -58,6 +95,11 @@ public class ExtensionsManager
     /// <summary>Initial call that prepares the extensions list.</summary>
     public async Task PrepExtensions()
     {
+        CoreDependencyNames =
+        [
+            .. AssemblyLoadContext.Default.Assemblies.Select(a => a.GetName().Name).Where(n => n is not null),
+            .. Directory.EnumerateFiles(AppContext.BaseDirectory, "*.dll").Select(Path.GetFileNameWithoutExtension)
+        ];
         await BuildPublicExtensionList();
         string[] builtins = [.. Directory.EnumerateDirectories("./src/BuiltinExtensions").Select(s => "src/" + s.Replace('\\', '/').AfterLast("/src/"))];
         string[] extras = Directory.Exists("./src/Extensions") ? [.. Directory.EnumerateDirectories("./src/Extensions/").Select(s => "src/" + s.Replace('\\', '/').AfterLast("/src/"))] : [];
@@ -167,7 +209,7 @@ public class ExtensionsManager
         string mode = Program.IsDevMode ? "Debug" : "Release";
         string dllName = $"SwarmExtension{folder.AfterLast('/')}";
         string hash = (await Utilities.RunGitProcess("rev-parse HEAD", Path.GetFullPath(folder))).Trim();
-        hash = hash.Length >= 8 ? hash[0..8] : "unknown";
+        hash = hash.Length >= 8 && Utilities.AlphaNumericMatcher.IsOnlyMatches(hash[0..8]) ? hash[0..8] : "unknown";
         string target = $"./src/bin/extensions/{dllName}/{dllName}-{hash}.dll";
         // bin/obj shouldn't exist but sometimes are accidentally created. They will break things if they form, so get rid of them.
         if (Directory.Exists($"{folder}/bin"))
@@ -181,7 +223,7 @@ public class ExtensionsManager
         if (File.Exists(target) && !Program.IsDevMode)
         {
             Logs.Debug($"Don't need to rebuild extension {projFile}, already built.");
-            return Assembly.LoadFile(Path.GetFullPath(target));
+            return LoadInExtensionContext(dllName, Path.GetFullPath(target));
         }
         Logs.Debug($"Building extension project: {projFile}...");
         string buildParam = $"-p:BaseIntermediateOutputPath={Path.GetFullPath($"./src/obj/extensions/{dllName}/")};TargetName={dllName}-{hash}";
@@ -195,7 +237,7 @@ public class ExtensionsManager
         {
             Logs.Debug($"Successful build output for extension project {projFile}:\n{output}");
         }
-        return Assembly.LoadFile(Path.GetFullPath(target));
+        return LoadInExtensionContext(dllName, Path.GetFullPath(target));
     }
 
     public void PrepExtension(Type extType, bool isCore, string[] possible)
