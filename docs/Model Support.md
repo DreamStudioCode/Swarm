@@ -11,16 +11,18 @@
 [Flux.2](#flux-2) | MMDiT | 2025 | Black Forest Labs | 4B, 9B, 32B | Minimal | Recent, Incredible Quality, choice of speed or quality preference |
 [Chroma](#chroma) | MMDiT | 2025 | Lodestone Rock | 8.9B  | No | Recent, Decent Quality |
 [Chroma Radiance](#chroma-radiance) | Pixel MMDiT | 2025 | Lodestone Rock | 8.9B  | No | Recent, Bad Quality (WIP) |
-[Lumina 2.0](#lumina-2) | NextDiT | 2025 | Alpha-VLLM | 2.6B | Partial | Modern, Passable Quality |
-[Qwen Image](#qwen-image) | MMDiT | 2025 | Alibaba-Qwen | 20B | Minimal | Modern, Great Quality, very memory intense |
-[Hunyuan Image 2.1](#hunyuan-image-21) | MMDiT | 2025 | Tencent | 17B | No | Modern, Great Quality, very memory intense |
-[Z-Image](#z-image) | S3-DiT | 2025 | Tongyi MAI (Alibaba) | 6B | No | Modern, Great Quality, lightweight |
-[Kandinsky 5](#kandinsky-5) | DiT | 2025 | Kandinsky Lab | 6B | No | Modern, Decent Quality |
+[Lumina 2.0](#lumina-2) | NextDiT | 2025 | Alpha-VLLM | 2.6B | Partial | Recent, Passable Quality |
+[Qwen Image](#qwen-image) | MMDiT | 2025 | Alibaba-Qwen | 20B | Minimal | Recent, Great Quality, very memory intense |
+[Hunyuan Image 2.1](#hunyuan-image-21) | MMDiT | 2025 | Tencent | 17B | No | Recent, Great Quality, very memory intense |
+[Z-Image](#z-image) | S3-DiT | 2025 | Tongyi MAI (Alibaba) | 6B | No | Recent, Great Quality, lightweight |
+[Kandinsky 5](#kandinsky-5) | DiT | 2025 | Kandinsky Lab | 6B | No | Recent, Decent Quality |
 [Anima](#anima) | DiT | 2026 | Circlestone Labs | 2B | WTF | Modern, very small, decent for anime |
 [HiDream O1](#hidream-o1) | "Pixel UiT" | 2026 | HiDream | 8B | Minimal | Modern, intelligent, fast, decent quality |
 [Ideogram 4](#ideogram-4) | DiT | 2026 | Ideogram AI | 9B | Yes | Modern, advanced on input understanding |
 [Krea 2](#krea-2) | DiT | 2026 | Krea AI | 12B | Yes | Modern, extremely smart and great quality |
 [Boogu](#boogu) | MMDiT | 2026 | Boogu | 10B | Minimal | Modern, fast |
+[Qwen Image 2.1](#qwen-image-21) | MMDiT | 2026 | Alibaba-Qwen | 7B | No | Modern, creative, slow |
+[Ming Image](#ming-image) | DiT | 2026 | InclusionAI | 6B | Minimal | Modern, intelligent but ugly |
 
 Old or bad options also tracked listed via [Obscure Model Support](/docs/Obscure%20Model%20Support.md):
 
@@ -43,6 +45,7 @@ Old or bad options also tracked listed via [Obscure Model Support](/docs/Obscure
 [MageFlow](/docs/Obscure%20Model%20Support.md#mageflow) | MMDiT | 2026 | Microsoft | 4B | No | Very bad quality compared to contemporary models |
 [ERNIE](/docs/Obscure%20Model%20Support.md#ernie) | DiT | 2026 | Baidu | 8B | Minimal | Modern, intelligent, good quality, fast |
 [Lens](/docs/Obscure%20Model%20Support.md#lens) | MMDiT | 2026 | Microsoft | 4B | Minimal | Modern, lightweight, eh quality |
+[SenseNova-U1](/docs/Obscure%20Model%20Support.md#sensenova) | "Pixel UiT" | 2026 | SenseNova | 8B | Minimal | Modern, very intelligent but bad details |
 
 - **Architecture** is the fundamental machine learning structure used for the model, UNet's were used in the past but DiT (Diffusion Transformers) are the modern choice
 - **Scale** is how big the model is - "B" for "Billion", so for example "2B" means "Two billion parameters".
@@ -65,11 +68,12 @@ Old or bad options also tracked listed via [Obscure Model Support](/docs/Obscure
 
 # Current Recommendations
 
-Image model(s) most worth using, as of June 2026:
+Image model(s) most worth using, as of September 2026:
 
 - Krea 2 is the champion of image generation.
 - Flux.2 Klein is pretty great too, particularly for editing.
-- Ideogram is worth experimenting with if you like getting advanced, as it allows JSON inputs with structured bounding boxes.
+- Qwen Image 2.1 is probably better for edit than Klein.
+- Ideogram or Ming Image may be worth experimenting with if you like getting advanced, as they allow JSON inputs with structured bounding boxes.
 
 # General Info
 
@@ -298,13 +302,9 @@ For upscaling with SD3, the `Refiner Do Tiling` parameter is highly recommended 
     - It is lower quality vs the full Flux.2-Dev, but runs much faster. Certain aspects of the quality can actually be better, notably visual quality seems to have been tuned better, overall intelligence is lower.
     - There is a 4B and a 9B variant, while the 9B is larger it often seems like the 4B is smarter.
     - It uses a smaller text encoder (Qwen 4B for Klein 4B, and Qwen 8B for Klein 9B). It will be autodownloaded.
-    - Download [Klein 4b here](<https://huggingface.co/Comfy-Org/flux2-klein-4B/tree/main/split_files/diffusion_models>)
-        - or a [gguf here](<https://huggingface.co/unsloth/FLUX.2-klein-4B-GGUF/blob/main/flux-2-klein-4b-Q4_K_M.gguf>) or [base gguf here](<https://huggingface.co/unsloth/FLUX.2-klein-base-4B-GGUF/blob/main/flux-2-klein-base-4b-Q4_K_M.gguf>)
+    - Download [Klein 4b here](<https://huggingface.co/black-forest-labs/FLUX.2-klein-4b-fp8/blob/main/flux-2-klein-4b-fp8.safetensors>) or [4b base here](<https://huggingface.co/black-forest-labs/FLUX.2-klein-base-4b-fp8/blob/main/flux-2-klein-base-4b-fp8.safetensors>)
         - It has a distilled variant (Steps=8, CFG=1), and a "Base" variant (high steps, high CFG)
-    - or [Klein 9b here](<https://huggingface.co/black-forest-labs/FLUX.2-klein-9B/blob/main/flux-2-klein-9b.safetensors>) (you may need to [accept a license here](<https://huggingface.co/black-forest-labs/FLUX.2-klein-9B>))
-        - or a [gguf here](<https://huggingface.co/unsloth/FLUX.2-klein-9B-GGUF/blob/main/flux-2-klein-9b-Q4_K_M.gguf>)
-    - or [klein 9b base here](<https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-fp8/blob/main/flux-2-klein-base-9b-fp8.safetensors>)
-        - or a [gguf here](<https://huggingface.co/unsloth/FLUX.2-klein-base-9B-GGUF/blob/main/flux-2-klein-base-9b-Q4_K_M.gguf>)
+    - or [Klein 9b here](<https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-fp8/blob/main/flux-2-klein-9b-fp8.safetensors>) or [9b base here](<https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9b-fp8/blob/main/flux-2-klein-base-9b-fp8.safetensors>) (you may need to [accept a license here](<https://huggingface.co/black-forest-labs/FLUX.2-klein-9B>))
     - or [klein 9b-kv cache version here](<https://huggingface.co/black-forest-labs/FLUX.2-klein-9b-kv-fp8/blob/main/flux-2-klein-9b-kv-fp8.safetensors>)
         - This version uses "KV Cache" to accelerate image editing.
         - Any model with KV Cache support **MUST HAVE** `9b-kv` in the filename. This is how Swarm detects and applies KV Cache behavior to the model. (There is no way to automatically detect).
@@ -454,7 +454,29 @@ For upscaling with SD3, the `Refiner Do Tiling` parameter is highly recommended 
     - There are a couple dedicated Qwen Image Edit Lightning Loras [lightx2v/Qwen-Image-Edit-2511-Lightning](<https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning/tree/main>) or for older copies [lightx2v/Qwen-Image-Lightning](<https://huggingface.co/lightx2v/Qwen-Image-Lightning/tree/main>)
         - Take care to separate the Edit lora vs the base Qwen Image lora.
 
-### Hunyuan Image 2.1
+# Qwen Image 2.1
+
+![img](/docs/images/models/qwenimage21.jpg)
+
+- [Qwen Image 2.1](<https://huggingface.co/Qwen/Qwen-Image-2.1>) is supported in SwarmUI
+    - This models specific claim to fame is being the first proper model that supports alpha - meaning, it can generate images with transparency
+    - It can also do image editing & referencing at relatively high quality
+    - They have a blog post that demonstrates main use cases here: [Qwen AI Blog: Qwen Image 2.1](<https://qwen.ai/blog?id=qwen-image-2.1>)
+- Main model downloads are here: [Comfy-Org/Qwen-Image-2.1](<https://huggingface.co/Comfy-Org/Qwen-Image-2.1/tree/main/diffusion_models>)
+- It has a ch=64 scale=16 RGBA VAE, it will be downloaded automatically
+    - Note that many models are scale=8, this is scale=16, meaning it has a larger 'snap' in resolution range, and needs to be set to 2048x2048 to generate the equivalent quality of what most models do at 1024x1024
+    - There is an unofficial 'texture fix' VAE that looks a bit better, download here [madebyollin/texture-fix-vae](<https://huggingface.co/madebyollin/texture-fix-vae-for-qwen-image-2.1/blob/main/texture_fix_vae_for_qwen_image_2.1_bf16.safetensors>). If you prefer it, select it in User Settings -> DefaultQwen21VAE.
+- Supports generating transparency (will break if image format is jpg)
+- **Parameters:**
+    - **Prompt**: General VLM prompting
+        - The preset for transparent images is `This is an RGBA image with transparency. {prompt}. The image has alpha channel and the background is transparent.` this is essentially required for proper transparent backgrounds.
+    - **Prompt Images:** add up to 10 images to the prompt for editing or referencing
+    - **CFG Scale:** Use `1`
+    - **Steps:** Normal step ranges (like `20`, official Qwen reference is `40`, can still produce coherent images with lower step counts like 12)
+    - **Resolution:** The model is built for SideLength=2048 (at a 16x downscale, equivalent to 1024x1024 on most other models), but you may wish to lower this for speed (and sometimes quality, 2048 may be a bit undertrained), eg SideLength=1024 is more comfortable for quick gens
+        - Consider trying 1024 base res and a Refiner Upscale 2x
+
+# Hunyuan Image 2.1
 
 ![img](/docs/images/models/hy-img-21.jpg)
 
@@ -633,7 +655,11 @@ For upscaling with SD3, the `Refiner Do Tiling` parameter is highly recommended 
 - Uses Qwen 3 VL 4B as a text encoder, and the QwenImage VAE, these will be automatically downloaded.
 - **Parameters:**
     - **Prompt:** Normal general model prompting works as expected, but NSFW terms will be stripped by the models internal text-refiner.
-    - **Prompt Images:** Krea 2 is not an editing model per se, but it can take in reference images in the prompt. Be warned it will overpower the prompt. Improvements to this are TBD?
+    - **Prompt Images:** Krea 2 is not an editing model per se, but it can take in reference images in the prompt (by default only the text encoder sees this, not the core model).
+        - There are unofficial "Ostris" edit loras like this: [Ostris/Krea2 Style Reference](<https://huggingface.co/ostris/krea2_turbo_style_reference/blob/main/krea2_style_reference.safetensors>), results may vary.
+            - For those, set **Enable Reference Latents** under Image Prompting to **Index Timestep Zero (Ostris)**.
+        - There are also "identity edit" LoRAs like this: [Krea Identity Edit](<https://huggingface.co/conradlocke/krea2-identity-edit/tree/main>)
+            - use **Index (Identity Edit)** on that same dropdown.
     - **Resolution:** Side length `1024` is the default, but it work anywhere from `128` to `4096`.
     - **Steps:** For Turbo, `8` recommended, `4` minimum. For Base normal step counts (20+).
     - **CFG:** For Turbo, `1`. For Base normal CFG ranges (4+? 7? idk, tbd)
@@ -654,12 +680,25 @@ For upscaling with SD3, the `Refiner Do Tiling` parameter is highly recommended 
 - Uses the Flux.1 VAE and a Qwen3-VL8B text encoder, both downloaded and handled automatically.
 - For editing, use the `Edit` model and give it a prompt image - SwarmUI automatically wires it in as the reference.
 - **Parameters:** recommendations differ between the Base, Edit, and Turbo models:
-    - **Sampler**: For Turbo, use LCM, otherwise default is fine, DPM++ 2M is recommended as a bit better than Euler for these models.
+    - **Sampler:** For Turbo, use LCM, otherwise default is fine, DPM++ 2M is recommended as a bit better than Euler for these models.
     - **Scheduler:** For Turbo, use SGM Uniform, otherwise default is fine.
     - **CFG Scale:** For Turbo, `1`, otherwise normal CFG ranges (around `4`).
     - **Steps:** For Turbo, `4` is recommended, otherwise `20` as normal.
     - **Resolution:** Side length `1024` is the default.
     - **Sigma Shift:** Default is `3.16`.
+
+# Ming Image
+
+- [Ming Image](<https://huggingface.co/inclusionAI/Ming-Image-0.1-Design>) is supported in SwarmUI!
+- It is a 6B model intended for infographic generation
+    - Download here: [Comfy-Org/Ming-Image](<https://huggingface.co/Comfy-Org/Ming-Image/blob/main/diffusion_models/ming_image_0.1_design_int8_convrot.safetensors>)
+    - There is also a 'layer' model, not currently supported
+- Supports generating transparency (will break if image format is jpg)
+- VAE and text encoder will be automatically downloaded
+- **Parameters:**
+    - **Prompt:** Likes JSON blocks, similar to ideogram
+    - **CFG Scale:** `1`
+    - **Steps:** They recommend `12`
 
 # Video Models
 

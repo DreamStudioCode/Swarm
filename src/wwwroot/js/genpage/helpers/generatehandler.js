@@ -107,7 +107,7 @@ class GenerateHandler {
             vid = document.createElement('video');
             vid.classList.add('image-block-img-inner');
             vid.loop = true;
-            vid.autoplay = true;
+            vid.autoplay = !imgHolder.div.closest('#current_image_batch') || playBatchVideosElem.checked;
             vid.muted = true;
             vid.width = 16 * 10;
             let sourceObj = document.createElement('source');
@@ -117,14 +117,19 @@ class GenerateHandler {
             imgHolder.div.appendChild(vid);
         }
         else if (isAudio) {
-            if (imgElem) {
-                imgElem.remove();
+            let audio = src;
+            if (!imgElem) {
+                imgElem = document.createElement('img');
+                imgElem.classList.add('image-block-img-inner');
+                imgHolder.div.appendChild(imgElem);
             }
-            imgElem = document.createElement('audio');
-            imgElem.classList.add('image-block-img-inner');
-            imgElem.controls = true;
-            imgElem.src = src;
-            imgHolder.div.appendChild(imgElem);
+            imgElem.src = 'imgs/audio_placeholder.jpg';
+            renderWaveformImage(audio, 256, 256, waveform => `Audio ${durationStringifyColons(waveform.duration)}`).then(waveformImage => {
+                if (imgHolder.image != audio || !imgElem.isConnected) {
+                    return;
+                }
+                imgElem.src = waveformImage;
+            }).catch(() => { });
         }
         else {
             imgElem.src = src;
@@ -180,12 +185,12 @@ class GenerateHandler {
                 }
             }
             else {
-                this.gotTrackedImageResult(data.image, data.metadata, `${data.request_id}_${data.batch_index}`, div);
                 let imgElem = div.querySelector('img');
                 let spinner = div.querySelector('.loading-spinner-parent');
                 let progress_bars = div.querySelector('.image-preview-progress-wrapper');
                 let isPreviewSwapToCompleted = imgElem.dataset.previewGrow || progress_bars || spinner;
                 this.setImageFor(imgHolder, data.image);
+                this.gotTrackedImageResult(data.image, data.metadata, `${data.request_id}_${data.batch_index}`, div);
                 if (spinner) {
                     spinner.remove();
                 }
@@ -320,12 +325,12 @@ class GenerateHandler {
             let timeLastGenHit = [Date.now()];
             let actualInput = this.getGenInput(input_overrides, input_preoverrides);
             let socket = null;
-            let handleError = e => {
+            let handleError = (e, data = null) => {
                 console.log(`Error in GenerateText2ImageWS:`, e, this.interrupted, batch_id);
                 setTimeout(() => {
                     for (let imgHolder of Object.values(images)) {
                         let div = this.getDiv(imgHolder);
-                        if (div) {
+                        if (div && (!data || (data.request_id && div.dataset.request_id == data.request_id))) {
                             let spinner = div.querySelector('.loading-spinner-parent');
                             if (spinner) {
                                 spinner.remove();

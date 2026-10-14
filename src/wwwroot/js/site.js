@@ -1,5 +1,9 @@
 
+/** Current user session ID (not login session), or null if none. */
 let session_id = getCookie('session_id') || null;
+/** List of functions to fire when the main generate page has fully loaded. */
+let sessionReadyCallbacks = [];
+/** Current User ID, or null if none. */
 let user_id = null;
 let outputAppendUser = null;
 
@@ -64,6 +68,19 @@ function enableSliderForBox(div, number = null) {
             range.dispatchEvent(new Event('change'));
         });
     }
+    let shiftStep = range.dataset.shiftStep;
+    if (shiftStep && range.dataset.ispot != "true") {
+        let normalStep = range.step;
+        let updateShiftStep = (event) => {
+            range.step = event.shiftKey ? shiftStep : normalStep;
+        };
+        range.addEventListener('pointerdown', updateShiftStep);
+        range.addEventListener('keydown', updateShiftStep);
+        range.addEventListener('keyup', updateShiftStep);
+        range.addEventListener('blur', () => {
+            range.step = normalStep;
+        });
+    }
     number.dispatchEvent(new Event('input'));
     autoNumberWidth(number);
 }
@@ -96,9 +113,9 @@ let failedWSAddr = translatable(`Failed to get WebSocket address. You may be con
 let failedDepth = translatable(`Failed to get session ID after 3 tries. Your account may have been invalidated. Try refreshing the page, or contact the site owner.`);
 
 function makeWSRequest(url, in_data, callback, depth = 0, errorHandle = null, onOpenHandle = null) {
-    function fail(e) {
+    function fail(e, data = null) {
         if (errorHandle) {
-            errorHandle(e);
+            errorHandle(e, data);
             return;
         }
         console.log(e);
@@ -134,7 +151,7 @@ function makeWSRequest(url, in_data, callback, depth = 0, errorHandle = null, on
         if (data.error) {
             let error = typeof data.error == 'string' ? data.error : JSON.stringify(data.error);
             console.log(`Tried making WS request ${url} but failed with error: ${error}`);
-            fail(error);
+            fail(error, data);
             return;
         }
         callback(data);
@@ -374,44 +391,61 @@ function textPromptAddKeydownHandler(elem) {
             mid = mid.substring(0, mid.length - 1);
             after = " " + after;
         }
-        if (mid.startsWith("(")) {
-            before += mid.substring(0, 1);
-            mid = mid.substring(1);
+        let weightPrefix = before.match(/<weight\[([0-9.-]*)\]:$/);
+        if (weightPrefix && after.startsWith('>')) {
+            before = before.substring(0, before.length - weightPrefix[0].length);
+            strength = parseFloat(weightPrefix[1]);
+            after = after.substring(1);
         }
-        // Sorry for the regex. Matches ends with ":1.5)" or just ")". Or Just ":1.5". Also forbids backslash prefix. Also empty, so that needs a check after.
-        let matched = mid.trim().match(/(?<![\\])(?:\:[0-9.-]*)?\)?$/);
-        if (matched && matched[0]) {
-            after = mid.substring(mid.length - matched[0].length) + after;
-            mid = mid.substring(0, mid.length - matched[0].length);
-        }
-        if (before.trimEnd().endsWith("(") && after.trimStart().startsWith(":")) {
-            let postColon = after.trimStart().substring(1);
-            let paren = postColon.indexOf(')');
-            while (paren > 0 && postColon.substring(paren - 1).startsWith('\\)')) {
-                paren = postColon.indexOf(')', paren + 1);
+        else {
+            let parsedWeight = mid.match(/^<weight\[([0-9.-]*)\]:(.*)>$/);
+            if (parsedWeight) {
+                strength = parseFloat(parsedWeight[1]);
+                mid = parsedWeight[2];
             }
-            if (paren != -1) {
-                before = before.trimEnd();
-                before = before.substring(0, before.length - 1);
-                strength = parseFloat(postColon.substring(0, paren).trim());
-                after = postColon.substring(paren + 1);
+            else {
+                if (mid.startsWith("(")) {
+                    before += mid.substring(0, 1);
+                    mid = mid.substring(1);
+                }
+                // Sorry for the regex. Matches ends with ":1.5)" or just ")". Or Just ":1.5". Also forbids backslash prefix. Also empty, so that needs a check after.
+                let matched = mid.trim().match(/(?<![\\])(?:\:[0-9.-]*)?\)?$/);
+                if (matched && matched[0]) {
+                    after = mid.substring(mid.length - matched[0].length) + after;
+                    mid = mid.substring(0, mid.length - matched[0].length);
+                }
+                if (before.trimEnd().endsWith("(") && after.trimStart().startsWith(":")) {
+                    let postColon = after.trimStart().substring(1);
+                    let paren = postColon.indexOf(')');
+                    while (paren > 0 && postColon.substring(paren - 1).startsWith('\\)')) {
+                        paren = postColon.indexOf(')', paren + 1);
+                    }
+                    if (paren != -1) {
+                        before = before.trimEnd();
+                        before = before.substring(0, before.length - 1);
+                        strength = parseFloat(postColon.substring(0, paren).trim());
+                        after = postColon.substring(paren + 1);
+                    }
+                }
+                else if (before.trimEnd().endsWith("(") && after.trimStart().startsWith(")")) {
+                    before = before.trimEnd();
+                    before = before.substring(0, before.length - 1);
+                    strength = 1.1;
+                    after = after.trimStart().substring(1);
+                }
             }
         }
-        else if (before.trimEnd().endsWith("(") && after.trimStart().startsWith(")")) {
-            before = before.trimEnd();
-            before = before.substring(0, before.length - 1);
-            strength = 1.1;
-            after = after.trimStart().substring(1);
-        }
-        strength += up ? 0.1 : -0.1;
+        let step = parseFloat(internalSiteJsGetUserSetting('ui.weightstep', '0.1'));
+        strength += up ? step : -step;
         strength = `${formatNumberClean(strength, 5)}`;
         if (strength == "1") {
             setTextContent(elem, `${before}${mid}${after}`);
             setTextSelRange(elem, before.length, before.length + mid.length);
         }
         else {
-            setTextContent(elem, `${before}(${mid}:${strength})${after}`);
-            setTextSelRange(elem, before.length + 1, before.length + mid.length + 1);
+            let tagStart = `<weight[${strength}]:`;
+            setTextContent(elem, `${before}${tagStart}${mid}>${after}`);
+            setTextSelRange(elem, before.length + tagStart.length, before.length + tagStart.length + mid.length);
         }
         triggerChangeFor(elem);
     }
@@ -589,7 +623,7 @@ function setMediaFileDirect(elem, src, type, name, longName = null, callback = n
     let parent = findParentOfClass(elem, 'auto-input');
     let preview = parent.querySelector('.auto-input-preview');
     let label = parent.querySelector('.auto-file-input-filename');
-    elem.dataset.filedata = src;
+    elem.dataset.filedata = isValidMediaPath(longName) ? longName : src;
     let button = `<button class="interrupt-button auto-input-remove-button" title="Remove ${type}">&times;</button>`;
     let img;
     if (type == 'image') {
@@ -765,14 +799,15 @@ function updateRangeStyle(e) {
 }
 
 /** Builds the range portion shared by slider-based inputs. */
-function makeSliderRange(id, value, min, max, step, isPot = false) {
+function makeSliderRange(id, value, min, max, step, isPot = false, shiftStep = null) {
+    let shiftAttr = shiftStep == null ? '' : ` data-shift-step="${shiftStep}"`;
     return `
         <div class="auto-slider-range-wrapper" style="${getRangeStyle(value, min, max)}">
-            <input class="auto-slider-range" type="range" id="${id}_rangeslider" value="${value}" min="${min}" max="${max}" step="${step}" data-ispot="${isPot}" autocomplete="off" oninput="updateRangeStyle(this)" onchange="updateRangeStyle(this)">
+            <input class="auto-slider-range" type="range" id="${id}_rangeslider" value="${value}" min="${min}" max="${max}" step="${step}" data-ispot="${isPot}"${shiftAttr} autocomplete="off" oninput="updateRangeStyle(this)" onchange="updateRangeStyle(this)">
         </div>`;
 }
 
-function makeSliderInput(featureid, id, paramid, name, description, value, min, max, view_min = 0, view_max = 0, step = 1, isPot = false, toggles = false, popover_button = true) {
+function makeSliderInput(featureid, id, paramid, name, description, value, min, max, view_min = 0, view_max = 0, step = 1, isPot = false, toggles = false, popover_button = true, shiftStep = null) {
     name = escapeHtml(name);
     featureid = featureid ? ` data-feature-require="${featureid}"` : '';
     let rangeVal = isPot ? potToLinear(value, max, min, step) : value;
@@ -785,7 +820,7 @@ function makeSliderInput(featureid, id, paramid, name, description, value, min, 
         </label>
         <input class="auto-slider-number" type="number" id="${id}" data-param_id="${paramid}" value="${value}" min="${min}" max="${max}" step="${step}" data-ispot="${isPot}" autocomplete="off" onchange="autoNumberWidth(this)">
         <br>
-        ${makeSliderRange(id, rangeVal, view_min, view_max, step, isPot)}
+        ${makeSliderRange(id, rangeVal, view_min, view_max, step, isPot, shiftStep)}
     </div>`;
 }
 
@@ -1319,7 +1354,7 @@ function describeAspectRatio(width, height) {
     else if (roundTo(hw, 0.01) % 1 == 0) {
         return `1:${Math.round(hw)}`;
     }
-    for (let i = 2; i < 50; i++) {
+    for (let i of [2, 3, 4, 9]) {
         if (roundTo(wh * i, 0.01) % 1 == 0) {
             return `${Math.round(wh * i)}:${i}`;
         }

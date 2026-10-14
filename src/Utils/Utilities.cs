@@ -3,8 +3,10 @@ using FreneticUtilities.FreneticToolkit;
 using Microsoft.AspNetCore.Http;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using SwarmUI.Accounts;
 using SwarmUI.Backends;
 using SwarmUI.Core;
+using SwarmUI.WebAPI;
 using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -158,7 +160,7 @@ public static class Utilities
     public static AsciiMatcher ControlCodesMatcher = new(c => c < 32);
 
     /// <summary>Matcher for characters banned or specialcased by Windows or other OS's.</summary>
-    public static AsciiMatcher FilePathForbidden = new(c => c < 32 || "<>:\"\\|?*~&@;#$^".Contains(c));
+    public static AsciiMatcher FilePathForbidden = new(c => c < 32 || "<>:\"\\|?*~&@;#$^%".Contains(c));
 
     public static HashSet<string> ReservedFilenames = ["con", "prn", "aux", "nul"];
 
@@ -264,6 +266,19 @@ public static class Utilities
         return CancellationTokenSource.CreateLinkedTokenSource(Program.GlobalProgramCancel, new CancellationTokenSource(time).Token);
     }
 
+    /// <summary>Send JSON data to a WebSocket, no errors thrown (eg transient updates that shouldn't fail an operation).</summary>
+    public static async Task SendJsonNoError(this WebSocket socket, JObject obj, TimeSpan maxDuration)
+    {
+        try
+        {
+            await socket.SendJson(obj, maxDuration);
+        }
+        catch (Exception ex)
+        {
+            Logs.Verbose($"Failed to send JSON to WebSocket: {ex.ReadableString()}");
+        }
+    }
+
     /// <summary>Send JSON data to a WebSocket.</summary>
     public static async Task SendJson(this WebSocket socket, JObject obj, TimeSpan maxDuration)
     {
@@ -271,11 +286,11 @@ public static class Utilities
         await socket.SendAsync(JsonToByteArray(obj), WebSocketMessageType.Text, true, cancel.Token);
     }
 
-    /// <summary>Send JSON data to a WebSocket.</summary>
+    /// <summary>Send an error to a WebSocket, and report it to logs. Used for fatal API rejections.</summary>
     public static async Task SendAndReportError(this WebSocket socket, string context, string message, TimeSpan maxDuration)
     {
         Logs.Error($"{context}: {message}");
-        await socket.SendJson(new JObject() { ["error"] = message }, maxDuration);
+        await socket.SendJsonNoError(new JObject() { ["error"] = message }, maxDuration);
     }
 
     /// <summary>Equivalent to <see cref="Task.WhenAny(IEnumerable{Task})"/> but doesn't break on an empty list.</summary>
@@ -703,40 +718,181 @@ public static class Utilities
     /// <summary>Reusable general web client with a very long timeout, for <see cref="DownloadFile"/> in particular to use.</summary>
     public static HttpClient DownloaderWebClient = NetworkBackendUtils.MakeHttpClient(120);
 
-    /// <summary>Downloads a file from a given URL and saves it to a given filepath.</summary>
-    public static async Task DownloadFile(string url, string filepath, Action<long, long, long> progressUpdate, CancellationTokenSource cancel = null, string altUrl = null, string verifyHash = null, Dictionary<string, string> headers = null)
+    /// <summary>Extracts the server's stated reason from a failed HTTP response, if it provides one in a recognizable format. Returns null if none.</summary>
+    public static async Task<string> GetResponseErrorReason(HttpResponseMessage response)
+    {
+        if (response.Headers.TryGetValues("x-error-message", out IEnumerable<string> errHeader))
+        {
+            string headerReason = errHeader.FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(headerReason))
+            {
+                return CleanTrashTextForDebug(headerReason);
+            }
+        }
+        if (response.Content?.Headers.ContentType?.MediaType == "application/json")
+        {
+            try
+            {
+                JObject data = JObject.Parse(await response.Content.ReadAsStringAsync());
+                string reason = data.Value<string>("message") ?? data.Value<string>("error");
+                if (!string.IsNullOrWhiteSpace(reason))
+                {
+                    return CleanTrashTextForDebug(reason);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logs.Verbose($"Could not parse an error reason from failed download response body: {ex.ReadableString()}");
+            }
+        }
+        return null;
+    }
+
+    /// <summary>Adds the current user's relevant API key to a download URL or its request headers. Returns a hint to show the user if the server refuses the download with an auth error, or null.</summary>
+    public static string ApplyDownloadAPIKey(ref string url, Dictionary<string, string> headers, Session session)
+    {
+        if (session?.User is null)
+        {
+            return null;
+        }
+        if (url.StartsWith("https://civitai.com/"))
+        {
+            url = $"https://civitai.red/{url["https://civitai.com/".Length..]}";
+        }
+        if (url.StartsWith("https://civitai.red/"))
+        {
+            string civitaiApiKey = session.User.GetGenericData("civitai_api", "key");
+            bool hasToken = url.Contains("?token=") || url.Contains("&token=");
+            if (!string.IsNullOrEmpty(civitaiApiKey) && !hasToken)
+            {
+                url += (url.Contains('?') ? "&token=" : "?token=") + ModelsAPI.TokenTextLimiter.TrimToMatches(civitaiApiKey);
+                Logs.Debug("Added Civitai API Key to download request.");
+                hasToken = true;
+            }
+            return hasToken ? "Civitai refused this download despite your API key. Make sure your Civitai API key in the User Settings page is valid, and that your Civitai account has access to this model (early access may require a purchase or subscription)."
+                : "Civitai refused this download, and you do not have a Civitai API key set. If this model is gated or early-access, set your Civitai API key in the User Settings page to download it.";
+        }
+        else if (url.StartsWith("https://huggingface.co/"))
+        {
+            string hfApiKey = session.User.GetGenericData("huggingface_api", "key");
+            if (!string.IsNullOrEmpty(hfApiKey))
+            {
+                headers["Authorization"] = $"Bearer {ModelsAPI.TokenTextLimiter.TrimToMatches(hfApiKey)}";
+                Logs.Debug("Added HuggingFace API Key to download request.");
+                return "Hugging Face refused this download despite your API key. Make sure your Hugging Face API key in the User Settings page is valid, and that your account has been granted access to this model (gated models require accepting the terms on the model's page).";
+            }
+            return "Hugging Face refused this download, and you do not have a Hugging Face API key set. If this model is gated or private, set your Hugging Face API key in the User Settings page to download it.";
+        }
+        return null;
+    }
+
+    public static string[] ParallelDownloadSupportedUrls = ["https://huggingface.co/", "https://civitai.com/", "https://civitai.red/"];
+
+    /// <summary>Downloads a file from a given URL and saves it to a given filepath. Auth errors (401/403) get a hint appended to the error message to tell the user how to fix it.</summary>
+    public static async Task DownloadFile(string url, string filepath, Action<long, long, long> progressUpdate, CancellationTokenSource cancel = null, string altUrl = null, string verifyHash = null, Dictionary<string, string> headers = null, Session session = null, bool allowParallel = true)
     {
         altUrl ??= url;
         cancel ??= new();
+        headers ??= [];
+        bool doParallel = allowParallel && ParallelDownloadSupportedUrls.Any(supported => url.StartsWith(supported));
+        int maxParallel = 1;
+        if (doParallel)
+        {
+            if (url.StartsWith("https://huggingface.co/"))
+            {
+                maxParallel = Program.ServerSettings.Network.HuggingFaceDownloadParallelism;
+            }
+            else if (url.StartsWith("https://civitai.com/") || url.StartsWith("https://civitai.red/"))
+            {
+                maxParallel = Program.ServerSettings.Network.CivitaiDownloadParallelism;
+            }
+            doParallel = maxParallel > 1;
+        }
+        string authHint = ApplyDownloadAPIKey(ref url, headers, session) ?? "This may be gated or private content that requires an API key. You can set API keys in the User Settings page.";
         using CancellationTokenSource combinedCancel = CancellationTokenSource.CreateLinkedTokenSource(Program.GlobalProgramCancel, cancel.Token);
         Directory.CreateDirectory(Path.GetDirectoryName(filepath));
         using FileStream writer = File.OpenWrite(filepath);
-        HttpRequestMessage request = new(HttpMethod.Get, url);
-        if (headers is not null)
+        HttpRequestMessage makeRequest(long start, long end)
         {
-            foreach ((string key, string value) in headers)
+            HttpRequestMessage request = new(HttpMethod.Get, url);
+            if (headers is not null)
             {
-                request.Headers.Add(key, value);
+                foreach ((string key, string value) in headers)
+                {
+                    request.Headers.Add(key, value);
+                }
             }
+            if (doParallel)
+            {
+                request.Headers.AcceptEncoding.Clear();
+                request.Headers.AcceptEncoding.Add(new("identity"));
+            }
+            if (doParallel || end != 0)
+            {
+                request.Headers.Range = new(start, end);
+            }
+            return request;
         }
-        HttpResponseMessage response = await UtilWebClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, Program.GlobalProgramCancel);
-        long length = response.Content.Headers.ContentLength ?? 0;
-        ConcurrentQueue<byte[]> chunks = new();
+        HttpResponseMessage response = await DownloaderWebClient.SendAsync(makeRequest(0, 0), HttpCompletionOption.ResponseHeadersRead, Program.GlobalProgramCancel);
+        long length = response.Content.Headers.ContentRange?.Length ?? 0;
+        if (length == 0)
+        {
+            length = response.Content.Headers.ContentLength ?? 0;
+            doParallel = false;
+            maxParallel = 1;
+        }
+        int chunkSize = (doParallel ? 16 : 64) * 1024 * 1024;
+        Logs.Verbose($"Download ContentRange: {response.Content.Headers.ContentRange?.ToString() ?? "none"}, ContentLength {response.Content.Headers.ContentLength}, final length: {length}, parallel: {doParallel}, maxParallel: {maxParallel}");
+        ConcurrentQueue<(int, byte[])> chunks = new();
         ConcurrentQueue<(long, long, long, bool)> progUpdates = new();
-        if (response.StatusCode != HttpStatusCode.OK)
+        if (response.StatusCode != HttpStatusCode.OK && response.StatusCode != HttpStatusCode.PartialContent)
         {
-            throw new SwarmReadableErrorException($"Failed to download {altUrl}: got response code {(int)response.StatusCode} {response.StatusCode}");
+            string message = $"Failed to download {altUrl}: got response code {(int)response.StatusCode} {response.StatusCode}";
+            if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+            {
+                string reason = await GetResponseErrorReason(response);
+                message += reason is null ? $". {authHint}" : $" (\"{reason}\"). {authHint}";
+            }
+            throw new SwarmReadableErrorException(message);
         }
+        int currentChunkId = 0;
         using Stream dlStream = await response.Content.ReadAsStreamAsync();
-        Task loadData = Task.Run(async () =>
+        async Task doLoadData(int chunkId, int step = 0)
         {
-            HttpResponseMessage workingResponse = response;
-            Stream workingStream = dlStream;
+            long start = 0, end = length;
+            int finalChunk = step * maxParallel + chunkId;
+            HttpResponseMessage workingResponse = doParallel ? null : response;
+            Stream workingStream = doParallel ? null : dlStream;
             try
             {
+                if (doParallel)
+                {
+                    start = finalChunk * (long)chunkSize;
+                    if (start >= length)
+                    {
+                        return;
+                    }
+                    end = Math.Min(start + chunkSize, length);
+                    while (step > currentChunkId / maxParallel + 1)
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(0.1), combinedCancel.Token);
+                    }
+                    workingResponse = await DownloaderWebClient.SendAsync(makeRequest(start, end - 1), HttpCompletionOption.ResponseHeadersRead, Program.GlobalProgramCancel);
+                    if (workingResponse.StatusCode != HttpStatusCode.PartialContent)
+                    {
+                        string message = $"Failed to download {altUrl} (expecting Partial range continue): got response code {(int)workingResponse.StatusCode} {workingResponse.StatusCode}";
+                        if (workingResponse.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+                        {
+                            string reason = await GetResponseErrorReason(workingResponse);
+                            message += reason is null ? $". {authHint}" : $" (\"{reason}\"). {authHint}";
+                        }
+                        throw new SwarmReadableErrorException(message);
+                    }
+                    workingStream = await workingResponse.Content.ReadAsStreamAsync();
+                }
                 int tryCount = 0;
                 long totalRead = 0;
-                byte[] buffer = new byte[Math.Min(length + 1024, 1024 * 1024 * 64)]; // up to 64 megabytes, just grab as big a chunk as we can at a time
+                byte[] buffer = new byte[doParallel ? (int)(end - start) : Math.Min(length + 1024, chunkSize)];
                 int nextOffset = 0;
                 while (true)
                 {
@@ -754,7 +910,6 @@ public static class Utilities
                             Task second = await Task.WhenAny(waiting2, reading);
                             if (second == waiting2)
                             {
-                                chunks.Enqueue(null);
                                 throw new SwarmReadableErrorException("Download timed out, 5 minutes with no new data over stream.");
                             }
                             Logs.Info($"Download progressed before timeout, continuing as normal (received {new MemoryNum(await readTask)}).");
@@ -765,10 +920,10 @@ public static class Utilities
                         {
                             if (nextOffset > 0)
                             {
-                                chunks.Enqueue(buffer[..nextOffset]);
+                                chunks.Enqueue((finalChunk, buffer[..nextOffset]));
                                 totalRead += nextOffset;
                             }
-                            chunks.Enqueue(null);
+                            chunks.Enqueue((finalChunk, null));
                             break;
                         }
                         if (nextOffset + read < 1024 * 1024 * 5)
@@ -777,19 +932,19 @@ public static class Utilities
                         }
                         else
                         {
-                            chunks.Enqueue(buffer[..(nextOffset + read)]);
+                            chunks.Enqueue((finalChunk, buffer[..(nextOffset + read)]));
                             totalRead += nextOffset + read;
                             nextOffset = 0;
                         }
                         if (cancel is not null && cancel.IsCancellationRequested)
                         {
-                            chunks.Enqueue(null);
+                            chunks.Enqueue((finalChunk, null));
                             break;
                         }
                     }
                     catch (Exception ex)
                     {
-                        if (tryCount < 4 && totalRead > 0 && totalRead < length)
+                        if (tryCount < 4 && totalRead > 0 && totalRead < end - start)
                         {
                             Logs.Debug($"Download from '{altUrl}' failed in loadData with internal exception, (WILL RETRY): {ex.ReadableString()}");
                             tryCount++;
@@ -797,19 +952,17 @@ public static class Utilities
                             workingStream.Dispose();
                             workingStream = null;
                             workingResponse.Dispose();
-                            request = new(HttpMethod.Get, url);
-                            if (headers is not null)
-                            {
-                                foreach ((string key, string value) in headers)
-                                {
-                                    request.Headers.Add(key, value);
-                                }
-                            }
-                            request.Headers.Range = new(totalRead, length);
-                            workingResponse = await UtilWebClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, Program.GlobalProgramCancel);
+                            HttpRequestMessage request = makeRequest(start + totalRead, end - 1);
+                            workingResponse = await DownloaderWebClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, Program.GlobalProgramCancel);
                             if (workingResponse.StatusCode != HttpStatusCode.PartialContent)
                             {
-                                throw new SwarmReadableErrorException($"Failed to download {altUrl} (expecting Partial range continue): got response code {(int)workingResponse.StatusCode} {workingResponse.StatusCode}");
+                                string message = $"Failed to download {altUrl} (expecting Partial range continue): got response code {(int)workingResponse.StatusCode} {workingResponse.StatusCode}";
+                                if (workingResponse.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+                                {
+                                    string reason = await GetResponseErrorReason(workingResponse);
+                                    message += reason is null ? $". {authHint}" : $" (\"{reason}\"). {authHint}";
+                                }
+                                throw new SwarmReadableErrorException(message);
                             }
                             workingStream = await workingResponse.Content.ReadAsStreamAsync();
                             continue;
@@ -821,7 +974,7 @@ public static class Utilities
             catch (Exception ex)
             {
                 Logs.Error($"Download from '{altUrl}' failed in loadData with internal exception: {ex.ReadableString()}");
-                chunks.Enqueue(null);
+                chunks.Enqueue((finalChunk, null));
                 throw;
             }
             finally
@@ -829,7 +982,27 @@ public static class Utilities
                 workingStream?.Dispose();
                 workingResponse?.Dispose();
             }
-        });
+            if (!doParallel || end >= length || cancel.IsCancellationRequested)
+            {
+                return;
+            }
+            await doLoadData(chunkId, step + 1);
+        }
+        Task loadAllData;
+        if (!doParallel)
+        {
+            loadAllData = Task.Run(async () => await doLoadData(0));
+        }
+        else
+        {
+            List<Task> tasks = [];
+            for (int i = 0; i < maxParallel; i++)
+            {
+                int captureIndex = i;
+                tasks.Add(Task.Run(async () => await doLoadData(captureIndex)));
+            }
+            loadAllData = Task.WhenAll(tasks);
+        }
         void removeFile()
         {
             writer.Dispose();
@@ -843,12 +1016,26 @@ public static class Utilities
                 long startTime = Environment.TickCount64;
                 long lastUpdate = startTime;
                 SHA256 sha256 = SHA256.Create();
+                Dictionary<int, Queue<byte[]>> heldChunks = doParallel ? [] : null;
                 while (true)
                 {
-                    if (chunks.TryDequeue(out byte[] chunk))
+                    (int, byte[]) chunkPair = doParallel && heldChunks.TryGetValue(currentChunkId, out Queue<byte[]> heldQueue) && heldQueue.TryDequeue(out byte[] data) ? (currentChunkId, data) : (-1, null);
+                    if (chunkPair.Item1 != -1 || chunks.TryDequeue(out chunkPair))
                     {
+                        int chunkId = chunkPair.Item1;
+                        byte[] chunk = chunkPair.Item2;
+                        if (chunkId != currentChunkId)
+                        {
+                            heldChunks.GetOrCreate(chunkId, () => []).Enqueue(chunk);
+                            continue;
+                        }
                         if (chunk is null)
                         {
+                            if (doParallel && progress < length && progress == (currentChunkId + 1L) * chunkSize)
+                            {
+                                currentChunkId++;
+                                continue;
+                            }
                             Logs.Verbose($"Download {altUrl} completed with {progress} bytes.");
                             progUpdates.Enqueue((progress, length, 0, true));
                             if (length != 0 && progress != length)
@@ -873,7 +1060,7 @@ public static class Utilities
                         }
                         progress += chunk.Length;
                         long timeNow = Environment.TickCount64;
-                        if (timeNow - lastUpdate > 1000 && chunks.Count < 3)
+                        if (timeNow - lastUpdate > 1000 && chunks.Count < maxParallel + 2)
                         {
                             long bytesPerSecond = progress * 1000 / (timeNow - startTime);
                             Logs.Verbose($"Download {altUrl} now at {new MemoryNum(progress)} / {new MemoryNum(length)}... {(progress / (double)length) * 100:00.0}% ({new MemoryNum(bytesPerSecond)} per sec)");
@@ -927,7 +1114,7 @@ public static class Utilities
                 throw;
             }
         });
-        await Task.WhenAll(loadData, saveChunks, sendUpdates);
+        await Task.WhenAll(loadAllData, saveChunks, sendUpdates);
     }
 
     /// <summary>Converts a byte array to a hexadecimal string.</summary>
@@ -1198,7 +1385,7 @@ public static class Utilities
     public static MultiSemaphoreSet<string> GitOverlapLocks = new(32);
 
     /// <summary>Quick and simple run a process async and get the result.</summary>
-    public static async Task<string> QuickRunProcess(string process, string[] args, string workingDirectory = null)
+    public static async Task<string> QuickRunProcess(string process, string[] args, string workingDirectory = null, Action<int> setExitCode = null)
     {
         ProcessStartInfo start = new(process, args)
         {
@@ -1214,6 +1401,7 @@ public static class Utilities
         Task<string> stdOutRead = p.StandardOutput.ReadToEndAsync();
         Task<string> stdErrRead = p.StandardError.ReadToEndAsync();
         await p.WaitForExitAsync(Program.GlobalProgramCancel);
+        setExitCode?.Invoke(p.ExitCode);
         string stdout = await stdOutRead;
         string stderr = await stdErrRead;
         string result = stdout;

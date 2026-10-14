@@ -13,7 +13,7 @@ namespace SwarmUI.Text2Image;
 public class T2IParamInput
 {
     /// <summary>Core section ID numbers.</summary>
-    public static int SectionID_BaseOnly = 5, SectionID_Refiner = 1, SectionID_Video = 2, SectionID_VideoSwap = 3, SectionID_PixelDecoder = 4;
+    public static int SectionID_BaseOnly = 5, SectionID_Refiner = 1, SectionID_Video = 2, SectionID_VideoSwap = 3, SectionID_PixelDecoder = 4, SectionID_SeedVR = 6;
 
     /// <summary>Parameter IDs that must be loaded early on, eg extracted from presets in prompts early. Primarily things that affect backend selection.</summary>
     public static readonly string[] ParamsMustLoadEarly = ["model", "images", "internalbackendtype", "exactbackendid"];
@@ -127,6 +127,9 @@ public class T2IParamInput
 
     /// <summary>Extra data to store in metadata.</summary>
     public Dictionary<string, object> ExtraMeta = [];
+
+    /// <summary>Indices in the LoRA parameter lists that are dynamically applied by prompt conditioning hooks.</summary>
+    public List<int> DynamicLoraIndices = [];
 
     /// <summary>A set of feature flags required for this input.</summary>
     public HashSet<string> RequiredFlags = [];
@@ -267,6 +270,7 @@ public class T2IParamInput
         T2IParamInput toret = MemberwiseClone() as T2IParamInput;
         toret.InternalSet = InternalSet.Clone();
         toret.ExtraMeta = new Dictionary<string, object>(ExtraMeta);
+        toret.DynamicLoraIndices = [.. DynamicLoraIndices];
         toret.RequiredFlags = [.. RequiredFlags];
         toret.PendingPresets = [.. PendingPresets];
         toret.ParamsQueried = [.. ParamsQueried];

@@ -13,6 +13,7 @@
     --toggle-thumb-hover: var(--button-background-hover);
     --toggle-thumb-active-hover: color-mix(in srgb, var(--emphasis) 25%, white);
     --font-monospace: 'Courier New', Courier, monospace;
+    --aggressive: #ff5533;
     --red: #ff0000;
     --green: #00ff00;
     --yellow: #ffff00;
@@ -707,9 +708,11 @@ textarea, input, select {
 .auto-input.preset-overridden {
     opacity: 0.5;
     cursor: not-allowed;
+    pointer-events: auto;
 }
-.auto-input.preset-overridden input[type="range"] {
+.auto-input.preset-overridden input, .auto-input.preset-overridden select {
     cursor: not-allowed;
+    pointer-events: auto;
 }
 .card-center-container {
     width: fit-content;
@@ -737,6 +740,12 @@ textarea, input, select {
     padding: 0.4rem;
     border: 1px solid var(--shadow);
     min-width: 85px;
+}
+.simple-table tr:nth-child(odd) {
+    background-color: rgba(255, 255, 255, 0.03);
+}
+.simple-table tr:nth-child(even) {
+    background-color: rgba(0, 0, 0, 0.03);
 }
 .translate-block-sm {
     display: inline-block;

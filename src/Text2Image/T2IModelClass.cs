@@ -60,11 +60,17 @@ public record class T2IModelCompatClass
     /// <summary>If true, this model samples video and audio together in a single joint AV latent.</summary>
     public bool HasJointAVLatents = false;
 
+    /// <summary>If true, this model's image output may contain an alpha channel.</summary>
+    public bool SupportsAlpha = false;
+
     /// <summary>What family of shared latent space this model works in.</summary>
     public T2IVAEFamily VaeFamily = null;
 
     /// <summary>The minimum valid multiplier for resolution that models of this family can handle.</summary>
     public int ResolutionPrecision = 16;
+
+    /// <summary>If true, this family supports the legacy (A1111/Comfy) prompt syntax parser.</summary>
+    public bool SupportLegacyPromptParser = false;
 
     /// <summary>Get a networkable JObject for this compat class.</summary>
     public JObject ToNetData()
@@ -78,8 +84,10 @@ public record class T2IModelCompatClass
             ["is_image2video"] = IsImage2Video,
             ["is_audio_model"] = IsAudioModel,
             ["has_joint_av_latents"] = HasJointAVLatents,
+            ["supports_alpha"] = SupportsAlpha,
             ["resolution_precision"] = ResolutionPrecision,
-            ["vae_family"] = VaeFamily?.ID
+            ["vae_family"] = VaeFamily?.ID,
+            ["support_legacy_prompt_parser"] = SupportLegacyPromptParser
         };
     }
 }

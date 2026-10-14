@@ -621,7 +621,7 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
             if (format > 2)
             {
                 index = (format >> 4) & 0xffff;
-                format &= 7;
+                format &= 15;
             }
             MediaType type;
             if (eventId == 3)
@@ -643,6 +643,10 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
                     5 => MediaType.VideoMp4,
                     6 => MediaType.VideoWebm,
                     7 => MediaType.VideoMov,
+                    8 => MediaType.AudioMp3,
+                    9 => MediaType.AudioWav,
+                    10 => MediaType.AudioFlac,
+                    11 => MediaType.AudioOgg,
                     _ => MediaType.ImageJpg
                 };
             }
@@ -680,7 +684,19 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
                             Program.RequestRestart();
                         }
                     }
-                    throw new SwarmReadableErrorException($"ComfyUI execution error: {actualMessage}{note}");
+                    JObject errData = msg[1] as JObject;
+                    string context = "";
+                    if (errData.TryGetValue("node_id", out JToken nodeId) && !string.IsNullOrWhiteSpace($"{nodeId}"))
+                    {
+                        string nodeType = $"{errData["node_type"]}";
+                        context += string.IsNullOrWhiteSpace(nodeType) ? $" (Node {nodeId})" : $" (Node {nodeId}: {nodeType})";
+                    }
+                    T2IModel model = userInput.Get(T2IParamTypes.Model);
+                    if (model is not null)
+                    {
+                        context += $" (Model={model.Name})";
+                    }
+                    throw new SwarmReadableErrorException($"ComfyUI execution error{context}: {actualMessage}{note}");
                 }
             }
         }
@@ -805,7 +821,7 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
     public static string CreateWorkflow(T2IParamInput user_input, Func<string, string> initImageFixer, string ModelFolderFormat = null, HashSet<string> features = null)
     {
         // note: gently break any standard embed with a space, *require* swarm format embeds, as comfy's raw syntax has unwanted behaviors
-        user_input.ProcessPromptEmbeds(x => $" embedding:{x.Replace("/", ModelFolderFormat)} ", p => p.Replace("embedding:", "embedding :", StringComparison.OrdinalIgnoreCase));
+        user_input.ProcessPromptEmbeds(x => $"<embed:{x}>", p => p.Replace("embedding:", "embedding :", StringComparison.OrdinalIgnoreCase));
         string workflow = GetRawWorkflowFrom(user_input);
         if (workflow is not null && !user_input.Get(T2IParamTypes.ControlNetPreviewOnly))
         {
@@ -869,7 +885,6 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
                 }
                 string filled = tagBasic switch
                 {
-                    "stability_api_key" => user_input.SourceSession.User.GetGenericData("stability_api", "key") ?? throw new SwarmUserErrorException("Stability API key not set - please go to the User tab to set it."),
                     "prompt" => user_input.Get(T2IParamTypes.Prompt),
                     "negative_prompt" => user_input.Get(T2IParamTypes.NegativePrompt),
                     "seed" => $"{fixSeed(user_input.Get(T2IParamTypes.Seed)) + (int.TryParse(tagExtra, out int add) ? add : 0)}",
@@ -1056,6 +1071,7 @@ public abstract class ComfyUIAPIAbstractBackend : AbstractT2IBackend
         {
             input.Set(T2IParamTypes.Steps, 0);
             input.Set(T2IParamTypes.DoNotSave, true);
+            input.Set(T2IParamTypes.JustLoadModel, true);
         }
         else
         {

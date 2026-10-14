@@ -1,5 +1,6 @@
 using FreneticUtilities.FreneticExtensions;
 using Newtonsoft.Json.Linq;
+using SwarmUI.Accounts;
 using SwarmUI.Backends;
 using SwarmUI.Builtin_ComfyUIBackend;
 using SwarmUI.Text2Image;
@@ -229,7 +230,7 @@ public class Installation
     }
 
     /// <summary>Run model downloads during installation.</summary>
-    public static async Task Models(string models)
+    public static async Task Models(string models, Session session)
     {
         if (models == "none")
         {
@@ -244,7 +245,7 @@ public class Installation
             await Output($"Downloading model from '{modelInfo.URL}'... please wait...");
             try
             {
-                await modelInfo.DownloadNow(UpdateProgress);
+                await modelInfo.DownloadNow(UpdateProgress, session);
             }
             catch (SwarmReadableErrorException ex)
             {
@@ -294,15 +295,22 @@ public class Installation
         Program.ServerSettings.IsInstalled = true;
         Program.ServerSettings.InstallDate = $"{DateTimeOffset.Now:yyyy-MM-dd}";
         Program.ServerSettings.InstallVersion = Utilities.Version;
-        if (Program.ServerSettings.LaunchMode == "webinstall")
+        if (Program.ServerSettings.LaunchMode == "install")
         {
-            Program.ServerSettings.LaunchMode = "web";
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                Program.ServerSettings.LaunchMode = "app";
+            }
+            else
+            {
+                Program.ServerSettings.LaunchMode = "web";
+            }
         }
         Program.SaveSettingsFile();
     }
 
     /// <summary>Main install function entry point.</summary>
-    public static async Task Install(WebSocket socket, string theme, string installed_for, string backend, string models, bool install_amd, string language, bool make_shortcut)
+    public static async Task Install(WebSocket socket, string theme, string installed_for, string backend, string models, bool install_amd, string language, bool make_shortcut, Session session)
     {
         if (Directory.Exists("dlbackend/comfy"))
         {
@@ -331,7 +339,7 @@ public class Installation
             MakeShortcut();
         }
         SettingsApply();
-        await Models(models);
+        await Models(models, session);
         StepsThusFar++;
         UpdateProgress(0, 0, 0);
         await Program.Backends.ReloadAllBackends();

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.Linq;
 using System.Text;
 using Newtonsoft.Json.Linq;
@@ -34,6 +35,9 @@ public class WGNodeData(JArray _path, WorkflowGenerator _gen, string _dataType, 
 
     /// <summary>If known and relevant (eg latent), what class of models this is compatible with.</summary>
     public T2IModelCompatClass Compat = _compat;
+
+    /// <summary>Whether this media may contain an alpha channel when decoded.</summary>
+    public bool MayHaveAlpha = false;
 
     /// <summary>Returns true if this data has the same compat class as given.</summary>
     public bool IsCompat(T2IModelCompatClass clazz) => Compat is not null && clazz.ID == Compat.ID;
@@ -78,12 +82,13 @@ public class WGNodeData(JArray _path, WorkflowGenerator _gen, string _dataType, 
     public (string, JObject) SourceNodeData => Gen.Workflow.TryGetValue($"{Path[0]}", out JToken tok) && tok is JObject node ? ($"{node["class_type"]}", (JObject)node["inputs"]) : (null, null);
 
     /// <summary>Returns a copy of this node data with a different node path and optional different type. Always returns a new object instance.</summary>
-    public WGNodeData WithPath(JArray path, string dataType = null, T2IModelCompatClass compat = null)
+    public WGNodeData WithPath(JArray path, string dataType = null, T2IModelCompatClass compat = null, bool? mayHaveAlpha = null)
     {
         WGNodeData dup = Duplicate();
         dup.Path = path;
         dup.DataType = dataType ?? dup.DataType;
         dup.Compat = compat ?? dup.Compat;
+        dup.MayHaveAlpha = mayHaveAlpha ?? dup.MayHaveAlpha;
         return dup;
     }
 
@@ -169,7 +174,7 @@ public class WGNodeData(JArray _path, WorkflowGenerator _gen, string _dataType, 
                     ["samples"] = Path
                 }, id);
             }
-            if (Gen.IsMiniMaxH3() && Frames == 1)
+            if (Gen.IsMiniMaxH3() && Frames == 2)
             {
                 decoded = Gen.CreateNode("ImageFromBatch", new JObject()
                 {
@@ -227,20 +232,44 @@ public class WGNodeData(JArray _path, WorkflowGenerator _gen, string _dataType, 
             {
                 return WithPath((JArray)srcInputs["audio"], DT_LATENT_AUDIO);
             }
+            string decoded;
             if (IsCompat(T2IModelClassSorter.CompatLtxv2))
             {
-                string audioDecoded = Gen.CreateNode("LTXVAudioVAEDecode", new JObject()
+                decoded = Gen.CreateNode("LTXVAudioVAEDecode", new JObject()
                 {
                     ["audio_vae"] = vae.Path,
                     ["samples"] = Path
                 }, id);
-                return WithPath([audioDecoded, 0], DT_AUDIO, vae.Compat);
             }
-            string decoded = Gen.CreateNode("VAEDecodeAudio", new JObject()
+            // NOTE: decode audio tiled does not work for some models (eg H3) so for now whitelist which models are valid
+            else if (UserInput.TryGet(T2IParamTypes.VAETileSize, out _) && Gen.IsMiniMaxMusic3())
             {
-                ["vae"] = vae.Path,
-                ["samples"] = Path
-            }, id);
+                decoded = Gen.CreateNode("VAEDecodeAudioTiled", new JObject()
+                {
+                    ["vae"] = vae.Path,
+                    ["samples"] = Path,
+                    ["tile_size"] = UserInput.Get(T2IParamTypes.VAETileSize, 256),
+                    ["overlap"] = UserInput.Get(T2IParamTypes.VAETileOverlap, 64)
+                }, id);
+            }
+            else if (Gen.IsMiniMaxMusic3())
+            {
+                decoded = Gen.CreateNode("VAEDecodeAudioTiled", new JObject()
+                {
+                    ["vae"] = vae.Path,
+                    ["samples"] = Path,
+                    ["tile_size"] = 1536,
+                    ["overlap"] = 64
+                }, id);
+            }
+            else
+            {
+                decoded = Gen.CreateNode("VAEDecodeAudio", new JObject()
+                {
+                    ["vae"] = vae.Path,
+                    ["samples"] = Path
+                }, id);
+            }
             return WithPath([decoded, 0], DT_AUDIO, vae.Compat);
         }
         WGAssert(false, $"Unknown latent data type '{DataType}', cannot decode.");
@@ -302,7 +331,7 @@ public class WGNodeData(JArray _path, WorkflowGenerator _gen, string _dataType, 
                     ["pixels"] = Path
                 }, id);
             }
-            return WithPath([encoded, 0], DataType == DT_IMAGE ? DT_LATENT_IMAGE : DT_LATENT_VIDEO, vae.Compat);
+            return WithPath([encoded, 0], DataType == DT_IMAGE ? DT_LATENT_IMAGE : DT_LATENT_VIDEO, vae.Compat, mayHaveAlpha: vae.Compat?.SupportsAlpha ?? false);
         }
         if (DataType == DT_AUDIO)
         {
@@ -361,32 +390,73 @@ public class WGNodeData(JArray _path, WorkflowGenerator _gen, string _dataType, 
         return this;
     }
 
-    /// <summary>Converts this data to a format fit for sampling, generally some form of latent.</summary>
-    public WGNodeData AsSamplingLatent(WGNodeData vae, WGNodeData audioVae)
+    /// <summary>Adds a masked silent prefix and/or suffix to latent audio (does nothing if audio is not latent, or not present, or the relevant parameters are unset).</summary>
+    public WGNodeData WithAudioSilenceMask(WGNodeData vae, WGNodeData audioVae)
     {
-        WGNodeData withAudio = EnsureHasAudioIfNeeded(vae, audioVae);
-        if (withAudio != this)
+        if (!UserInput.TryGet(T2IParamTypes.AudioSilentPrefixDuration, out double prefix))
         {
-            return withAudio.AsSamplingLatent(vae, audioVae);
+            prefix = 0;
         }
-        if (IsLatentData)
+        if (!UserInput.TryGet(T2IParamTypes.AudioSilentSuffixDuration, out double suffix))
         {
-            WGAssert(vae.Compat.ID == Compat.ID, $"Data is compatible with '{Compat}' but provided VAE is compatible with '{vae.Compat}', cannot encode to sampling latent, ensure correctly decoded first.");
+            suffix = 0;
         }
-        if (IsLatentData && AttachedAudio is null)
+        if (audioVae is null || (prefix <= 0 && suffix <= 0))
         {
             return this;
         }
         if (DataType == DT_LATENT_AUDIOVIDEO)
         {
-            return this;
+            WGNodeData result = AsLatentImage(vae).Duplicate();
+            result.AttachedAudio = result.AttachedAudio?.WithAudioSilenceMask(vae, audioVae);
+            return result;
         }
-        if (DataType == DT_LATENT_VIDEO || DataType == DT_LATENT_IMAGE)
+        if (DataType == DT_LATENT_AUDIO)
         {
-            WGNodeData result = this;
+            string node = Gen.CreateNode("SwarmAudioSilentMaskPrefixSuffix", new JObject()
+            {
+                ["latent"] = Path,
+                ["vae"] = audioVae.Path,
+                ["prefix_duration"] = prefix,
+                ["suffix_duration"] = suffix
+            });
+            return WithPath([node, 0]);
+        }
+        if (AttachedAudio is not null)
+        {
+            WGNodeData result = Duplicate();
+            result.AttachedAudio = AttachedAudio.WithAudioSilenceMask(vae, audioVae);
+            return result;
+        }
+        return this;
+    }
+
+    /// <summary>Converts this data to a format fit for sampling, generally some form of latent.</summary>
+    public WGNodeData AsSamplingLatent(WGNodeData vae, WGNodeData audioVae)
+    {
+        WGNodeData result = EnsureHasAudioIfNeeded(vae, audioVae);
+        if (result != this)
+        {
+            return result.AsSamplingLatent(vae, audioVae);
+        }
+        result = WithAudioSilenceMask(vae, audioVae);
+        if (result.IsLatentData)
+        {
+            WGAssert(vae.Compat.ID == Compat.ID, $"Data is compatible with '{Compat}' but provided VAE is compatible with '{vae.Compat}', cannot encode to sampling latent, ensure correctly decoded first.");
+        }
+        if (result.DataType == DT_LATENT_AUDIO || result.DataType == DT_LATENT_AUDIOVIDEO)
+        {
+            return result;
+        }
+        if (result.IsLatentData && result.AttachedAudio is null)
+        {
+            return result;
+        }
+        if (result.DataType == DT_LATENT_VIDEO || result.DataType == DT_LATENT_IMAGE)
+        {
             if (vae.Compat?.HasJointAVLatents ?? false)
             {
-                if (AttachedAudio.IsRawMedia) // TODO: When is the correct case to do a solid mask on audio? Any raw audio is *probably* mask-worthy, but...??
+                if (result.AttachedAudio.IsRawMedia) // TODO: When is the correct case to do a solid mask on audio? Any raw audio is *probably* mask-worthy, but...??
                 {
                     result = result.WithMaskedAudio(audioVae);
                 }
@@ -399,15 +469,15 @@ public class WGNodeData(JArray _path, WorkflowGenerator _gen, string _dataType, 
             }
             return result;
         }
-        if (DataType == DT_IMAGE || DataType == DT_VIDEO)
+        if (result.DataType == DT_IMAGE || result.DataType == DT_VIDEO)
         {
-            return EncodeToLatent(vae);
+            return EncodeToLatent(vae).AsSamplingLatent(vae, audioVae);
         }
-        if (DataType == DT_AUDIO)
+        if (result.DataType == DT_AUDIO)
         {
             return EncodeToLatent(audioVae);
         }
-        WGAssert(false, $"Cannot convert data of type '{DataType}' to sampling latent.");
+        WGAssert(false, $"Cannot convert data of type '{result.DataType}' to sampling latent.");
         return null;
     }
 
@@ -465,6 +535,22 @@ public class WGNodeData(JArray _path, WorkflowGenerator _gen, string _dataType, 
         }
         WGAssert(false, $"Cannot convert data of type '{DataType}' to raw image/video.");
         return null;
+    }
+
+    /// <summary>Returns an object that is definitely compatible with raw RGB image or video inputs, decoding and splitting out alpha as needed.</summary>
+    public (WGNodeData Image, JArray AlphaMask) AsRawImageNoAlpha(WGNodeData vae)
+    {
+        WGNodeData result = AsRawImage(vae);
+        if (!result.MayHaveAlpha)
+        {
+            return (result, null);
+        }
+        string split = Gen.CreateNode("SplitImageWithAlpha", new JObject()
+        {
+            ["image"] = result.Path
+        });
+        result = result.WithPath([split, 0], mayHaveAlpha: false);
+        return (result, [split, 1]);
     }
 
     /// <summary>Returns a copy of this node data. If it has attached audio, the copy's audio will be masked off.</summary>
@@ -579,13 +665,33 @@ public class WGNodeData(JArray _path, WorkflowGenerator _gen, string _dataType, 
         if (DataType == DT_AUDIO)
         {
             WGAssert(AttachedAudio is null, $"Cannot attach audio onto other audio.");
-            // TODO: SwarmSaveAudio? Better format control instead of just using mp3?
-            return Gen.CreateNode("SaveAudioMP3", new JObject()
+            string audioFormat = UserInput.Get(T2IParamTypes.AudioFormat, "mp3");
+            if (Features.Contains("comfy_saveaudio_ws") && !WorkflowGenerator.RestrictCustomNodes)
             {
-                ["audio"] = Path,
-                ["filename_prefix"] = $"SwarmUI_{Random.Shared.Next():X4}_",
-                ["quality"] = "V0"
-            }, id);
+                return Gen.CreateNode("SwarmSaveAudioWS", new JObject()
+                {
+                    ["audio"] = Path,
+                    ["format"] = audioFormat
+                }, id);
+            }
+            else
+            {
+                WGAssert(audioFormat is "mp3" or "flac", $"Audio format '{audioFormat}' requires SwarmUI custom nodes.");
+                JObject fallbackFormat = new()
+                {
+                    ["format"] = audioFormat
+                };
+                if (audioFormat == "mp3")
+                {
+                    fallbackFormat["quality"] = "V0";
+                }
+                return Gen.CreateNode("SaveAudioAdvanced", new JObject()
+                {
+                    ["audio"] = Path,
+                    ["filename_prefix"] = $"SwarmUI_{Random.Shared.Next():X4}_",
+                    ["format"] = fallbackFormat
+                }, id);
+            }
         }
         WGAssert(false, $"Unknown data type {DataType}, cannot save output.");
         return null;

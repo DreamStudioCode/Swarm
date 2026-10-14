@@ -45,6 +45,7 @@ public class ComfyUIBackendExtension : Extension
     {
         ["SwarmLoadImageB64"] = "comfy_loadimage_b64",
         ["SwarmSaveImageWS"] = "comfy_saveimage_ws",
+        ["SwarmSaveAudioWS"] = "comfy_saveaudio_ws",
         ["SwarmJustLoadTheModelPlease"] = "comfy_just_load_model",
         ["SwarmLatentBlendMasked"] = "comfy_latent_blend_masked",
         ["SwarmKSampler"] = "variation_seed",
@@ -543,6 +544,10 @@ public class ComfyUIBackendExtension : Extension
             {
                 T2IParamTypes.ConcatDropdownValsClean(ref SetClipDevices, overrideClipDevice.Select(m => $"{m}"));
             }
+            if (TryGetRequiredInputs(rawObjectInfo, "ModelAttentionBackend", "attention", out JToken modelAttentionBackends))
+            {
+                T2IParamTypes.ConcatDropdownValsClean(ref ModelAttentionBackends, modelAttentionBackends.Select(m => $"{m}"));
+            }
             if (rawObjectInfo.TryGetValue("Sam2AutoSegmentation", out JToken nodeData))
             {
                 foreach (string size in new string[] { "base_plus", "large", "small" })
@@ -606,15 +611,17 @@ public class ComfyUIBackendExtension : Extension
         }
     }
 
-    public static T2IRegisteredParam<string> CustomWorkflowParam, SamplerParam, SchedulerParam, RefinerSamplerParam, RefinerSchedulerParam, RefinerUpscaleMethod, UseIPAdapterForRevision, IPAdapterWeightType, VideoPreviewType, VideoFrameInterpolationMethod, GligenModel, YoloModelInternal, PreferredDType, UseStyleModel, TeaCacheMode, EasyCacheMode, SetClipDevice;
+    public static T2IRegisteredParam<string> CustomWorkflowParam, SamplerParam, SchedulerParam, RefinerSamplerParam, RefinerSchedulerParam, RefinerUpscaleMethod, UseIPAdapterForRevision, IPAdapterWeightType, VideoPreviewType, VideoFrameInterpolationMethod, GligenModel, YoloModelInternal, PreferredDType, UseStyleModel, TeaCacheMode, EasyCacheMode, SetClipDevice, ModelAttentionBackend, UseSparseAttention, SeedVRUpscaleMethod, SeedVRColorCorrectionBehavior, EnableReferenceLatents, TextEncodedImage;
 
-    public static T2IRegisteredParam<bool> AITemplateParam, DebugRegionalPrompting, ShiftedLatentAverageInit, UseCfgZeroStar, UseTCFG;
+    public static T2IRegisteredParam<bool> AITemplateParam, DebugRegionalPrompting, ShiftedLatentAverageInit, UseCfgZeroStar, UseTCFG, SeedVRSplitLatent;
 
-    public static T2IRegisteredParam<double> IPAdapterWeight, IPAdapterStart, IPAdapterEnd, SelfAttentionGuidanceScale, SelfAttentionGuidanceSigmaBlur, PerturbedAttentionGuidanceScale, StyleModelMergeStrength, StyleModelApplyStart, StyleModelMultiplyStrength, RescaleCFGMultiplier, TeaCacheThreshold, TeaCacheStart, NunchakuCacheThreshold, EasyCacheThreshold, EasyCacheStart, EasyCacheEnd, RenormCFG, NormalizedAttentionGuidanceScale, NormalizedAttentionGuidanceAlpha, NormalizedAttentionGuidanceTau;
+    public static T2IRegisteredParam<double> IPAdapterWeight, IPAdapterStart, IPAdapterEnd, SelfAttentionGuidanceScale, SelfAttentionGuidanceSigmaBlur, PerturbedAttentionGuidanceScale, StyleModelMergeStrength, StyleModelApplyStart, StyleModelMultiplyStrength, RescaleCFGMultiplier, TeaCacheThreshold, TeaCacheStart, NunchakuCacheThreshold, EasyCacheThreshold, EasyCacheStart, EasyCacheEnd, RenormCFG, NormalizedAttentionGuidanceScale, NormalizedAttentionGuidanceAlpha, NormalizedAttentionGuidanceTau, SeedVRUpscale, SeedVRPreDownscale;
 
-    public static T2IRegisteredParam<int> RefinerHyperTile, VideoFrameInterpolationMultiplier;
+    public static T2IRegisteredParam<int> RefinerHyperTile, VideoFrameInterpolationMultiplier, SeedVRTemporalVideoOverlap;
 
-    public static T2IRegisteredParam<T2IModel> PixelDecoderModel;
+    public static T2IRegisteredParam<T2IModel> PixelDecoderModel, SeedVRModel;
+
+    public static T2IParamGroup GroupSeedVR;
 
     public static T2IRegisteredParam<string>[] ControlNetPreprocessorParams = new T2IRegisteredParam<string>[3], ControlNetUnionTypeParams = new T2IRegisteredParam<string>[3];
 
@@ -658,7 +665,7 @@ public class ComfyUIBackendExtension : Extension
 
     public static List<string> IPAdapterModels = ["None"], IPAdapterWeightTypes = ["standard", "prompt is more important", "style transfer"];
 
-    public static List<string> GligenModels = ["None"], YoloModels = [], StyleModels = ["None"], SetClipDevices = ["cpu"];
+    public static List<string> GligenModels = ["None"], YoloModels = [], StyleModels = ["None"], SetClipDevices = ["cpu"], ModelAttentionBackends = ["pytorch attention"];
 
     public static List<string> ControlnetUnionTypes = ["auto", "openpose", "depth", "hed/pidi/scribble/ted", "canny/lineart/anime_lineart/mlsd", "normal", "segment", "tile", "repaint"];
 
@@ -693,7 +700,7 @@ public class ComfyUIBackendExtension : Extension
             "", IgnoreIf: "", FeatureFlag: "sam2", VisibleNormally: false, ExtraHidden: true, DoNotSave: true, DoNotPreview: true, AlwaysRetain: true, Toggleable: true
             ));
         UseIPAdapterForRevision = T2IParamTypes.Register<string>(new("Use IP-Adapter", $"Select an IP-Adapter model to use IP-Adapter for image-prompt input handling.\nModels will automatically be downloaded when you first use them.\nNote if you use a custom model, you must also set your CLIP-Vision Model under Advanced Model Addons, otherwise CLIP Vision G will be presumed.\n<a target=\"_blank\" href=\"{Utilities.RepoDocsRoot}/Features/ImagePrompting.md\">See more docs here.</a>",
-            "None", IgnoreIf: "None", FeatureFlag: "ipadapter", GetValues: _ => IPAdapterModels, Group: T2IParamTypes.GroupImagePrompting, OrderPriority: 15, ChangeWeight: 1
+            "None", IgnoreIf: "None", FeatureFlag: "ipadapter,model_has_ipadapter", GetValues: _ => IPAdapterModels, Group: T2IParamTypes.GroupImagePrompting, OrderPriority: 15, ChangeWeight: 1
             ));
         IPAdapterWeight = T2IParamTypes.Register<double>(new("IP-Adapter Weight", "Weight to use with IP-Adapter (if enabled).",
             "1", Min: -1, Max: 3, Step: 0.05, IgnoreIf: "1", FeatureFlag: "ipadapter", Group: T2IParamTypes.GroupImagePrompting, ViewType: ParamViewType.SLIDER, OrderPriority: 16, DependNonDefault: UseIPAdapterForRevision.Type.ID
@@ -706,6 +713,12 @@ public class ComfyUIBackendExtension : Extension
             ));
         IPAdapterWeightType = T2IParamTypes.Register<string>(new("IP-Adapter Weight Type", "How to shift the weighting of the IP-Adapter.\nThis can produce subtle but useful different effects.",
             "standard", FeatureFlag: "ipadapter", Group: T2IParamTypes.GroupImagePrompting, ViewType: ParamViewType.SLIDER, OrderPriority: 19, IsAdvanced: true, GetValues: _ => IPAdapterWeightTypes, DependNonDefault: UseIPAdapterForRevision.Type.ID
+            ));
+        EnableReferenceLatents = T2IParamTypes.Register<string>(new("Enable Reference Latents", "How to feed prompt images as Reference Latents to the model.\nNone leaves images on the text encoder only (correct for the Krea 2 base model).\nIndex Timestep Zero is for Ostris-style edit LoRAs.\nIndex is for Identity Edit LoRAs.",
+            "none", IgnoreIf: "none", FeatureFlag: "optional_reference_latent", Group: T2IParamTypes.GroupImagePrompting, OrderPriority: 13, GetValues: _ => ["none///None (Text Encoder Only)", "index_timestep_zero///Index Timestep Zero (Ostris)", "index///Index (Identity Edit)"]
+            ));
+        TextEncodedImage = T2IParamTypes.Register<string>(new("Text Encoded Image", "How to feed prompt images into the text encoder.\nAutomatic uses the model's default (usually this is large or exact-size-as-input).\nNone skips text-encoder images (reference latents can still apply).\nSmall targets 384px, Large targets 1024px.",
+            "auto", IgnoreIf: "auto", Group: T2IParamTypes.GroupImagePrompting, OrderPriority: 13.5, GetValues: _ => ["auto///Automatic", "none///None (Do Not Encode)", "small///Small Image", "large///Large Image"]
             ));
         UseStyleModel = T2IParamTypes.Register<string>(new("Use Style Model", $"Select a Style model to use it for image-prompt input handling.\nFlux.1 Redux is an example of a style model.\nPlace these models in `(Swarm)/Models/style_models`.",
             "None", IgnoreIf: "None", GetValues: _ => StyleModels, Group: T2IParamTypes.GroupImagePrompting, OrderPriority: 14, ChangeWeight: 1, FeatureFlag: "flux-dev"
@@ -797,7 +810,7 @@ public class ComfyUIBackendExtension : Extension
             "false", IgnoreIf: "false", FeatureFlag: "comfyui", VisibleNormally: false, Group: T2IParamTypes.GroupRegionalPrompting
             ));
         RefinerHyperTile = T2IParamTypes.Register<int>(new("Refiner HyperTile", "The size of hypertiles to use for the refining stage.\nHyperTile is a technique to speed up sampling of large images by tiling the image and batching the tiles.\nThis is useful when using SDv1 models as the refiner. SDXL-Base models do not benefit as much.",
-            "256", Min: 64, Max: 2048, Step: 32, Toggleable: true, IsAdvanced: true, FeatureFlag: "comfyui", ViewType: ParamViewType.POT_SLIDER, Group: T2IParamTypes.GroupAdvancedSampling, OrderPriority: 20
+            "256", Min: 64, Max: 2048, Step: 32, Toggleable: true, IsAdvanced: true, FeatureFlag: "comfyui,supports_hypertile", ViewType: ParamViewType.POT_SLIDER, Group: T2IParamTypes.GroupAdvancedSampling, OrderPriority: 20
             ));
         List<string> interpolators = ["RIFE", "FILM", "GIMM-VFI"];
         VideoPreviewType = T2IParamTypes.Register<string>(new("Video Preview Type", "How to display previews for generating videos.\n'Animate' shows a low-res animated video preview.\n'iterate' shows one frame at a time while it goes.\n'one' displays just the first frame.\n'none' disables previews.",
@@ -842,8 +855,39 @@ public class ComfyUIBackendExtension : Extension
         NunchakuCacheThreshold = T2IParamTypes.Register<double>(new("Nunchaku Cache Threshold", "What threshold to use with Nunchaku block caching.\nThis makes Nunchaku gens faster at the cost of quality.\nOnly applicable to Nunchaku models.\nGenerally 0 to 0.2 is the reasonable range, above that you can start noticing quality drop.",
             "0", IgnoreIf: "0", Min: 0, Max: 1, Step: 0.01, FeatureFlag: "nunchaku", Group: T2IParamTypes.GroupAdvancedSampling, IsAdvanced: true, ViewType: ParamViewType.SLIDER, OrderPriority: 16
             ));
+        ModelAttentionBackend = T2IParamTypes.Register<string>(new("Model Attention Backend", "Override which attention implementation the model uses.\n'pytorch attention' is the standard default.\n'comfy kitchen attention' is a new sage-like attention impl from Comfy directly that has better performance, but may not work on all machines.",
+            "pytorch attention", Group: T2IParamTypes.GroupAdvancedModelAddons, IsAdvanced: true, Toggleable: true, GetValues: (_) => ModelAttentionBackends, OrderPriority: 41
+            ));
+        UseSparseAttention = T2IParamTypes.Register<string>(new("Use Sparse Attention", "Apply block-sparse attention to speed up generation with large inputs (especially video model such as H3).\nSol-Attn (adaptive tau) (TODO: Explain this) a training-free adaptive threshold (good general default).\n'Top-K (SLA)' (TODO: Explain this)\n'VSA' is Video Sparse Attention, (TODO: Explain this) only for VSA trained models.",
+            "None", IgnoreIf: "None", Group: T2IParamTypes.GroupAdvancedModelAddons, IsAdvanced: true, Toggleable: true, GetValues: (_) => ["None", "sol///Sol-Attn", "topk///Top-K (SLA)", "vsa///VSA"], OrderPriority: 42
+            ));
         SetClipDevice = T2IParamTypes.Register<string>(new("Set CLIP Device", "Override the hardware device that text encoders run on.",
             "cpu", FeatureFlag: "set_clip_device", Group: T2IParamTypes.GroupAdvancedModelAddons, IsAdvanced: true, Toggleable: true, GetValues: (_) => SetClipDevices, OrderPriority: 70
+            ));
+        // ================================================ SeedVR ================================================
+        GroupSeedVR = new T2IParamGroup("SeedVR", Toggles: true, Open: false, OrderPriority: -2.5, Description: "SeedVR2 is a one-step restoration model, run over the result of the normal generation.");
+        SeedVRModel = T2IParamTypes.Register<T2IModel>(new("SeedVR Model", "Which SeedVR2 model to restore with.",
+            "None", IgnoreIf: "None", FeatureFlag: "comfyui", Group: GroupSeedVR, Subtype: "Stable-Diffusion", ChangeWeight: 9, DoNotPreview: true, OrderPriority: -10,
+            GetValues: (session) => ["None", .. T2IParamTypes.CleanModelList(Program.MainSDModels.ListModelsFor(session).Where(m => m.ModelClass?.CompatClass?.ID == "seedvr2").OrderBy(m => m.Name).Select(m => m.Name))]
+            ));
+        SeedVRPreDownscale = T2IParamTypes.Register<double>(new("SeedVR Pre-Downscale", "Optional downscale of the image immediately before upscaling it back.\nSetting to '1' disables this behavior.\nPre-downscaling to degrade the image can help improve quality (reduces oversharpening).",
+            "1", IgnoreIf: "1", Min: 0, Max: 1, Step: 0.05, OrderPriority: -9.5, ViewType: ParamViewType.SLIDER, FeatureFlag: "comfyui", Group: GroupSeedVR, DoNotPreview: true, Examples: ["1", "0.5", "0.25"]
+            ));
+        SeedVRUpscale = T2IParamTypes.Register<double>(new("SeedVR Upscale", "Optional upscale of the image before SeedVR2 runs over it.\nSetting to '1' disables the upscale, and just restores at the current size.",
+            "1", IgnoreIf: "1", Min: 0.25, Max: 8, ViewMax: 4, Step: 0.25, OrderPriority: -9, ViewType: ParamViewType.SLIDER, FeatureFlag: "comfyui", Group: GroupSeedVR, DoNotPreview: true, Examples: ["1", "1.5", "2"]
+            ));
+        SeedVRUpscaleMethod = T2IParamTypes.Register<string>(new("SeedVR Upscale Method", "How to upscale the image before SeedVR2 runs over it, if upscaling is used.",
+            "pixel-lanczos", OrderPriority: -8, FeatureFlag: "comfyui", Group: GroupSeedVR, ChangeWeight: 1,
+            GetValues: (session) => RefinerUpscaleMethod.Type.GetValues(session), DependNonDefault: SeedVRUpscale.Type.ID
+            ));
+        SeedVRColorCorrectionBehavior = T2IParamTypes.Register<string>(new("SeedVR Color Correction Behavior", "How to match the colors of a SeedVR2 restore back to the image it was given.\n'None' = Do not attempt color correction, only align the geometry.\n'CIELAB' = Transfer the color in CIELAB space, preserving detail.\n'Wavelet' = Transfer the low-frequency color, keeping the upscaled high-frequency detail.\n'AdaIN' = Match the per-channel mean and standard deviation.",
+            "lab", FeatureFlag: "comfyui", Group: GroupSeedVR, IsAdvanced: true, OrderPriority: 1, GetValues: (_) => ["none///None", "lab///CIELAB", "wavelet///Wavelet", "adain///AdaIN"]
+            ));
+        SeedVRSplitLatent = T2IParamTypes.Register<bool>(new("SeedVR Split Latent", "If enabled, samples a SeedVR2 video restore as chunks of frames instead of all at once, sized to fit in free VRAM.\nChunking reduces VRAM consumption.\nDoes nothing to a single image, or to a video that already fits.",
+            "false", IgnoreIf: "false", FeatureFlag: "comfyui", Group: GroupSeedVR, IsAdvanced: true, OrderPriority: 2
+            ));
+        SeedVRTemporalVideoOverlap = T2IParamTypes.Register<int>(new("SeedVR Temporal Video Overlap", "How many latent frames of overlap to keep between 'SeedVR Split Latent' chunks.\nHigher overlap hides the chunk seams better but takes longer.",
+            "0", Min: 0, Max: 4096, Step: 1, IsAdvanced: true, FeatureFlag: "comfyui", Group: GroupSeedVR, OrderPriority: 3, DependNonDefault: SeedVRSplitLatent.Type.ID
             ));
         BackendApiType = Program.Backends.RegisterBackendType<ComfyUIAPIBackend>("comfyui_api", "ComfyUI API By URL", "A backend powered by a pre-existing installation of ComfyUI, referenced via API base URL.", true);
         BackendSelfStartType = Program.Backends.RegisterBackendType<ComfyUISelfStartBackend>("comfyui_selfstart", "ComfyUI Self-Starting", "A backend powered by a pre-existing installation of the ComfyUI, automatically launched and managed by this UI server.", isStandard: true);
@@ -899,14 +943,18 @@ public class ComfyUIBackendExtension : Extension
             {
                 tasks.Add(Utilities.RunCheckedTask(async () =>
                 {
-                    string headTarget = ComfyUISelfStartBackend.ComfyNodeGitPins.TryGetValue(folder, out string pinCommit) ? pinCommit : null;
-                    JObject nodeUpdates = await AdminAPI.GetUpdatesDataFor(folder, true, headTarget: headTarget);
+                    if (!Directory.Exists($"{folder}/.git"))
+                    {
+                        return;
+                    }
+                    string nodeName = Path.GetFileName(folder);
+                    string latestTarget = ComfyUISelfStartBackend.ComfyNodeGitPins.TryGetValue(nodeName, out string pinCommit) ? pinCommit : null;
+                    JObject nodeUpdates = await AdminAPI.GetUpdatesDataFor(folder, true, latestTarget: latestTarget);
                     if (nodeUpdates is null)
                     {
                         Logs.Debug($"Check for updates found no updates for ComfyUI node at {folder}");
                         return;
                     }
-                    string nodeName = Path.GetFileName(folder);
                     lock (locker)
                     {
                         backendsData[$"Comfy Node: {nodeName}"] = nodeUpdates;
@@ -940,7 +988,11 @@ public class ComfyUIBackendExtension : Extension
             {
                 tasks.Add(Utilities.RunCheckedTask(async () =>
                 {
-                    string headTarget = ComfyUISelfStartBackend.ComfyNodeGitPins.TryGetValue(folder, out string pinCommit) ? pinCommit : null;
+                    if (!Directory.Exists($"{folder}/.git"))
+                    {
+                        return;
+                    }
+                    string headTarget = ComfyUISelfStartBackend.ComfyNodeGitPins.TryGetValue(nodeName, out string pinCommit) ? pinCommit : null;
                     await AdminAPI.DoGitUpdate(folder, aggressive, didWork, didFail, targetCommit: headTarget);
                 }));
             }

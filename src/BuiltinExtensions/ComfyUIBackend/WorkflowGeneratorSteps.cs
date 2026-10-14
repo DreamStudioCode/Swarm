@@ -131,7 +131,7 @@ public class WorkflowGeneratorSteps
         }, -10);
         AddModelGenStep(g =>
         {
-            if (g.UserInput.TryGet(ComfyUIBackendExtension.SetClipDevice, out string device) && g.Features.Contains("set_clip_device"))
+            if (g.LoadingClip is not null && g.UserInput.TryGet(ComfyUIBackendExtension.SetClipDevice, out string device) && g.Features.Contains("set_clip_device"))
             {
                 string clipDeviceNode = g.CreateNode("OverrideCLIPDevice", new JObject()
                 {
@@ -231,7 +231,7 @@ public class WorkflowGeneratorSteps
         }, -7);
         AddModelGenStep(g =>
         {
-            if (g.UserInput.TryGet(T2IParamTypes.ClipStopAtLayer, out int layer))
+            if (g.LoadingClip is not null && g.UserInput.TryGet(T2IParamTypes.ClipStopAtLayer, out int layer))
             {
                 string clipSkip = g.CreateNode("CLIPSetLastLayer", new JObject()
                 {
@@ -379,6 +379,42 @@ public class WorkflowGeneratorSteps
                 });
                 g.LoadingModel = [aitLoad, 0];
             }
+            if (g.UserInput.TryGet(ComfyUIBackendExtension.ModelAttentionBackend, out string attentionBackend))
+            {
+                string attentionNode = g.CreateNode("ModelAttentionBackend", new JObject()
+                {
+                    ["model"] = g.LoadingModel,
+                    ["attention"] = attentionBackend
+                });
+                g.LoadingModel = [attentionNode, 0];
+            }
+            if (g.UserInput.TryGet(ComfyUIBackendExtension.UseSparseAttention, out string sparseAttention) && sparseAttention != "None")
+            {
+                JObject sparseInputs = new()
+                {
+                    ["model"] = g.LoadingModel,
+                    ["start_percent"] = sparseAttention == "vsa" ? 0.0 : 0.2,
+                    ["end_percent"] = 1.0,
+                    ["extra_tokens"] = sparseAttention == "vsa" ? 0 : 256
+                };
+                if (sparseAttention == "sol")
+                {
+                    sparseInputs["selection"] = "sol-attn";
+                    sparseInputs["selection.tau"] = 1.3;
+                }
+                else if (sparseAttention == "topk")
+                {
+                    sparseInputs["selection"] = "sla";
+                    sparseInputs["selection.keep_percent"] = 15.0;
+                }
+                else if (sparseAttention == "vsa")
+                {
+                    sparseInputs["selection"] = "vsa";
+                    sparseInputs["selection.keep_percent"] = 10.0;
+                }
+                string sparseNode = g.CreateNode("BlockSparseAttention", sparseInputs);
+                g.LoadingModel = [sparseNode, 0];
+            }
             if (g.UserInput.TryGet(T2IParamTypes.TorchCompile, out string compileMode) && compileMode != "Disabled")
             {
                 string torchCompile = g.CreateNode("TorchCompileModel", new JObject()
@@ -434,7 +470,7 @@ public class WorkflowGeneratorSteps
                     {
                         ["image"] = g.BasicInputImage.Path,
                         ["amount"] = initNoise,
-                        ["seed"] = g.UserInput.Get(T2IParamTypes.Seed, 0) + 327
+                        ["seed"] = g.UserInput.Get(T2IParamTypes.Seed, 0, sectionId: T2IParamInput.SectionID_BaseOnly) + 327
                     };
                     if (currentMask is not null)
                     {
@@ -572,6 +608,10 @@ public class WorkflowGeneratorSteps
             if (g.UserInput.TryGet(T2IParamTypes.VideoAudioInput, out AudioFile audioData))
             {
                 string audioNode = g.CreateAudioLoadNode(audioData, "${videoaudioinput}");
+                if (g.CurrentMedia.DataType == WGNodeData.DT_LATENT_AUDIOVIDEO)
+                {
+                    g.CurrentMedia = g.CurrentMedia.AsLatentImage(g.CurrentVae);
+                }
                 g.CurrentMedia.AttachedAudio = new WGNodeData([audioNode, 0], g, WGNodeData.DT_AUDIO, g.CurrentCompat());
             }
         }, -9);
@@ -1376,7 +1416,7 @@ public class WorkflowGeneratorSteps
             {
                 startStep = (int)Math.Round(steps * (1 - creativity));
             }
-            if (g.UserInput.TryGet(T2IParamTypes.RefinerMethod, out string method) && method == "StepSwap" && g.UserInput.TryGet(T2IParamTypes.RefinerControl, out double refinerControl))
+            if (g.UserInput.TryGet(T2IParamTypes.RefinerMethod, out string method) && (method == "StepSwap" || method == "StepSwapNoisy") && g.UserInput.TryGet(T2IParamTypes.RefinerControl, out double refinerControl))
             {
                 endStep = (int)Math.Round(steps * (1 - refinerControl));
             }
@@ -1422,8 +1462,8 @@ public class WorkflowGeneratorSteps
             {
                 g.CurrentMedia = g.CurrentMedia.AsSamplingLatent(g.CurrentVae, g.CurrentAudioVae);
                 g.CreateKSampler(g.CurrentModel.Path, g.FinalPrompt, g.FinalNegativePrompt, g.CurrentMedia.Path, cfg, steps, startStep, endStep,
-                    g.UserInput.Get(T2IParamTypes.Seed), g.UserInput.Get(T2IParamTypes.RefinerMethod, "none") == "StepSwapNoisy", g.MainSamplerAddNoise, id: "10", isFirstSampler: true, sectionId: T2IParamInput.SectionID_BaseOnly);
-                g.CurrentMedia = g.CurrentMedia.WithPath(["10", 0]);
+                    g.UserInput.Get(T2IParamTypes.Seed, g.UserInput.Get(T2IParamTypes.Seed), sectionId: T2IParamInput.SectionID_BaseOnly), g.UserInput.Get(T2IParamTypes.RefinerMethod, "none") == "StepSwapNoisy", g.MainSamplerAddNoise, id: "10", isFirstSampler: true, sectionId: T2IParamInput.SectionID_BaseOnly);
+                g.CurrentMedia = g.CurrentMedia.WithPath(["10", 0], mayHaveAlpha: g.CurrentCompat()?.SupportsAlpha ?? false);
                 if (g.UserInput.Get(T2IParamTypes.UseReferenceOnly, false))
                 {
                     string fromBatch = g.CreateNode("LatentFromBatch", new JObject()
@@ -1478,6 +1518,8 @@ public class WorkflowGeneratorSteps
                 T2IModel baseModel = g.UserInput.Get(T2IParamTypes.Model);
                 T2IModel refineModel = baseModel;
                 string loaderNodeId = null;
+                int steps = g.UserInput.Get(T2IParamTypes.RefinerSteps, g.UserInput.Get(T2IParamTypes.Steps, 20, sectionId: T2IParamInput.SectionID_Refiner), sectionId: T2IParamInput.SectionID_Refiner);
+                long seed = g.UserInput.Get(T2IParamTypes.Seed, g.UserInput.Get(T2IParamTypes.Seed) + 1, sectionId: T2IParamInput.SectionID_Refiner, includeBase: false);
                 if (g.UserInput.TryGet(T2IParamTypes.RefinerModel, out T2IModel altRefineModel) && altRefineModel is not null)
                 {
                     refineModel = altRefineModel;
@@ -1494,11 +1536,8 @@ public class WorkflowGeneratorSteps
                 }
                 if (refineModel.ModelClass?.CompatClass?.ID == "pid")
                 {
-                    if (g.UserInput.Get(T2IParamTypes.OutputIntermediateImages, false))
-                    {
-                        g.CurrentMedia.DecodeLatents(origVae, false, "24").SaveOutput(null, null, id: "29");
-                    }
-                    WGNodeData pidDecoded = g.CreatePixelDecode(refineModel, g.CurrentMedia, origVae, g.UserInput.Get(T2IParamTypes.Seed) + 1, isRefiner: true);
+                    g.SaveOptionalIntermediate("29");
+                    WGNodeData pidDecoded = g.CreatePixelDecode(refineModel, g.CurrentMedia, origVae, seed, isRefiner: true);
                     if (g.UserInput.TryGet(T2IParamTypes.RefinerUpscale, out double pidUpscale) && pidUpscale != 1)
                     {
                         int targetWidth = ((int)Math.Round(g.UserInput.GetImageWidth() * pidUpscale) / 16) * 16;
@@ -1526,13 +1565,17 @@ public class WorkflowGeneratorSteps
                 {
                     modelMustReencode = true;
                 }
-                g.NoVAEOverride = refineModel.ModelClass?.CompatClass != baseModel.ModelClass?.CompatClass;
-                g.FinalLoadedModel = refineModel;
-                g.FinalLoadedModelList = [refineModel];
-                (g.FinalLoadedModel, g.CurrentModel, g.CurrentTextEnc, g.CurrentVae) = g.CreateModelLoader(refineModel, "Refiner", loaderNodeId, sectionId: T2IParamInput.SectionID_Refiner);
-                g.NoVAEOverride = false;
-                prompt = g.CreateConditioning(g.UserInput.Get(T2IParamTypes.Prompt), g.CurrentTextEnc.Path, g.FinalLoadedModel, true, isRefiner: true);
-                negPrompt = g.CreateConditioning(g.UserInput.Get(T2IParamTypes.NegativePrompt), g.CurrentTextEnc.Path, g.FinalLoadedModel, false, isRefiner: true);
+                bool isSeedVr = refineModel.ModelClass?.CompatClass?.ID == "seedvr2";
+                if (!isSeedVr)
+                {
+                    g.NoVAEOverride = refineModel.ModelClass?.CompatClass != baseModel.ModelClass?.CompatClass;
+                    g.FinalLoadedModel = refineModel;
+                    g.FinalLoadedModelList = [refineModel];
+                    (g.FinalLoadedModel, g.CurrentModel, g.CurrentTextEnc, g.CurrentVae) = g.CreateModelLoader(refineModel, "Refiner", loaderNodeId, sectionId: T2IParamInput.SectionID_Refiner);
+                    g.NoVAEOverride = false;
+                    prompt = g.CreateConditioning(g.UserInput.Get(T2IParamTypes.Prompt), g.CurrentTextEnc.Path, g.FinalLoadedModel, true, isRefiner: true, steps: steps);
+                    negPrompt = g.CreateConditioning(g.UserInput.Get(T2IParamTypes.NegativePrompt), g.CurrentTextEnc.Path, g.FinalLoadedModel, false, isRefiner: true, steps: steps);
+                }
                 bool doSave = g.UserInput.Get(T2IParamTypes.OutputIntermediateImages, false);
                 bool doUpscale = g.UserInput.TryGet(T2IParamTypes.RefinerUpscale, out double refineUpscale) && refineUpscale != 1;
                 string upscaleMethod = g.UserInput.Get(ComfyUIBackendExtension.RefinerUpscaleMethod, "None");
@@ -1549,7 +1592,7 @@ public class WorkflowGeneratorSteps
                     WGNodeData decoded = g.CreatePixelDecode(pidModel, g.CurrentMedia, origVae, g.UserInput.Get(T2IParamTypes.Seed) + 2);
                     if (doSave)
                     {
-                        decoded.SaveOutput(null, null, id: "29");
+                        decoded.SaveOutput(null, g.CurrentAudioVae, id: "29");
                     }
                     if (decoded.Width != width || decoded.Height != height)
                     {
@@ -1570,7 +1613,7 @@ public class WorkflowGeneratorSteps
                         g.CurrentMedia = decoded;
                         return;
                     }
-                    g.CurrentMedia = decoded.WithMaskedAudio(g.CurrentAudioVae).EncodeToLatent(g.CurrentVae, "25");
+                    g.CurrentMedia = isSeedVr ? decoded : decoded.WithMaskedAudio(g.CurrentAudioVae).EncodeToLatent(g.CurrentVae, "25");
                 }
                 else if (modelMustReencode || doPixelUpscale || doSave || g.MaskShrunkInfo.BoundsNode is not null)
                 {
@@ -1580,10 +1623,11 @@ public class WorkflowGeneratorSteps
                     g.CurrentMedia = decoded;
                     if (doSave)
                     {
-                        decoded.SaveOutput(null, null, id: "29");
+                        decoded.SaveOutput(null, g.CurrentAudioVae, id: "29");
                     }
                     if (doPixelUpscale)
                     {
+                        JArray alphaMask = null;
                         if (upscaleMethod.StartsWith("pixel-"))
                         {
                             g.CreateNode("ImageScale", new JObject()
@@ -1597,6 +1641,7 @@ public class WorkflowGeneratorSteps
                         }
                         else
                         {
+                            (decoded, alphaMask) = decoded.AsRawImageNoAlpha(origVae); // TODO: Pending comfy fix for alpha compat
                             g.CreateNode("UpscaleModelLoader", new JObject()
                             {
                                 ["model_name"] = upscaleMethod.After("model-")
@@ -1606,16 +1651,26 @@ public class WorkflowGeneratorSteps
                                 ["upscale_model"] = NodePath("27", 0),
                                 ["image"] = decoded.Path
                             }, "28");
+                            JArray upscaledImage = ["28", 0];
+                            if (alphaMask is not null)
+                            {
+                                string joined = g.CreateNode("JoinImageWithAlpha", new JObject()
+                                {
+                                    ["image"] = upscaledImage,
+                                    ["alpha"] = alphaMask
+                                });
+                                upscaledImage = NodePath(joined, 0);
+                            }
                             g.CreateNode("ImageScale", new JObject()
                             {
-                                ["image"] = NodePath("28", 0),
+                                ["image"] = upscaledImage,
                                 ["width"] = width,
                                 ["height"] = height,
                                 ["upscale_method"] = "lanczos",
                                 ["crop"] = "disabled"
                             }, "26");
                         }
-                        decoded = decoded.WithPath(["26", 0]);
+                        decoded = decoded.WithPath(["26", 0], mayHaveAlpha: alphaMask is not null ? true : null);
                         decoded.Width = width;
                         decoded.Height = height;
                         if (refinerControl <= 0)
@@ -1626,7 +1681,7 @@ public class WorkflowGeneratorSteps
                     }
                     if (modelMustReencode || doPixelUpscale)
                     {
-                        g.CurrentMedia = decoded.WithMaskedAudio(g.CurrentAudioVae).EncodeToLatent(g.CurrentVae, "25");
+                        g.CurrentMedia = isSeedVr ? decoded : decoded.WithMaskedAudio(g.CurrentAudioVae).EncodeToLatent(g.CurrentVae, "25");
                     }
                 }
                 if (doUpscale && upscaleMethod.StartsWith("latent-"))
@@ -1687,6 +1742,12 @@ public class WorkflowGeneratorSteps
                     g.CurrentMedia.Width = width;
                     g.CurrentMedia.Height = height;
                 }
+                if (isSeedVr)
+                {
+                    g.CurrentMedia = g.CreateSeedVR2Restore(refineModel, g.CurrentMedia, origVae, seed, isRefiner: true);
+                    g.IsRefinerStage = false;
+                    return;
+                }
                 WGNodeData model = g.CurrentModel;
                 if (g.UserInput.TryGet(ComfyUIBackendExtension.RefinerHyperTile, out int tileSize))
                 {
@@ -1701,14 +1762,13 @@ public class WorkflowGeneratorSteps
                     model = model.WithPath([hyperTileNode, 0]);
                 }
                 g.CurrentMedia = g.CurrentMedia.AsSamplingLatent(g.CurrentVae, g.CurrentAudioVae);
-                int steps = g.UserInput.Get(T2IParamTypes.RefinerSteps, g.UserInput.Get(T2IParamTypes.Steps, 20, sectionId: T2IParamInput.SectionID_Refiner), sectionId: T2IParamInput.SectionID_Refiner);
                 double cfg = g.UserInput.Get(T2IParamTypes.RefinerCFGScale, g.UserInput.Get(T2IParamTypes.CFGScale, 7, sectionId: T2IParamInput.SectionID_Refiner), sectionId: T2IParamInput.SectionID_Refiner);
                 string explicitSampler = g.UserInput.Get(ComfyUIBackendExtension.SamplerParam, null, sectionId: T2IParamInput.SectionID_Refiner, includeBase: false) ?? g.UserInput.Get(ComfyUIBackendExtension.RefinerSamplerParam, null);
                 string explicitScheduler = g.UserInput.Get(ComfyUIBackendExtension.SchedulerParam, null, sectionId: T2IParamInput.SectionID_Refiner, includeBase: false) ?? g.UserInput.Get(ComfyUIBackendExtension.RefinerSchedulerParam, null);
                 g.CreateKSampler(model.Path, prompt, negPrompt, g.CurrentMedia.Path, cfg, steps, (int)Math.Round(steps * (1 - refinerControl)), 10000,
-                    g.UserInput.Get(T2IParamTypes.Seed) + 1, false, method != "StepSwapNoisy", id: "23", doTiled: g.UserInput.Get(T2IParamTypes.RefinerDoTiling, false),
+                    seed, false, method != "StepSwapNoisy", id: "23", doTiled: g.UserInput.Get(T2IParamTypes.RefinerDoTiling, false),
                     explicitSampler: explicitSampler, explicitScheduler: explicitScheduler, sectionId: T2IParamInput.SectionID_Refiner);
-                g.CurrentMedia = g.CurrentMedia.WithPath(["23", 0]);
+                g.CurrentMedia = g.CurrentMedia.WithPath(["23", 0], mayHaveAlpha: model.Compat?.SupportsAlpha ?? false);
                 g.IsRefinerStage = false;
             }
         }, -4);
@@ -1722,7 +1782,7 @@ public class WorkflowGeneratorSteps
                 {
                     throw new SwarmUserErrorException($"Pixel Decoder Model is set to '{pixelDecoder.Name}', but that is not a PiD model.");
                 }
-                g.CurrentMedia = g.CreatePixelDecode(pixelDecoder, g.CurrentMedia, g.CurrentVae, g.UserInput.Get(T2IParamTypes.Seed) + 3);
+                g.CurrentMedia = g.CreatePixelDecode(pixelDecoder, g.CurrentMedia, g.CurrentVae, g.UserInput.Get(T2IParamTypes.Seed, g.UserInput.Get(T2IParamTypes.Seed) + 3, sectionId: T2IParamInput.SectionID_PixelDecoder, includeBase: false));
             }
             g.CurrentMedia = g.CurrentMedia.DecodeLatents(g.CurrentVae, null, "8");
             JArray maskShrinkApply = doMaskShrinkApply(g, g.CurrentMedia.Path);
@@ -1736,10 +1796,7 @@ public class WorkflowGeneratorSteps
             if (parts.Any())
             {
                 g.CurrentMedia = g.CurrentMedia.AsRawImage(g.CurrentVae);
-                if (g.UserInput.Get(T2IParamTypes.OutputIntermediateImages, false))
-                {
-                    g.CurrentMedia.SaveOutput(g.CurrentVae, g.CurrentAudioVae, id: g.GetStableDynamicID(50000, 0));
-                }
+                g.SaveOptionalIntermediate();
                 T2IModel t2iModel = g.FinalLoadedModel;
                 WGNodeData model = g.CurrentModel, clip = g.CurrentTextEnc, vae = g.CurrentVae;
                 if (g.UserInput.TryGet(T2IParamTypes.SegmentModel, out T2IModel segmentModel))
@@ -1867,6 +1924,7 @@ public class WorkflowGeneratorSteps
                         new WGNodeData([imageNode, 0], g, WGNodeData.DT_IMAGE, g.CurrentCompat()).SaveOutput(null, null, g.GetStableDynamicID(50000, 0));
                     }
                     int oversize = g.UserInput.Get(T2IParamTypes.SegmentMaskOversize, 16);
+                    ImageMaskCropData priorMaskShrunkInfo = g.MaskShrunkInfo;
                     g.MaskShrunkInfo = g.CreateImageMaskCrop([segmentNode, 0], g.CurrentMedia.Path, oversize, vae.Path, g.FinalLoadedModel, thresholdMax: g.UserInput.Get(T2IParamTypes.SegmentThresholdMax, 1));
                     g.EnableDifferential();
                     if (part.ContextID > 0)
@@ -1875,20 +1933,20 @@ public class WorkflowGeneratorSteps
                         model = model.WithPath(newModel);
                         clip = clip.WithPath(newClip);
                     }
-                    JArray prompt = g.CreateConditioning(part.Prompt, clip.Path, t2iModel, true);
-                    string neg = negativeParts.FirstOrDefault(p => p.DataText == part.DataText)?.Prompt ?? negativeRegion.GlobalPrompt;
-                    JArray negPrompt = g.CreateConditioning(neg, clip.Path, t2iModel, false);
                     int steps = g.UserInput.GetNullable(T2IParamTypes.Steps, part.ContextID, false) ?? g.UserInput.GetNullable(T2IParamTypes.SegmentSteps, part.ContextID) ?? g.UserInput.GetNullable(T2IParamTypes.RefinerSteps, part.ContextID) ?? g.UserInput.Get(T2IParamTypes.Steps, 20, sectionId: part.ContextID);
+                    JArray prompt = g.CreateConditioning(part.Prompt, clip.Path, t2iModel, true, steps: steps);
+                    string neg = negativeParts.FirstOrDefault(p => p.DataText == part.DataText)?.Prompt ?? negativeRegion.GlobalPrompt;
+                    JArray negPrompt = g.CreateConditioning(neg, clip.Path, t2iModel, false, steps: steps);
                     int startStep = (int)Math.Round(steps * (1 - part.Strength2));
-                    long seed = g.UserInput.Get(T2IParamTypes.Seed) + 2 + i;
+                    long seed = g.UserInput.Get(T2IParamTypes.Seed, g.UserInput.Get(T2IParamTypes.Seed) + 2 + i, sectionId: part.ContextID, includeBase: false);
                     double cfg = g.UserInput.GetNullable(T2IParamTypes.CFGScale, part.ContextID, false) ?? g.UserInput.GetNullable(T2IParamTypes.SegmentCFGScale, part.ContextID) ?? g.UserInput.GetNullable(T2IParamTypes.RefinerCFGScale, part.ContextID) ?? g.UserInput.Get(T2IParamTypes.CFGScale, 7, sectionId: part.ContextID);
                     WGNodeData beforeImage = g.CurrentMedia;
                     string sampler = g.CreateKSampler(model.Path, prompt, negPrompt, [g.MaskShrunkInfo.MaskedLatent, 0], cfg, steps, startStep, 10000, seed, false, true, sectionId: part.ContextID);
-                    g.CurrentMedia = g.CurrentMedia.WithPath([sampler, 0], WGNodeData.DT_LATENT_IMAGE);
+                    g.CurrentMedia = g.CurrentMedia.WithPath([sampler, 0], WGNodeData.DT_LATENT_IMAGE, mayHaveAlpha: model.Compat?.SupportsAlpha ?? false);
                     g.CurrentMedia = g.CurrentMedia.AsRawImage(vae);
                     JArray composited = g.RecompositeCropped(g.MaskShrunkInfo.BoundsNode, [g.MaskShrunkInfo.CroppedMask, 0], beforeImage.Path, g.CurrentMedia.Path);
                     g.CurrentMedia = g.CurrentMedia.WithPath(composited);
-                    g.MaskShrunkInfo = new(null, null, null, null);
+                    g.MaskShrunkInfo = priorMaskShrunkInfo;
                 }
             }
         }
@@ -1914,17 +1972,14 @@ public class WorkflowGeneratorSteps
             RunSegmentationProcessing(g, isBeforeRefiner: false);
         }, 5);
         #endregion
-        #region SaveImage
+        #region Segment Clears
         AddStep(g =>
         {
             PromptRegion.Part[] parts = [.. new PromptRegion(g.UserInput.Get(T2IParamTypes.Prompt, "")).Parts.Where(p => p.Type == PromptRegion.PartType.ClearSegment)];
             g.CurrentMedia = g.CurrentMedia.DecodeLatents(g.CurrentVae, null);
             foreach (PromptRegion.Part part in parts)
             {
-                if (g.UserInput.Get(T2IParamTypes.OutputIntermediateImages, false))
-                {
-                    g.CurrentMedia.SaveOutput(g.CurrentVae, g.CurrentAudioVae, g.GetStableDynamicID(50000, 0));
-                }
+                g.SaveOptionalIntermediate();
                 string segmentNode = g.CreateNode("SwarmClipSeg", new JObject()
                 {
                     ["images"] = g.CurrentMedia.Path,
@@ -1955,70 +2010,39 @@ public class WorkflowGeneratorSteps
                     ["image"] = g.CurrentMedia.Path,
                     ["alpha"] = NodePath(thresholded, 0)
                 });
-                g.CurrentMedia = g.CurrentMedia.WithPath([joined, 0]);
+                g.CurrentMedia = g.CurrentMedia.WithPath([joined, 0], mayHaveAlpha: true);
             }
-            if (g.UserInput.Get(T2IParamTypes.RemoveBackground, false))
-            {
-                if (g.UserInput.Get(T2IParamTypes.OutputIntermediateImages, false))
-                {
-                    g.CurrentMedia.SaveOutput(g.CurrentVae, g.CurrentAudioVae, id: g.GetStableDynamicID(50000, 0));
-                }
-                string removed = g.CreateNode("SwarmRemBg", new JObject()
-                {
-                    ["images"] = g.CurrentMedia.Path
-                });
-                g.CurrentMedia = g.CurrentMedia.WithPath([removed, 0]);
-            }
+        }, 7);
+        #endregion
+        #region Save Image Before Video
+        AddStep(g =>
+        {
+            // TODO: Arguably this whole block could just be a SaveOptionalIntermediate before the Video Model run?
             if (g.UserInput.SourceSession is null && g.UserInput.Get(T2IParamTypes.DoNotSave, false) && g.UserInput.Get(T2IParamTypes.Steps) == 0 && !g.UserInput.TryGet(T2IParamTypes.RefinerModel, out _))
             {
                 // We don't actually want an image we're just aggressively loading a model or something
+                return;
             }
-            else
+            if (g.UserInput.Get(T2IParamTypes.JustLoadModel, false))
             {
-                bool willHaveFollowupVideo = g.UserInput.TryGet(T2IParamTypes.VideoModel, out _) || g.UserInput.Get(T2IParamTypes.Prompt, "").Contains("<extend:");
-                // Heuristic check for if this is an Init Image with no further processing, ie the initial image save is redundant because we're just wanting to extend a presaved image to a video
-                bool formedFromSingleImage = g.UserInput.Get(T2IParamTypes.InitImageCreativity, -1) == 0 && !g.UserInput.Get(T2IParamTypes.OutputIntermediateImages, false) && !g.UserInput.TryGet(T2IParamTypes.RefinerMethod, out _);
-                if (g.IsVideoModel() && !formedFromSingleImage && !willHaveFollowupVideo)
+                return;
+            }
+            // TODO: This is a weird hack.
+            bool willHaveFollowupVideo = g.UserInput.TryGet(T2IParamTypes.VideoModel, out _) || g.UserInput.Get(T2IParamTypes.Prompt, "").Contains("<extend:");
+            // Heuristic check for if this is an Init Image with no further processing, ie the initial image save is redundant because we're just wanting to extend a presaved image to a video
+            bool formedFromSingleImage = g.UserInput.Get(T2IParamTypes.InitImageCreativity, -1) == 0 && !g.UserInput.Get(T2IParamTypes.OutputIntermediateImages, false) && !g.UserInput.TryGet(T2IParamTypes.RefinerMethod, out _);
+            string nodeId = "9";
+            if (willHaveFollowupVideo)
+            {
+                nodeId = "30";
+                if (formedFromSingleImage)
                 {
-                    if (g.UserInput.TryGet(T2IParamTypes.TrimVideoStartFrames, out _) || g.UserInput.TryGet(T2IParamTypes.TrimVideoEndFrames, out _))
-                    {
-                        string trimNode = g.CreateNode("SwarmTrimFrames", new JObject()
-                        {
-                            ["image"] = g.CurrentMedia.Path,
-                            ["trim_start"] = g.UserInput.Get(T2IParamTypes.TrimVideoStartFrames, 0),
-                            ["trim_end"] = g.UserInput.Get(T2IParamTypes.TrimVideoEndFrames, 0)
-                        });
-                        g.CurrentMedia = g.CurrentMedia.WithPath([trimNode, 0]);
-                    }
-                    if (g.UserInput.TryGet(ComfyUIBackendExtension.VideoFrameInterpolationMethod, out string method)
-                        && g.UserInput.TryGet(ComfyUIBackendExtension.VideoFrameInterpolationMultiplier, out int mult) && mult > 1
-                        && g.UserInput.Get(T2IParamTypes.Text2VideoFrames, 99) > 1)
-                    {
-                        if (g.UserInput.Get(T2IParamTypes.OutputIntermediateImages, false))
-                        {
-                            g.CurrentMedia.SaveOutput(g.CurrentVae, g.CurrentAudioVae, id: g.GetStableDynamicID(50000, 0));
-                        }
-                        JArray newInterp = g.DoInterpolation(g.CurrentMedia.Path, method, mult);
-                        g.CurrentMedia = g.CurrentMedia.WithPath(newInterp);
-                        int fps = g.CurrentMedia.GetRawFPS() ?? g.Text2VideoFPS();
-                        fps *= mult;
-                        g.CurrentMedia.FPS = fps;
-                        g.T2VFPSOverride = fps;
-                    }
+                    nodeId = null;
                 }
-                string nodeId = "9";
-                if (willHaveFollowupVideo)
-                {
-                    nodeId = "30";
-                    if (formedFromSingleImage)
-                    {
-                        nodeId = null;
-                    }
-                }
-                if (nodeId is not null)
-                {
-                    g.CurrentMedia.SaveOutput(g.CurrentVae, g.CurrentAudioVae, nodeId);
-                }
+            }
+            if (nodeId is not null)
+            {
+                g.CurrentMedia.SaveOutput(g.CurrentVae, g.CurrentAudioVae, nodeId);
             }
         }, 10);
         #endregion
@@ -2032,7 +2056,7 @@ public class WorkflowGeneratorSteps
                 double? videoCfg = g.UserInput.GetNullable(T2IParamTypes.CFGScale, T2IParamInput.SectionID_Video, false) ?? g.UserInput.GetNullable(T2IParamTypes.VideoCFG, T2IParamInput.SectionID_Video);
                 int steps = g.UserInput.GetNullable(T2IParamTypes.Steps, T2IParamInput.SectionID_Video, false) ?? g.UserInput.Get(T2IParamTypes.VideoSteps, 20, sectionId: T2IParamInput.SectionID_Video);
                 string resFormat = g.UserInput.Get(T2IParamTypes.VideoResolution, "Model Preferred");
-                long seed = g.UserInput.Get(T2IParamTypes.Seed) + 42;
+                long seed = g.UserInput.Get(T2IParamTypes.Seed, g.UserInput.Get(T2IParamTypes.Seed) + 42, sectionId: T2IParamInput.SectionID_Video, includeBase: false);
                 string prompt = g.UserInput.Get(T2IParamTypes.Prompt, "");
                 string negPrompt = g.UserInput.Get(T2IParamTypes.NegativePrompt, "");
                 int batchInd = -1, batchLen = -1;
@@ -2091,7 +2115,7 @@ public class WorkflowGeneratorSteps
                     BatchIndex = batchInd,
                     BatchLen = batchLen,
                     ContextID = T2IParamInput.SectionID_Video,
-                    VideoEndFrame = g.UserInput.Get(T2IParamTypes.VideoEndFrame, null)
+                    VideoEndImage = g.UserInput.Get(T2IParamTypes.VideoEndImage, null)
                 };
                 if (g.UserInput.TryGet(T2IParamTypes.Video2VideoCreativity, out double v2vCreativity))
                 {
@@ -2102,20 +2126,11 @@ public class WorkflowGeneratorSteps
                 bool hasExtend = prompt.Contains("<extend:");
                 if (!hasExtend && g.UserInput.TryGet(ComfyUIBackendExtension.VideoFrameInterpolationMethod, out string method) && g.UserInput.TryGet(ComfyUIBackendExtension.VideoFrameInterpolationMultiplier, out int mult) && mult > 1)
                 {
-                    if (g.UserInput.Get(T2IParamTypes.OutputIntermediateImages, false))
-                    {
-                        g.CurrentMedia.SaveOutput(genInfo.Vae, g.CurrentAudioVae, g.GetStableDynamicID(50000, 0));
-                    }
+                    g.SaveOptionalIntermediate();
                     JArray interpolated = g.DoInterpolation(g.CurrentMedia.Path, method, mult);
                     g.CurrentMedia = g.CurrentMedia.WithPath(interpolated);
                     g.CurrentMedia.FPS = genInfo.VideoFPS.HasValue ? genInfo.VideoFPS.Value * mult : null;
                 }
-                string nodeId = "9";
-                if (hasExtend)
-                {
-                    nodeId = $"{g.GetStableDynamicID(50000, 0)}";
-                }
-                g.CurrentMedia.SaveOutput(genInfo.Vae, g.CurrentAudioVae, nodeId);
             }
         }, 11);
         #endregion
@@ -2153,10 +2168,12 @@ public class WorkflowGeneratorSteps
             string fullRawPrompt = g.UserInput.Get(T2IParamTypes.Prompt, "");
             if (fullRawPrompt.Contains("<extend:"))
             {
+                g.SaveOptionalIntermediate();
                 g.CurrentMedia = g.CurrentMedia.AsRawImage(g.CurrentVae);
                 string negPrompt = g.UserInput.Get(T2IParamTypes.NegativePrompt, "");
                 long seed = g.UserInput.Get(T2IParamTypes.Seed) + 600;
                 int? videoFps = g.UserInput.TryGet(T2IParamTypes.VideoFPS, out int fpsRaw) ? fpsRaw : null;
+                WGNodeData extendVae = null;
                 string format = g.UserInput.Get(T2IParamTypes.VideoExtendFormat, "mp4").ToLowerFast();
                 int frameExtendOverlap = g.UserInput.Get(T2IParamTypes.VideoExtendFrameOverlap, 9);
                 bool saveIntermediate = g.UserInput.Get(T2IParamTypes.OutputIntermediateImages, false);
@@ -2181,6 +2198,7 @@ public class WorkflowGeneratorSteps
                     double cfg = g.UserInput.GetNullable(T2IParamTypes.CFGScale, part.ContextID, false) ?? g.UserInput.GetNullable(T2IParamTypes.VideoCFG, part.ContextID) ?? g.UserInput.Get(T2IParamTypes.CFGScale, 7);
                     int steps = g.UserInput.GetNullable(T2IParamTypes.Steps, part.ContextID, false) ?? g.UserInput.GetNullable(T2IParamTypes.VideoSteps, part.ContextID) ?? g.UserInput.Get(T2IParamTypes.Steps, 20);
                     seed++;
+                    long partSeed = g.UserInput.Get(T2IParamTypes.Seed, seed + i, sectionId: part.ContextID, includeBase: false);
                     int? frames = int.Parse(part.DataText);
                     string prompt = part.Prompt;
                     string frameCountNode = g.CreateNode("SwarmCountFrames", new JObject()
@@ -2216,12 +2234,13 @@ public class WorkflowGeneratorSteps
                         Prompt = prompt,
                         NegativePrompt = negPrompt,
                         Steps = steps,
-                        Seed = seed,
+                        Seed = partSeed,
                         BatchIndex = 0,
                         BatchLen = frameExtendOverlap,
                         ContextID = part.ContextID
                     };
                     g.CreateImageToVideo(genInfo);
+                    extendVae = genInfo.Vae;
                     g.CurrentMedia = g.CurrentMedia.AsRawImage(genInfo.Vae);
                     WGNodeData stageWithAudio = ensureAttachedAudio(g.CurrentMedia);
                     videoFps = genInfo.VideoFPS;
@@ -2259,9 +2278,172 @@ public class WorkflowGeneratorSteps
                     videoFps *= mult;
                     g.CurrentMedia.FPS = videoFps;
                 }
-                g.CurrentMedia.SaveOutput(g.CurrentVae, g.CurrentAudioVae, "9");
             }
         }, 12);
+        #endregion
+        #region SeedVR
+        AddStep(g =>
+        {
+            if (!g.UserInput.TryGet(ComfyUIBackendExtension.SeedVRModel, out T2IModel seedVrModel) || seedVrModel is null)
+            {
+                return;
+            }
+            WGNodeData vae = g.CurrentVae;
+            g.SaveOptionalIntermediate();
+            long seed = g.UserInput.Get(T2IParamTypes.Seed, g.UserInput.Get(T2IParamTypes.Seed) + 9, sectionId: T2IParamInput.SectionID_SeedVR, includeBase: false);
+            WGNodeData media = g.CurrentMedia;
+            double scale = g.UserInput.Get(ComfyUIBackendExtension.SeedVRUpscale, 1);
+            double downscale = g.UserInput.Get(ComfyUIBackendExtension.SeedVRPreDownscale, 1);
+            if (downscale <= 0)
+            {
+                throw new SwarmReadableErrorException($"Invalid SeedVR pre-downscale value {downscale}. Must be greater than 0.");
+            }
+            if (downscale < 1)
+            {
+                media = media.AsRawImage(vae);
+                int downWidth = (int)Math.Round((media.Width ?? g.UserInput.GetImageWidth()) * downscale);
+                int downHeight = (int)Math.Round((media.Height ?? g.UserInput.GetImageHeight()) * downscale);
+                string scaledDown = g.CreateNode("ImageScale", new JObject()
+                {
+                    ["image"] = media.Path,
+                    ["width"] = downWidth,
+                    ["height"] = downHeight,
+                    ["upscale_method"] = "bilinear",
+                    ["crop"] = "disabled"
+                });
+                media = media.WithPath([scaledDown, 0]);
+                media.Width = downWidth;
+                media.Height = downHeight;
+                scale /= downscale;
+            }
+            if (scale != 1)
+            {
+                // TODO: Should probably extract a shared upscale logic with the refiner rather than copy/pasted here
+                string method = g.UserInput.Get(ComfyUIBackendExtension.SeedVRUpscaleMethod, "pixel-lanczos");
+                int width = (((int)Math.Round((media.Width ?? g.UserInput.GetImageWidth()) * scale)) / 16) * 16;
+                int height = (((int)Math.Round((media.Height ?? g.UserInput.GetImageHeight()) * scale)) / 16) * 16;
+                if (method.StartsWith("latent-"))
+                {
+                    media = media.AsLatentImage(vae);
+                    string latentUpscaled = g.CreateNode("LatentUpscaleBy", new JObject()
+                    {
+                        ["samples"] = media.Path,
+                        ["upscale_method"] = method.After("latent-"),
+                        ["scale_by"] = scale
+                    });
+                    media = media.WithPath([latentUpscaled, 0]);
+                    media.Width = width;
+                    media.Height = height;
+                }
+                else
+                {
+                    media = media.AsRawImage(vae);
+                    if (method.StartsWith("pidmodel-"))
+                    {
+                        T2IModel pidModel = ComfyUIBackendExtension.GetPidModel(method.After("pidmodel-"), g.UserInput.SourceSession);
+                        media = g.CreatePixelDecode(pidModel, media, vae, seed);
+                    }
+                    else if (method.StartsWith("model-"))
+                    {
+                        JArray alphaMask;
+                        (media, alphaMask) = media.AsRawImageNoAlpha(vae); // TODO: Pending comfy fix for alpha compat
+                        string loaderNode = g.CreateNode("UpscaleModelLoader", new JObject()
+                        {
+                            ["model_name"] = method.After("model-")
+                        });
+                        string upscaledNode = g.CreateNode("ImageUpscaleWithModel", new JObject()
+                        {
+                            ["upscale_model"] = NodePath(loaderNode, 0),
+                            ["image"] = media.Path
+                        });
+                        JArray upscaledImage = NodePath(upscaledNode, 0);
+                        if (alphaMask is not null)
+                        {
+                            string joined = g.CreateNode("JoinImageWithAlpha", new JObject()
+                            {
+                                ["image"] = upscaledImage,
+                                ["alpha"] = alphaMask
+                            });
+                            upscaledImage = NodePath(joined, 0);
+                        }
+                        media = media.WithPath(upscaledImage, mayHaveAlpha: alphaMask is not null);
+                        media.Width = null; // the model's own scale factor is unknown here, so always correct after
+                        media.Height = null;
+                    }
+                    else if (method.StartsWith("pixel-"))
+                    {
+                        if (media.Width != width || media.Height != height)
+                        {
+                            string scaled = g.CreateNode("ImageScale", new JObject()
+                            {
+                                ["image"] = media.Path,
+                                ["width"] = width,
+                                ["height"] = height,
+                                ["upscale_method"] = method.StartsWith("pixel-") ? method.After("pixel-") : "lanczos",
+                                ["crop"] = "disabled"
+                            });
+                            media = media.WithPath([scaled, 0]);
+                            media.Width = width;
+                            media.Height = height;
+                        }
+                    }
+                    else
+                    {
+                        throw new SwarmReadableErrorException($"Unsupported upscale method '{method}' for SeedVR");
+                    }
+                }
+            }
+            g.CurrentMedia = g.CreateSeedVR2Restore(seedVrModel, media, vae, seed);
+        }, 40);
+        #endregion
+        #region Final Cleanups
+        AddStep(g =>
+        {
+            if (g.IsVideoModel())
+            {
+                if (g.UserInput.TryGet(T2IParamTypes.TrimVideoStartFrames, out _) || g.UserInput.TryGet(T2IParamTypes.TrimVideoEndFrames, out _))
+                {
+                    string trimNode = g.CreateNode("SwarmTrimFrames", new JObject()
+                    {
+                        ["image"] = g.CurrentMedia.Path,
+                        ["trim_start"] = g.UserInput.Get(T2IParamTypes.TrimVideoStartFrames, 0),
+                        ["trim_end"] = g.UserInput.Get(T2IParamTypes.TrimVideoEndFrames, 0)
+                    });
+                    g.CurrentMedia = g.CurrentMedia.WithPath([trimNode, 0]);
+                }
+                if (g.UserInput.TryGet(ComfyUIBackendExtension.VideoFrameInterpolationMethod, out string method)
+                    && g.UserInput.TryGet(ComfyUIBackendExtension.VideoFrameInterpolationMultiplier, out int mult) && mult > 1
+                    && g.UserInput.Get(T2IParamTypes.Text2VideoFrames, 99) > 1)
+                {
+                    g.SaveOptionalIntermediate();
+                    JArray newInterp = g.DoInterpolation(g.CurrentMedia.Path, method, mult);
+                    g.CurrentMedia = g.CurrentMedia.WithPath(newInterp);
+                    int fps = g.CurrentMedia.GetRawFPS() ?? g.Text2VideoFPS();
+                    fps *= mult;
+                    g.CurrentMedia.FPS = fps;
+                    g.T2VFPSOverride = fps;
+                }
+            }
+            if (g.UserInput.Get(T2IParamTypes.RemoveBackground, false))
+            {
+                g.SaveOptionalIntermediate();
+                string removed = g.CreateNode("SwarmRemBg", new JObject()
+                {
+                    ["images"] = g.CurrentMedia.Path
+                });
+                g.CurrentMedia = g.CurrentMedia.WithPath([removed, 0], mayHaveAlpha: true);
+            }
+        }, 50);
+        #endregion
+        #region True Final Save
+        AddStep(g =>
+        {
+            if (g.UserInput.Get(T2IParamTypes.JustLoadModel, false))
+            {
+                return;
+            }
+            g.CurrentMedia.SaveOutput(g.CurrentVae, g.CurrentAudioVae, "9");
+        }, 100);
         #endregion
         #region Post-Cleanup
         AddStep(g =>
@@ -2349,6 +2531,6 @@ public class WorkflowGeneratorSteps
     [
         "VAEDecode", "VAEDecodeTiled", "VAEEncode", "CLIPTextEncode", "CLIPTextEncodeSDXL",
         "LTXVAudioVAEDecode", "LTXVSeparateAVLatent", "LTXVConditioning", "LTXVEmptyLatentAudio", "LTXVConcatAVLatent", "LTXVReferenceAudio",
-        "SwarmCountFrames", "SwarmClipTextEncodeAdvanced"
+        "SwarmCountFrames", "SwarmClipTextEncodeAdvanced", "SwarmTextEncodeAdvanced"
     ];
 }

@@ -47,7 +47,7 @@ Some users report that setting an environment variable of `HSA_OVERRIDE_GFX_VERS
 
 The message `AssertionError: Torch not compiled with CUDA enabled` means that python dependencies of Swarm's comfy backend have been mangled. This most often happens when custom nodes or packages have poorly built requirements files. You'll see issues like this most frequently if you often allow Comfy Manager to install nodepacks.
 
-**So how do I fix it?** The concept is easy, just the details vary. You need to reinstall torch, which means you need to trigger a pip install of: `torch torchvision torchaudio -U --index-url https://download.pytorch.org/whl/cu128` (the cu128 is CUDA version and may change over time, refer to [PyTorch's Website](https://pytorch.org/get-started/locally/) for updated index-url options). Note the usage of `-U` to tell pip to upgrade/replace the existing torch. To see how to install pip packages, refer to [I need to install something with pip](#i-need-to-install-something-with-pip) below.
+**So how do I fix it?** The concept is easy, just the details vary. You need to reinstall torch, which means you need to trigger a pip install of: `torch torchvision -U --index-url https://download.pytorch.org/whl/cu128` (the cu128 is CUDA version and may change over time, refer to [PyTorch's Website](https://pytorch.org/get-started/locally/) for updated index-url options). Note the usage of `-U` to tell pip to upgrade/replace the existing torch. To see how to install pip packages, refer to [I need to install something with pip](#i-need-to-install-something-with-pip) below.
 
 ### fatal: detected dubious ownership in repository at '...'
 
@@ -117,7 +117,7 @@ Most importantly after reinstalling:
 ### Newly Supported Model Isn't Working
 
 If you're trying a new model class that Swarm supports, but it's not working, the most common cause is: you forgot to update first! So, update SwarmUI via the Server Info tab.
-- If you have updated already SwarmUI, but you downloaded the model before that update, you can hit Utilities -> Reset All Metadata, which will cause Swarm to re-scan the model and re-detect what architecture it uses.
+- If you have updated already SwarmUI, but you downloaded the model before that update, you can hit Utilities -> Reset Model Metadata, which will cause Swarm to re-scan the model and re-detect what architecture it uses.
 - If that doesn't fix it, look in the Models tab of the Generate tab. Is the `Type:` listed correct? If not, hit the `☰` hamburger menu then `Edit Metadata`, then change the Architecture to the correct value for the model.
 
 ## Other

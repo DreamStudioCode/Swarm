@@ -29,7 +29,7 @@ public static class T2IAPI
         API.RegisterAPICall(GenerateText2Image, true, Permissions.BasicImageGeneration);
         API.RegisterAPICall(GenerateText2ImageWS, true, Permissions.BasicImageGeneration);
         API.RegisterAPICall(AddImageToHistory, true, Permissions.BasicImageGeneration);
-        API.RegisterAPICall(ExtractVideoAudio, true, Permissions.BasicImageGeneration);
+        API.RegisterAPICall(EditMedia, true, Permissions.BasicImageGeneration);
         API.RegisterAPICall(ListImages, false, Permissions.ViewImageHistory);
         API.RegisterAPICall(ToggleImageStarred, true, Permissions.UserStarImages);
         API.RegisterAPICall(OpenImageFolder, true, Permissions.LocalImageFolder);
@@ -260,17 +260,26 @@ public static class T2IAPI
             output(BasicAPIFeatures.GetCurrentStatusRaw(session));
         }
         bool continueAfterErrors = false;
+        T2IParamInput user_input = null;
         void setError(string message)
         {
             Logs.Warning($"Refused to generate image for {session.User.UserID}: {message}");
             if (!continueAfterErrors || claim.ShouldCancel)
             {
-                output(new JObject() { ["error"] = message });
+                JObject error = new() { ["error"] = message };
+                if (user_input is not null)
+                {
+                    error["request_id"] = $"{user_input.UserRequestId}";
+                }
+                output(error);
                 claim.LocalClaimInterrupt.Cancel();
+                if (isWS)
+                {
+                    output(BasicAPIFeatures.GetCurrentStatusRaw(session));
+                }
             }
         }
         long timeStart = Environment.TickCount64;
-        T2IParamInput user_input;
         try
         {
             user_input = RequestToParams(session, rawInput);
@@ -298,6 +307,18 @@ public static class T2IAPI
         user_input.ApplySpecialLogic();
         images = user_input.Get(T2IParamTypes.Images, 1);
         claim.Extend(images - claim.WaitingGenerations);
+        int maxQueued = session.User.CalculatedRole.Data.MaxQueued;
+        if (maxQueued < 100_000_000) // (don't waste time calculating for admin/local)
+        {
+            int totalQueued = session.User.CalcTotalQueued;
+            if (totalQueued > maxQueued)
+            {
+                int alreadyRunning = totalQueued - images;
+                int available = maxQueued - alreadyRunning;
+                setError($"Too many gens in queue. Your user account role has a MaxQueued of {maxQueued}, you had {alreadyRunning} already running and tried to request {images} more (total {totalQueued}). {(images > 1 && available > 0 ? $"Try setting your images count to {available} or less." : "Wait for your pending gens, or interrupt them.")}");
+                return;
+            }
+        }
         Logs.Info($"User {session.User.UserID} requested {images} image{(images == 1 ? "" : "s")} with model '{user_input.Get(T2IParamTypes.Model)?.Name}'...");
         if (Logs.MinimumLevel <= Logs.LogLevel.Verbose)
         {
@@ -520,17 +541,8 @@ public static class T2IAPI
         return new() { ["images"] = new JArray() { new JObject() { ["image"] = path, ["batch_index"] = "0", ["request_id"] = $"{user_input.UserRequestId}", ["metadata"] = metadata } } };
     }
 
-    [API.APIDescription("Extracts the audio track from a video, saves it under inputs/extracted_audio, and returns the saved audio.",
-        """
-            "audio":
-            {
-                "path": "inputs/extracted_audio/video-audio-1.mp3",
-                "src": "View/local/inputs/extracted_audio/video-audio-1.mp3"
-            }
-        """)]
-    public static async Task<JObject> ExtractVideoAudio(Session session,
-        [API.APIParameter("Video data URL or reusable server media path.")] string video,
-        [API.APIParameter("Original video filename, used to name the extracted audio.")] string filename = null)
+    /// <summary>Resolves a video or audio data URL or reusable media path to a local file.</summary>
+    private static async Task<(string inputFile, string temporaryInput, string sourceName, MediaMetaType mediaType)> ResolveMediaSource(Session session, string media, string filename, string action)
     {
         string root = Utilities.CombinePathWithAbsolute(Environment.CurrentDirectory, session.User.OutputDirectory);
         string temporaryInput = null;
@@ -538,88 +550,140 @@ public static class T2IAPI
         try
         {
             string inputFile;
-            if (video.StartsWith("data:"))
+            MediaType sourceType;
+            if (media.StartsWith("data:"))
             {
-                VideoFile videoFile;
-                try
+                string mimeType = media.Before(";base64,").After("data:");
+                if (!MediaType.TypesByMimeType.TryGetValue(mimeType, out sourceType) || (sourceType.MetaType != MediaMetaType.Video && sourceType.MetaType != MediaMetaType.Audio))
                 {
-                    videoFile = VideoFile.FromDataString(video);
+                    throw new SwarmUserErrorException("The supplied data is not a recognized video or audio type.");
                 }
-                catch (Exception)
-                {
-                    throw new SwarmUserErrorException("Invalid video data supplied for audio extraction.");
-                }
-                if (videoFile.Type.MetaType != MediaMetaType.Video)
-                {
-                    throw new SwarmUserErrorException("The supplied media is not a video.");
-                }
-                temporaryInput = Path.Combine(Path.GetTempPath(), $"swarm-audio-source-{Guid.NewGuid():N}.{videoFile.Type.Extension}");
-                await File.WriteAllBytesAsync(temporaryInput, videoFile.RawData);
+                MediaFile mediaFile = sourceType.MetaType.FromDataString(media);
+                temporaryInput = Path.Combine(Program.TempDir, $"swarm-media-source-{Guid.NewGuid():N}.{mediaFile.Type.Extension}");
+                await File.WriteAllBytesAsync(temporaryInput, mediaFile.RawData);
                 inputFile = temporaryInput;
             }
             else
             {
-                if (!video.StartsWith("inputs/") && !video.StartsWith("raw/") && !video.StartsWith("Starred/"))
-                {
-                    throw new SwarmUserErrorException("Invalid video path supplied for audio extraction.");
-                }
-                (string checkedPath, string consoleError, string userError) = WebServer.CheckFilePath(root, video);
+                (string checkedPath, string consoleError, string userError) = WebServer.CheckFilePath(root, media);
                 if (consoleError is not null)
                 {
                     Logs.Error(consoleError);
                     throw new SwarmUserErrorException(userError);
                 }
                 inputFile = UserImageHistoryHelper.GetRealPathFor(session.User, checkedPath, root: root);
-                sourceName ??= video;
+                sourceName ??= media;
                 string extension = Path.GetExtension(inputFile).TrimStart('.').ToLowerFast();
-                if (MediaType.GetByExtension(extension)?.MetaType != MediaMetaType.Video)
+                sourceType = MediaType.GetByExtension(extension);
+                if (sourceType is null || (sourceType.MetaType != MediaMetaType.Video && sourceType.MetaType != MediaMetaType.Audio))
                 {
-                    throw new SwarmUserErrorException("The supplied media path is not a video.");
+                    throw new SwarmUserErrorException("The supplied media path is not video or audio.");
                 }
                 string fullInputPath = Path.GetFullPath(inputFile);
                 if (Session.StillSavingFiles.TryGetValue(fullInputPath, out Task<byte[]> pendingData))
                 {
-                    temporaryInput = Path.Combine(Path.GetTempPath(), $"swarm-audio-source-{Guid.NewGuid():N}.{extension}");
-                    await File.WriteAllBytesAsync(temporaryInput, await pendingData);
-                    inputFile = temporaryInput;
+                    await pendingData;
                 }
-                else if (!File.Exists(inputFile))
+                if (!File.Exists(inputFile))
                 {
-                    throw new SwarmUserErrorException("The video file does not exist.");
+                    throw new SwarmUserErrorException("The media file does not exist.");
                 }
             }
-            sourceName ??= "video";
-            byte[] audioData = await UserImageHistoryHelper.ExtractVideoAudio(inputFile);
-            string baseName = Utilities.StrictFilenameClean(Path.GetFileNameWithoutExtension(sourceName));
+            return (inputFile, temporaryInput, sourceName ?? "media", sourceType.MetaType);
+        }
+        catch
+        {
+            if (temporaryInput is not null && File.Exists(temporaryInput))
+            {
+                File.Delete(temporaryInput);
+            }
+            throw;
+        }
+    }
+
+    [API.APIDescription("Applies complex edits to media files (video, audio).",
+        """
+            "result": "inputs/edited_audio/audio-edited-1.mp3"
+        """)]
+    public static async Task<JObject> EditMedia(Session session,
+        [API.APIParameter("Video or audio data URL or reusable server media path.")] string media,
+        [API.APIParameter("Raw request data.\nOptionally include timelineSections as an ordered JSON array of section objects with: startMilliseconds (int), endMilliseconds (int), excluded (bool), and volume (float [0..1])")] JObject raw,
+        [API.APIParameter("Original media filename, used to name the edited media.")] string filename = null,
+        [API.APIParameter("Trim start in milliseconds.")] int startMilliseconds = 0,
+        [API.APIParameter("Trim end in milliseconds, or -1 for the end of the media.")] int endMilliseconds = -1,
+        [API.APIParameter("Video crop left coordinate in pixels.")] int cropX = 0,
+        [API.APIParameter("Video crop top coordinate in pixels.")] int cropY = 0,
+        [API.APIParameter("Video crop width in pixels, or zero to retain the full frame.")] int cropWidth = 0,
+        [API.APIParameter("Video crop height in pixels, or zero to retain the full frame.")] int cropHeight = 0,
+        [API.APIParameter("Video output scale factor. 1 leaves the cropped size unchanged.")] double scale = 1,
+        [API.APIParameter("If true, outputs only the audio track and ignores crop and scale options.")] bool audioOnly = false)
+    {
+        if (startMilliseconds < 0 || endMilliseconds < -1 || (endMilliseconds >= 0 && endMilliseconds <= startMilliseconds))
+        {
+            throw new SwarmUserErrorException("Invalid media trim range.");
+        }
+        string root = Utilities.CombinePathWithAbsolute(Environment.CurrentDirectory, session.User.OutputDirectory);
+        (string inputFile, string temporaryInput, string sourceName, MediaMetaType mediaType) = await ResolveMediaSource(session, media, filename, "media editing");
+        try
+        {
+            bool audioOutput = mediaType == MediaMetaType.Audio || audioOnly;
+            if (!audioOutput && (cropWidth < 0 || cropHeight < 0 || (cropWidth == 0) != (cropHeight == 0) || cropWidth % 2 != 0 || cropHeight % 2 != 0))
+            {
+                throw new SwarmUserErrorException("Invalid video crop bounds.");
+            }
+            if (!audioOutput && (scale < 0 || scale > 16))
+            {
+                throw new SwarmUserErrorException("Invalid video scale.");
+            }
+            List<MediaEditorSection> timelineSections = ParseMediaTimelineSections(raw, startMilliseconds, endMilliseconds);
+            byte[] mediaData = await UserImageHistoryHelper.EditMedia(inputFile, audioOutput, startMilliseconds / 1000.0, endMilliseconds / 1000.0, cropX, cropY, cropWidth, cropHeight, scale, timelineSections);
+            string typeName = audioOutput ? "audio" : "video";
+            string baseName = Utilities.StrictFilenameClean(sourceName);
             if (string.IsNullOrWhiteSpace(baseName))
             {
-                baseName = "video";
+                baseName = typeName;
             }
             T2IParamInput outputInput = new(session);
-            outputInput.Set(T2IParamTypes.OverrideOutpathFormat, $"inputs/extracted_audio/{baseName}-audio-[number]");
+            outputInput.Set(T2IParamTypes.OverrideOutpathFormat, $"inputs/edited_{typeName}/{baseName.Replace('/', '_')}-edited-[number]");
             string metadata = T2IParamInput.MetadataToString(new JObject()
             {
                 ["sui_image_params"] = new JObject(),
                 ["sui_extra_data"] = new JObject()
                 {
-                    ["source video"] = sourceName,
-                    ["operation applied"] = "Split Audio"
+                    [$"source {mediaType.Name.ToLowerFast()}"] = filename ?? "raw data",
+                    ["operation applied"] = $"{(audioOutput ? "Audio" : "Video")} Edit"
                 }
             });
-            AudioFile audioFile = new(audioData, MediaType.AudioMp3);
-            T2IEngine.ImageOutput outputAudio = new() { File = audioFile };
-            (string src, string localPath) = session.SaveImage(outputAudio, 0, outputInput, metadata);
+            MediaFile outputMedia;
+            if (audioOutput)
+            {
+                AudioFile audioFile = new(mediaData, MediaType.AudioMp3);
+                if (session.User.Settings.FileFormat.SaveMetadata)
+                {
+                    audioFile = audioFile.WithMetadata(metadata);
+                }
+                outputMedia = audioFile;
+            }
+            else
+            {
+                VideoFile videoFile = new(mediaData, MediaType.VideoMp4);
+                if (session.User.Settings.FileFormat.SaveMetadata)
+                {
+                    videoFile = videoFile.WithMetadata(metadata);
+                }
+                outputMedia = videoFile;
+            }
+            T2IEngine.ImageOutput output = new() { File = outputMedia };
+            (string src, string localPath) = session.SaveImage(output, 0, outputInput, metadata);
             if (src == "ERROR" || localPath is null)
             {
-                throw new SwarmUserErrorException("Failed to save the extracted audio. Ensure file saving is enabled.");
+                throw new SwarmUserErrorException($"Failed to save the edited {typeName}. Ensure file saving is enabled.");
             }
             string inputPath = Path.GetRelativePath(root, localPath).Replace('\\', '/');
-            Logs.Info($"User {session.User.UserID} extracted audio from '{sourceName}' to '{inputPath}'.");
-            JObject audio = new() { ["path"] = inputPath, ["src"] = src };
+            Logs.Info($"User {session.User.UserID} edited {typeName} '{sourceName}' to '{inputPath}'.");
             return new()
             {
-                ["audio"] = audio,
-                ["images"] = new JArray() { new JObject() { ["image"] = src, ["batch_index"] = "0", ["request_id"] = $"{outputInput.UserRequestId}", ["metadata"] = metadata } }
+                ["result"] = inputPath
             };
         }
         finally
@@ -629,6 +693,62 @@ public static class T2IAPI
                 File.Delete(temporaryInput);
             }
         }
+    }
+
+    /// <summary>Validates timeline section JSON and returns the sections intersected with the trim range.</summary>
+    private static List<MediaEditorSection> ParseMediaTimelineSections(JObject raw, int startMilliseconds, int endMilliseconds)
+    {
+        if (raw?["timelineSections"] is null)
+        {
+            return null;
+        }
+        if (raw["timelineSections"] is not JArray sections || sections.Count == 0 || sections.Count > 100_000)
+        {
+            return null;
+        }
+        List<MediaEditorSection> result = [];
+        int priorEnd = -1;
+        foreach (JToken token in sections)
+        {
+            if (token is not JObject section || section["startMilliseconds"]?.Type != JTokenType.Integer || section["endMilliseconds"]?.Type != JTokenType.Integer)
+            {
+                throw new SwarmUserErrorException("Each timeline section must have integer startMilliseconds and endMilliseconds values.");
+            }
+            int sectionStart = section["startMilliseconds"].Value<int>();
+            int sectionEnd = section["endMilliseconds"].Value<int>();
+            if (sectionStart < 0 || sectionEnd <= sectionStart || sectionStart < priorEnd)
+            {
+                throw new SwarmUserErrorException("Timeline sections must have valid, ordered, non-overlapping ranges.");
+            }
+            priorEnd = sectionEnd;
+            JToken excludedToken = section["excluded"];
+            if (excludedToken is not null && excludedToken.Type != JTokenType.Boolean)
+            {
+                throw new SwarmUserErrorException("Timeline section excluded values must be boolean.");
+            }
+            JToken volumeToken = section["volume"];
+            if (volumeToken is not null && volumeToken.Type != JTokenType.Integer && volumeToken.Type != JTokenType.Float)
+            {
+                throw new SwarmUserErrorException("Timeline section volume values must be numbers.");
+            }
+            float volume = volumeToken?.Value<float>() ?? 1;
+            if (!float.IsFinite(volume) || volume < 0 || volume > 1)
+            {
+                throw new SwarmUserErrorException("Timeline section volume values must be between 0 and 1.");
+            }
+            int clippedStart = Math.Max(sectionStart, startMilliseconds);
+            int clippedEnd = endMilliseconds < 0 ? sectionEnd : Math.Min(sectionEnd, endMilliseconds);
+            if (clippedEnd <= clippedStart)
+            {
+                continue;
+            }
+            result.Add(new MediaEditorSection(clippedStart / 1000.0, clippedEnd / 1000.0, excludedToken?.Value<bool>() ?? false, volume));
+        }
+        if (!result.Any(section => !section.Excluded))
+        {
+            throw new SwarmUserErrorException("The media edit must include at least one timeline section.");
+        }
+        return result;
     }
 
     public static HashSet<string> HistoryExtensions = // TODO: Use MediaType?
@@ -642,13 +762,14 @@ public static class T2IAPI
 
     public enum ImageHistorySortMode { Name, Date }
 
-    private static JObject GetListAPIInternal(Session session, string rawPath, string root, HashSet<string> extensions, Func<string, bool> isAllowed, int depth, ImageHistorySortMode sortBy, bool sortReverse)
+    private static JObject GetListAPIInternal(Session session, string rawPath, string root, HashSet<string> extensions, Func<string, bool> isAllowed, int depth, ImageHistorySortMode sortBy, bool sortReverse, string filter = null)
     {
         int maxInHistory = session.User.Settings.MaxImagesInHistory;
         int maxScanned = session.User.Settings.MaxImagesScannedInHistory;
-        Logs.Verbose($"User {session.User.UserID} wants to list images in '{rawPath}', maxDepth={depth}, sortBy={sortBy}, reverse={sortReverse}, maxInHistory={maxInHistory}, maxScanned={maxScanned}");
+        bool hasFilter = !string.IsNullOrWhiteSpace(filter);
+        Logs.Verbose($"User {session.User.UserID} wants to list images in '{rawPath}', maxDepth={depth}, sortBy={sortBy}, reverse={sortReverse}, maxInHistory={maxInHistory}, maxScanned={maxScanned}, filter={(hasFilter ? filter : "none")}");
         long timeStart = Environment.TickCount64;
-        int limit = sortBy == ImageHistorySortMode.Name ? maxInHistory : Math.Max(maxInHistory, maxScanned);
+        int limit = sortBy == ImageHistorySortMode.Name && !hasFilter ? maxInHistory : Math.Max(maxInHistory, maxScanned);
         (string path, string consoleError, string userError) = WebServer.CheckFilePath(root, rawPath);
         path = UserImageHistoryHelper.GetRealPathFor(session.User, path, root: root);
         if (consoleError is not null)
@@ -711,7 +832,7 @@ public static class T2IAPI
             {
                 if (specialFolder.StartsWith(rawRefPath))
                 {
-                    addDirs(specialFolder[rawRefPath.Length..], 1);
+                    addDirs(specialFolder[rawRefPath.Length..], depth);
                 }
             }
             while (tasks.Any(t => !t.Value.IsCompleted))
@@ -761,6 +882,10 @@ public static class T2IAPI
                 IEnumerable<string> newFileNames = subFiles.Select(f => f.Replace('\\', '/')).Where(isAllowed).Where(f => !f.AfterLast('/').StartsWithFast('.') && extensions.Contains(f.AfterLast('.')) && !f.EndsWith(".swarmpreview.jpg") && !f.EndsWith(".swarmpreview.webp"));
                 List<ImageHistoryHelper> localFiles = [.. newFileNames.Select(f => new ImageHistoryHelper(prefix + f.AfterLast('/'), OutputMetadataTracker.GetMetadataFor(f, root, starNoFolders))).Where(f => f.Metadata is not null)];
                 int leftOver = Interlocked.Add(ref remaining, -localFiles.Count);
+                if (hasFilter)
+                {
+                    localFiles = [.. localFiles.Where(f => ImageHistoryMatchesFilter(f, filter))];
+                }
                 sortList(localFiles);
                 filesConc.TryAdd(localId, localFiles);
                 if (leftOver <= 0)
@@ -807,6 +932,63 @@ public static class T2IAPI
 
     public record struct ImageHistoryHelper(string Name, OutputMetadataTracker.OutputMetadataEntry Metadata);
 
+    public static string[] MetadataFilterTargetSections = ["sui_image_params", "sui_extra_data"];
+
+    /// <summary>True if the image name or metadata contains the filter text (case-insensitive).</summary>
+    private static bool ImageHistoryMatchesFilter(ImageHistoryHelper file, string filter)
+    {
+        if (file.Name.Contains(filter, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        string meta = file.Metadata?.Metadata;
+        if (string.IsNullOrEmpty(meta))
+        {
+            return false;
+        }
+        if (meta.Contains(filter, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        if (!meta.StartsWithFast('{'))
+        {
+            return false;
+        }
+        try
+        {
+            JObject parsed = meta.ParseToJson();
+            foreach (string section in MetadataFilterTargetSections)
+            {
+                if (parsed[section] is not JObject values)
+                {
+                    continue;
+                }
+                foreach (JProperty prop in values.Properties())
+                {
+                    if (prop.Value is JArray list)
+                    {
+                        foreach (JToken entry in list)
+                        {
+                            if ($"{prop.Name}: {entry}".Contains(filter, StringComparison.OrdinalIgnoreCase))
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                    else if ($"{prop.Name}: {prop.Value}".Contains(filter, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+        return false;
+    }
+
     [API.APIDescription("Gets a list of images in a saved image history folder.",
         """
             "folders": ["Folder1", "Folder2"],
@@ -822,14 +1004,15 @@ public static class T2IAPI
         [API.APIParameter("The folder path to start the listing in. Use an empty string for root.")] string path,
         [API.APIParameter("Maximum depth (number of recursive folders) to search.")] int depth,
         [API.APIParameter("What to sort the list by - `Name` or `Date`.")] string sortBy = "Name",
-        [API.APIParameter("If true, the sorting should be done in reverse.")] bool sortReverse = false)
+        [API.APIParameter("If true, the sorting should be done in reverse.")] bool sortReverse = false,
+        [API.APIParameter("Optional case-insensitive text filter. When set, scans up to MaxImagesScannedInHistory and returns matching files.")] string filter = null)
     {
         if (!Enum.TryParse(sortBy, true, out ImageHistorySortMode sortMode))
         {
             return new JObject() { ["error"] = $"Invalid sort mode '{sortBy}'." };
         }
         string root = Utilities.CombinePathWithAbsolute(Environment.CurrentDirectory, session.User.OutputDirectory);
-        return GetListAPIInternal(session, path, root, HistoryExtensions, f => true, depth, sortMode, sortReverse);
+        return GetListAPIInternal(session, path, root, HistoryExtensions, f => true, depth, sortMode, sortReverse, filter);
     }
 
     [API.APIDescription("Open an image folder in the file explorer. Used for local users directly.", "\"success\": true")]

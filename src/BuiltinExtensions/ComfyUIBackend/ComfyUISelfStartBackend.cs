@@ -71,7 +71,7 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
     public static bool IsComfyModelFileEmitted = false;
 
     /// <summary>Names of folders in comfy paths that should be blindly forwarded to correct for Comfy not properly propagating base_path without manual forwards. Can also have ';' separated list of additional paths to forward to the same folder name.</summary>
-    public static List<string> FoldersToForwardInComfyPath = ["unet", "diffusion_models", "gligen", "ipadapter", "yolov8", "tensorrt", "clipseg", "style_models", "latent_upscale_models"];
+    public static List<string> FoldersToForwardInComfyPath = ["unet", "diffusion_models", "gligen", "ipadapter", "yolov8", "tensorrt", "clipseg", "style_models", "latent_upscale_models", "audio_encoders"];
 
     /// <summary>List of functions that modify the comfy paths YAML data. The simplest no-op impl is: <c>string MyFunc(string yaml) { return yaml; }</c></summary>
     public static List<Func<string, string>> ModifyComfyYaml = [];
@@ -86,7 +86,7 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
     };
 
     /// <summary>The current version of the comfy frontend package that has been confirmed to not break.</summary>
-    public static string SwarmValidatedFrontendVersion = "1.47.12";
+    public static string SwarmValidatedFrontendVersion = "1.53.6";
 
     /// <summary>The current known version of PyTorch.</summary>
     public static string CurrentTorchVersion = "2.13.0";
@@ -98,7 +98,6 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
         ("kornia", "kornia"),
         ("sentencepiece", "sentencepiece"),
         ("spandrel", "spandrel"),
-        ("av", "av"),
         ("pydantic", "pydantic"),
         ("pydantic_settings", "pydantic-settings"),
         ("comfyui_frontend_package", $"comfyui_frontend_package=={SwarmValidatedFrontendVersion}"),
@@ -128,6 +127,7 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
         ("spandrel", "spandrel", ">=", "0.4.1"),
         ("transformers", "transformers", ">=", "4.57.3"),
         ("pyopengl", "pyopengl", ">=", "3.1.8"),
+        ("av", "av", ">=", "18.1.0"), // Comfy eventually began depending on 16.x after general installs had 14.x
         ("ultralytics", "ultralytics", "==", "8.3.197"), // This is hard-pinned due to the malicious 8.3.41 incident, only manual updates when needed until security practices are improved.
         ("pip", "pip", ">=", "25.0") // Don't need latest, just can't be too old, this is mostly just here for a sanity check.
     ];
@@ -223,6 +223,8 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
                                 AddLoadStatus($"Node pull response for {pathSimple}: {response.Trim()}");
                                 string response2 = await Utilities.RunGitProcess($"reset --hard {hash}", toUse);
                                 AddLoadStatus($"Node reset to {hash} response for {pathSimple}: {response2.Trim()}");
+                                string response3 = await Utilities.RunGitProcess($"clean -fd", toUse);
+                                AddLoadStatus($"Node clean response for {pathSimple}: {response3.Trim()}");
                             }
                         }
                         else
@@ -446,6 +448,8 @@ public class ComfyUISelfStartBackend : ComfyUIAPIAbstractBackend
                         {
                             string fixStatus = await Utilities.RunGitProcess("reset --hard HEAD", path);
                             AddLoadStatus($"Comfy git fix (fast-forward curse) response: {fixStatus.Trim()}");
+                            string cleanStatus = await Utilities.RunGitProcess("clean -fd", path);
+                            AddLoadStatus($"Comfy git clean response: {cleanStatus.Trim()}");
                             string repullResponse = await Utilities.RunGitProcess("pull --autostash", path);
                             AddLoadStatus($"Comfy git re-pull response: {repullResponse.Trim()}");
                         }

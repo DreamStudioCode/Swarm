@@ -228,6 +228,8 @@ class ImageFullViewHelper {
             }
             img.style.objectFit = '';
             img.style.maxWidth = '';
+            img.style.marginLeft = '0';
+            img.style.marginRight = '0';
             wrap.style.textAlign = 'left';
         }
     }
@@ -336,6 +338,7 @@ class ImageFullViewHelper {
             let wrapAspectRatio = imagewrap.offsetWidth / imagewrap.offsetHeight;
             let defaultHeight = Math.min(100, (wrapAspectRatio / videoAspectRatio) * 100);
             container.style.height = `${defaultHeight}%`;
+            container.style.left = `${(imagewrap.offsetWidth - container.offsetWidth) / 2}px`;
             container.style.top = `${(imagewrap.offsetHeight - imagewrap.offsetHeight * defaultHeight / 100) / 2}px`;
         }
     }
@@ -399,12 +402,7 @@ class ImageFullViewHelper {
             new AudioControls(this.getImg());
         }
         if (mediaType == 'video' || mediaType == 'audio') {
-            let curImgElem = currentImageHelper.getCurrentImage();
-            if (curImgElem) {
-                if (curImgElem.tagName == 'VIDEO' || curImgElem.tagName == 'AUDIO') {
-                    curImgElem.pause();
-                }
-            }
+            currentImageHelper.doAutoPause();
         }
         if (this.fixButtonDelay) {
             clearTimeout(this.fixButtonDelay);
@@ -490,6 +488,15 @@ class CurrentImageHelper {
         }
         return img;
     }
+
+    doAutoPause() {
+        let curImgElem = this.getCurrentImage();
+        if (curImgElem) {
+            if (curImgElem.tagName == 'VIDEO' || curImgElem.tagName == 'AUDIO') {
+                curImgElem.pause();
+            }
+        }
+    }
 }
 
 currentImageHelper = new CurrentImageHelper();
@@ -541,6 +548,23 @@ function toggleSeparateBatches() {
     localStorage.setItem('separateBatches', `${separateBatchesElem.checked}`);
 }
 
+/** Reference to the play-batch-videos toggle checkbox. */
+let playBatchVideosElem = getRequiredElementById('play_batch_videos_checkbox');
+playBatchVideosElem.checked = localStorage.getItem('playBatchVideos') != 'false';
+/** Called when the user changes play-batch-videos toggle to update local storage. */
+function togglePlayBatchVideos() {
+    localStorage.setItem('playBatchVideos', `${playBatchVideosElem.checked}`);
+    for (let vid of getRequiredElementById('current_image_batch').getElementsByTagName('video')) {
+        vid.autoplay = playBatchVideosElem.checked;
+        if (playBatchVideosElem.checked) {
+            vid.play().catch(() => {});
+        }
+        else {
+            vid.pause();
+        }
+    }
+}
+
 function clickImageInBatch(div) {
     let imgElem = div.getElementsByTagName('img')[0];
     if (currentImgSrc == div.dataset.src) {
@@ -570,8 +594,12 @@ function rightClickImageInBatch(e, div) {
     let src = div.dataset.src;
     let fullsrc = getImageFullSrc(src);
     let metadata = div.dataset.metadata;
+    let mediaType = getMediaType(src);
     let popoverActions = [];
     for (let added of buttonsForImage(fullsrc, src, metadata)) {
+        if (added.multi_only || (added.media_types && !added.media_types.includes(mediaType))) {
+            continue;
+        }
         if (added.href) {
             popoverActions.push({ key: added.label, href: added.href, is_download: added.is_download, title: added.title });
         }
@@ -949,6 +977,12 @@ function setCurrentImage(src, metadata = '', batchId = '', previewGrow = false, 
         return;
     }
     let mediaType = getMediaType(src);
+    if (!metadata && canReparse && (mediaType == 'audio' || mediaType == 'video')) {
+        parseMediaMetadata(src, (data, parsedMetadata) => {
+            setCurrentImage(src, parsedMetadata, batchId, previewGrow, false, false);
+        });
+        return;
+    }
     if ((smoothAdd || !metadata) && canReparse && mediaType == 'image') {
         let image = new Image();
         image.onload = () => {
@@ -1379,7 +1413,7 @@ function appendImage(container, imageSrc, batchId, textPreview, metadata = '', t
     if (isVideo) {
         img = document.createElement('video');
         img.loop = true;
-        img.autoplay = true;
+        img.autoplay = !container.closest('#current_image_batch') || playBatchVideosElem.checked;
         img.muted = true;
         img.width = 16 * 10;
         let sourceObj = document.createElement('source');
@@ -1488,6 +1522,11 @@ function imageInputHandler() {
                         setCurrentImage(e.target.result, null);
                     }
                 }
+                reader.readAsDataURL(file);
+            }
+            else if (file.type.startsWith('video/') || file.type.startsWith('audio/')) {
+                let reader = new FileReader();
+                reader.onload = (e) => setCurrentImage(e.target.result);
                 reader.readAsDataURL(file);
             }
             else if (file.name.endsWith('.json') || file.type == 'application/json') {

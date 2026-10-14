@@ -47,13 +47,13 @@ class AspectRatio {
     }
 
     read(inWidth, inHeight, doAltLogic = true) {
-        if (this.altLogic && doAltLogic) {
+        let precision = getResolutionPrecision();
+        if (this.altLogic && doAltLogic && precision == 16) {
             let [newWidth, newHeight] = this.altLogic(inWidth, inHeight);
             if (newWidth && newHeight) {
                 return [newWidth, newHeight];
             }
         }
-        let precision = getResolutionPrecision();
         if (inWidth != inHeight) {
             inWidth = roundTo(Math.sqrt(inWidth * inHeight), precision);
             inHeight = inWidth;
@@ -362,6 +362,25 @@ function getParamMemoryDays() {
     return parseFloat(getUserSetting('parametermemorydurationhours', '6')) / 24;
 }
 
+let readyToPersistPromptArea = false;
+function persistPromptMediaParams() {
+    if (!readyToPersistPromptArea) {
+        return;
+    }
+    let area = document.getElementById('alt_prompt_image_area');
+    let mediaTypes = { IMG: 'promptimages', AUDIO: 'promptaudios', VIDEO: 'promptvideos' };
+    for (let tag of Object.keys(mediaTypes)) {
+        let paramId = mediaTypes[tag];
+        let paths = [...area.querySelectorAll('.alt-prompt-image')].filter(c => c.tagName == tag).map(item => item.dataset.filedata).filter(isValidMediaPath);
+        if (!paths.length) {
+            deleteCookie(`lastparam_input_${paramId}`);
+        }
+        else {
+            setCookie(`lastparam_input_${paramId}`, paths.join('|'), getParamMemoryDays());
+        }
+    }
+}
+
 /** Re-persist stored parameter values - to avoid some disappearing and others staying */
 function autoRepersistParams() {
     let hrs = getUserSetting('parametermemorydurationhours', 'none');
@@ -398,6 +417,8 @@ function autoRepersistParams() {
 }
 
 function genInputs(delay_final = false) {
+    readyToPersistPromptArea = false;
+    clearPromptImages();
     let runnables = [];
     let groupsClose = [];
     let groupsEnable = [];
@@ -804,9 +825,7 @@ function genInputs(delay_final = false) {
             let cookie = getCookie(`lastparam_input_${param.id}`);
             if (cookie) {
                 shouldApplyDefault = false;
-                if (param.type != "image") {
-                    setDirectParamValue(param, cookie);
-                }
+                setDirectParamValue(param, cookie);
             }
             let container = findParentOfClass(elem, 'auto-input');
             let nameBlock = container.querySelector('.auto-input-name');
@@ -846,20 +865,28 @@ function genInputs(delay_final = false) {
                         let valSet = [...elem.selectedOptions].map(option => option.value);
                         val = valSet.join(',');
                     }
-                    else if (param.type != "image") {
+                    else if (param.id == 'promptimages' || param.id == 'promptaudios' || param.id == 'promptvideos') {
+                        val = null;
+                    }
+                    else if (param.type == "image" || param.type == "audio" || param.type == "video") {
+                        val = getInputVal(elem);
+                        if (!isValidMediaPath(val)) {
+                            val = null;
+                        }
+                    }
+                    // TODO: else if (param.type == "image_list" || param.type == "audio_list" || param.type == "video_list")
+                    else {
                         val = elem.value;
                     }
                     return val;
                 }
                 elem.addEventListener('change', () => {
                     let val = getParamValue(param, elem);
-                    if (val !== null) {
-                        if (val == param.default) {
-                            deleteCookie(`lastparam_input_${param.id}`);
-                        }
-                        else {
-                            setCookie(`lastparam_input_${param.id}`, val, getParamMemoryDays());
-                        }
+                    if (val === null || val == param.default) {
+                        deleteCookie(`lastparam_input_${param.id}`);
+                    }
+                    else {
+                        setCookie(`lastparam_input_${param.id}`, val, getParamMemoryDays());
                     }
                 });
                 if (param.toggleable) {
@@ -941,6 +968,7 @@ function genInputs(delay_final = false) {
         if (currentPresets.length > 0) {
             updatePresetList();
         }
+        readyToPersistPromptArea = true;
     };
     if (delay_final) {
         setTimeout(() => {
@@ -1199,7 +1227,7 @@ function setDirectParamValue(param, value, paramElem = null, forceDropdowns = fa
     else if (param.type == "image_list" || param.type == "audio_list" || param.type == "video_list") {
         // List too messy for impl for now - prompt inputs we can do though
         if (param.id == 'promptimages' || param.id == 'promptaudios' || param.id == 'promptvideos') {
-            let paths = typeof value == 'string' ? [value] : value;
+            let paths = typeof value == 'string' ? value.split('|') : value;
             for (let path of paths || []) {
                 if (isValidMediaPath(path)) {
                     imagePromptAddImageData(`${getImageOutPrefix()}/${path}`, param.type.substring(0, param.type.indexOf('_')), path);

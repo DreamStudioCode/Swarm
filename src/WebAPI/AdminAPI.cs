@@ -178,7 +178,7 @@ public static class AdminAPI
             {
                 continue;
             }
-            if (key.ToLowerFast() == "authorization.authorizationrequired" && $"{obj}".ToLowerFast() == "true" && session.User.Data.PasswordHashed == "")
+            if (key.ToLowerFast() == "userauthorization.authorizationrequired" && $"{obj}".ToLowerFast() == "true" && session.User.Data.PasswordHashed == "")
             {
                 return new JObject() { ["error"] = "Tried to enable authorization mode, but your account does not have a password. Configure your account login information before enabling authorization, so you don't get locked out." };
             }
@@ -582,12 +582,11 @@ public static class AdminAPI
         return new JObject() { ["users"] = list };
     }
 
-    public static async Task<JObject> GetUpdatesDataFor(string folder, bool nullOnNone, bool tryPatches = true, string headTarget = null)
+    public static async Task<JObject> GetUpdatesDataFor(string folder, bool nullOnNone, bool tryPatches = true, string latestTarget = null)
     {
-        headTarget ??= "HEAD";
         string fetchResult = await Utilities.RunGitProcess("fetch", folder);
         Logs.Debug($"Git fetch of {folder} says: {fetchResult}");
-        string commitRaw = (await Utilities.RunGitProcess($"rev-list {headTarget}..origin", folder)).Trim().Replace("\r", "");
+        string commitRaw = (await Utilities.RunGitProcess($"rev-list HEAD..{(latestTarget ?? "origin")}", folder)).Trim().Replace("\r", "");
         string[] commits;
         if (commitRaw.StartsWith("fatal: "))
         {
@@ -596,7 +595,7 @@ public static class AdminAPI
             {
                 string autofixme = await Utilities.RunGitProcess("remote set-head origin --auto", folder);
                 Logs.Debug($"Autofix for git rev-list failure: {autofixme}");
-                return await GetUpdatesDataFor(folder, nullOnNone, false, headTarget);
+                return await GetUpdatesDataFor(folder, nullOnNone, false, latestTarget);
             }
             commits = ["(unknown revisions, see error in logs. Use Aggressive Update to auto-resolve most issues.)"];
             return new JObject() { ["count"] = 1, ["preview"] = JArray.FromObject(commits) };
@@ -733,6 +732,8 @@ public static class AdminAPI
             Logs.Debug($"Aggressive add: {addAny}");
             string reset = await Utilities.RunGitProcess("reset --hard HEAD", folder);
             Logs.Debug($"Aggressive reset: {reset}");
+            string clean = await Utilities.RunGitProcess("clean -fd", folder);
+            Logs.Debug($"Aggressive clean: {clean}");
             string repull = await Utilities.RunGitProcess("pull --autostash", folder); // Should already be good, but make sure
             Logs.Debug($"Aggressive repull: {repull}");
         }
@@ -759,6 +760,8 @@ public static class AdminAPI
         {
             string resetBack = await Utilities.RunGitProcess($"reset --hard {targetCommit}", folder);
             Logs.Debug($"Reset back to target commit {targetCommit}: {resetBack}");
+            string cleanBack = await Utilities.RunGitProcess("clean -fd", folder);
+            Logs.Debug($"Clean after reset to target commit: {cleanBack}");
         }
         string localHash = (await Utilities.RunGitProcess("rev-parse HEAD", folder)).Trim();
         Logs.Debug($"Updater: prior hash was {priorHash}, new hash is {localHash}");
@@ -1205,6 +1208,7 @@ public static class AdminAPI
                     "model_blacklist": [],
                     "permissions": ["first", "second"],
                     "max_t2i_simultaneous": 32,
+                    "max_queued": 100000,
                     "allow_unsafe_outpaths": false
                 }
             ]
@@ -1225,6 +1229,7 @@ public static class AdminAPI
                 ["model_blacklist"] = JArray.FromObject(role.Data.ModelBlacklist.ToList()),
                 ["permissions"] = JArray.FromObject(role.Data.PermissionFlags.ToList()),
                 ["max_t2i_simultaneous"] = role.Data.MaxT2ISimultaneous,
+                ["max_queued"] = role.Data.MaxQueued,
                 ["allow_unsafe_outpaths"] = role.Data.AllowUnsafeOutpaths
             };
         }
@@ -1267,6 +1272,7 @@ public static class AdminAPI
         [API.APIParameter("The description text for the role.")] string description,
         [API.APIParameter("The maximum outpath depth allowed for the role.")] int max_outpath_depth,
         [API.APIParameter("The maximum number of simultaneous T2I allowed for the role.")] int max_t2i_simultaneous,
+        [API.APIParameter("The maximum number of queued generations allowed for the role.")] int max_queued,
         [API.APIParameter("Whether to allow unsafe outpaths for the role.")] bool allow_unsafe_outpaths,
         [API.APIParameter("Comma-separated list of model names to whitelist for the role.")] string model_whitelist,
         [API.APIParameter("Comma-separated list of model names to blacklist for the role.")] string model_blacklist,
@@ -1281,6 +1287,7 @@ public static class AdminAPI
             role.Data.Description = description;
             role.Data.MaxOutPathDepth = max_outpath_depth;
             role.Data.MaxT2ISimultaneous = max_t2i_simultaneous;
+            role.Data.MaxQueued = max_queued;
             role.Data.AllowUnsafeOutpaths = allow_unsafe_outpaths;
             role.Data.ModelWhitelist = [.. model_whitelist.Split(',').Select(s => s.Trim()).Where(s => !string.IsNullOrWhiteSpace(s))];
             role.Data.ModelBlacklist = [.. model_blacklist.Split(',').Select(s => s.Trim()).Where(s => !string.IsNullOrWhiteSpace(s))];

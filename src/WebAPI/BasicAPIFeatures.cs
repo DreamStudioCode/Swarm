@@ -134,6 +134,10 @@ public static class BasicAPIFeatures
         [API.APIParameter("New registered account username.")] string username,
         [API.APIParameter("New registered account password.")] string password)
     {
+        if (!Program.ServerSettings.UserAuthorization.Registration.AllowRegistration || !Program.ServerSettings.UserAuthorization.Registration.SimplePasswordRegistration)
+        {
+            return new JObject() { ["error_id"] = "bad_api" };
+        }
         username = SessionHandler.UsernameValidator.TrimToMatches(username).ToLowerFast();
         string ip = WebUtil.GetIPString(context);
         if (username.Length < 3 || username.Length > 100 || password.Length < 8 || password.Length > 500)
@@ -189,6 +193,10 @@ public static class BasicAPIFeatures
         [API.APIParameter("Tracker key to identify the source OAuth request.")] string oauth_tracker_key,
         [API.APIParameter("OAuth provider type.")] string oauth_type)
     {
+        if (!Program.ServerSettings.UserAuthorization.Registration.AllowRegistration || !Program.ServerSettings.UserAuthorization.Registration.OAuthRegistration)
+        {
+            return new JObject() { ["error_id"] = "bad_api" };
+        }
         username = SessionHandler.UsernameValidator.TrimToMatches(username).ToLowerFast();
         string ip = WebUtil.GetIPString(context);
         if (username.Length < 3 || username.Length > 100)
@@ -329,12 +337,12 @@ public static class BasicAPIFeatures
     {
         if (Program.ServerSettings.IsInstalled)
         {
-            await socket.SendJson(new JObject() { ["error"] = $"Server is already installed!" }, API.WebsocketTimeout);
+            await socket.SendAndReportError($"InstallConfirmWS triggered by {session.User.UserID}", "Server is already installed!", API.WebsocketTimeout);
             return null;
         }
         try
         {
-            await Installation.Install(socket, theme, installed_for, backend, models, install_amd, language, make_shortcut);
+            await Installation.Install(socket, theme, installed_for, backend, models, install_amd, language, make_shortcut, session);
         }
         catch (SwarmReadableErrorException ex)
         {
@@ -386,7 +394,8 @@ public static class BasicAPIFeatures
             ["permissions"] = JArray.FromObject(session.User.GetPermissions()),
             ["starred_models"] = JObject.Parse(session.User.GetGenericData("starred_models", "full") ?? "{}"),
             ["model_preset_links"] = JObject.Parse(session.User.GetGenericData("modelpresetlinks", "full") ?? "{}"),
-            ["autocompletions"] = string.IsNullOrWhiteSpace(settings.Source) ? null : new JArray(AutoCompleteListHelper.GetData(settings.Source, settings.EscapeParens, settings.Suffix, settings.SpacingMode))
+            // TODO: Paren escaping is model-specific now, so maybe the escape should be handled elsewhere?
+            ["autocompletions"] = string.IsNullOrWhiteSpace(settings.Source) ? null : new JArray(AutoCompleteListHelper.GetData(settings.Source, settings.EscapeParens && session.User.Settings.ParamParsing.ParseAlternativePromptSyntaxes, settings.Suffix, settings.SpacingMode))
         };
     }
 

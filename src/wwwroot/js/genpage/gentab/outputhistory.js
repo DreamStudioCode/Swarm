@@ -1,12 +1,14 @@
 
 let registeredMediaButtons = [];
+let imageHistoryServerFilterTimer = null;
+let imageHistoryServerFilterRequestId = 0;
 
 /** Registers a media button for extensions. 'mediaTypes' filters by type eg ['audio'], null means all. 'isDefault' promotes to visible (vs More dropdown). 'showInHistory' controls whether button appears in the History panel. */
 function registerMediaButton(name, action, title = '', mediaTypes = null, isDefault = false, showInHistory = true, href = null, is_download = false, can_multi = false, multi_only = false, max_selected = null) {
     registeredMediaButtons.push({ name, action, title, mediaTypes, isDefault, showInHistory, href, is_download, can_multi, multi_only, max_selected });
 }
 
-function listOutputHistoryFolderAndFiles(path, isRefresh, callback, depth) {
+function listOutputHistoryFolderAndFiles(path, isRefresh, callback, depth, filter = null) {
     let sortBy = localStorage.getItem('image_history_sort_by') ?? 'Name';
     let reverse = localStorage.getItem('image_history_sort_reverse') == 'true';
     let allowAnims = localStorage.getItem('image_history_allow_anims') != 'false';
@@ -41,7 +43,7 @@ function listOutputHistoryFolderAndFiles(path, isRefresh, callback, depth) {
         }
     }
     let prefix = path == '' ? '' : (path.endsWith('/') ? path : `${path}/`);
-    genericRequest('ListImages', {'path': path, 'depth': depth, 'sortBy': sortBy, 'sortReverse': reverse}, data => {
+    genericRequest('ListImages', {'path': path, 'depth': depth, 'sortBy': sortBy, 'sortReverse': reverse, 'filter': filter}, data => {
         let folders = data.folders.sort((a, b) => b.toLowerCase().localeCompare(a.toLowerCase()));
         function isPreSortFile(f) {
             return f.src == 'index.html'; // Grid index files
@@ -57,7 +59,11 @@ function listOutputHistoryFolderAndFiles(path, isRefresh, callback, depth) {
         if (fix) {
             fix();
         }
-    });
+        if (!filter) {
+            imageHistoryServerFilterRequestId++;
+            scheduleImageHistoryServerFilter();
+        }
+    }, 0, (e) => { console.error(e); });
 }
 
 function buttonsForImage(fullsrc, src, metadata, isCurrentImage = false) {
@@ -123,6 +129,24 @@ function buttonsForImage(fullsrc, src, metadata, isCurrentImage = false) {
             onclick: (e) => {
                 copyText(fullsrc);
                 doNoticePopover('Copied!', 'notice-pop-green');
+            }
+        });
+    }
+    if (mediaType == 'video') {
+        buttons.push({
+            label: 'Edit Video',
+            title: 'Opens a Timeline Media Editor to edit this video',
+            onclick: (e) => {
+                mediaEditorInterface.open(src, metadata, fullsrc);
+            }
+        });
+    }
+    if (mediaType == 'audio') {
+        buttons.push({
+            label: 'Edit Audio',
+            title: 'Opens a Timeline Media Editor to edit this audio',
+            onclick: (e) => {
+                mediaEditorInterface.open(src, metadata, fullsrc);
             }
         });
     }
@@ -247,12 +271,14 @@ function describeOutputFile(image) {
         forceImage = 'imgs/html.jpg';
         forcePreview = forceImage;
     }
-    else if (['wav', 'mp3', 'aac', 'ogg', 'flac'].includes(extension)) {
-        forcePreview = 'imgs/audio_placeholder.jpg';
-    }
     let dragImage = forceImage ?? `${image.data.src}`;
     let imageSrc = forcePreview ?? `${image.data.src}?preview=true${allowAnimToggle}`;
     let searchable = `${image.data.name}, ${image.data.metadata}, ${image.data.fullsrc}`;
+    for (let section of ['sui_image_params', 'sui_extra_data']) {
+        if (parsedMeta[section]) {
+            searchable += `\n${Object.entries(parsedMeta[section]).map(([key, value]) => Array.isArray(value) ? `${key}: ${value.map(v => `${key}: ${v}`).join('\n')}` : `${key}: ${value}`).join('\n')}`;
+        }
+    }
     let detail_list = [escapeHtml(image.data.name), formattedMetadata.replaceAll('<br>', '&emsp;')];
     let aspectRatio = parsedMeta.sui_image_params?.width && parsedMeta.sui_image_params?.height ? parsedMeta.sui_image_params.width / parsedMeta.sui_image_params.height : null;
     return { name, description, buttons, 'image': imageSrc, 'dragimage': dragImage, className: parsedMeta.is_starred ? 'image-block-starred' : '', searchable, display: name, detail_list, aspectRatio };
@@ -279,9 +305,47 @@ function selectOutputInHistory(image, div) {
     }
 }
 
+/** Debounced server-side Image History filter search. */
+function scheduleImageHistoryServerFilter() {
+    if (imageHistoryServerFilterTimer) {
+        clearTimeout(imageHistoryServerFilterTimer);
+        imageHistoryServerFilterTimer = null;
+    }
+    if (!getUserSetting('ImageHistoryServerFilter', true)) {
+        return;
+    }
+    if (!imageHistoryBrowser.filter) {
+        return;
+    }
+    imageHistoryServerFilterTimer = setTimeout(() => {
+        imageHistoryServerFilterTimer = null;
+        runImageHistoryServerFilter();
+    }, 500);
+}
+
+/** Requests a longer server-side Image History scan for the current filter. */
+function runImageHistoryServerFilter() {
+    let folder = imageHistoryBrowser.folder;
+    let filter = imageHistoryBrowser.filter;
+    if (!filter) {
+        return;
+    }
+    let reqId = ++imageHistoryServerFilterRequestId;
+    listOutputHistoryFolderAndFiles(folder, false, (folders, files) => {
+        if (reqId != imageHistoryServerFilterRequestId) {
+            return;
+        }
+        if (imageHistoryBrowser.folder != folder || imageHistoryBrowser.filter != filter) {
+            return;
+        }
+        imageHistoryBrowser.build(folder, null, files);
+    }, imageHistoryBrowser.depth, filter);
+}
+
 let imageHistoryBrowser = new GenPageBrowserClass('image_history', listOutputHistoryFolderAndFiles, 'imagehistorybrowser', 'Thumbnails', describeOutputFile, selectOutputInHistory,
     `<label for="image_history_sort_by">Sort:</label> <select id="image_history_sort_by"><option>Name</option><option>Date</option></select> <input type="checkbox" id="image_history_sort_reverse"> <label for="image_history_sort_reverse">Reverse</label> &emsp; <input type="checkbox" id="image_history_allow_anims" checked autocomplete="off"> <label for="image_history_allow_anims">Allow Animation</label>`);
 imageHistoryBrowser.allowMultiSelect = true;
+imageHistoryBrowser.filterEvent = scheduleImageHistoryServerFilter;
 
 function storeImageToHistoryWithCurrentParams(img) {
     let data = getGenInput();

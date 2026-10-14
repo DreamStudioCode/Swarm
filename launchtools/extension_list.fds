@@ -3,7 +3,7 @@
 # Author should be your name.
 # Description should be a short description of what the extension does.
 # URL should be a link to the GitHub repo. Do not use a sublink, do not end with '/'. This URL is used to git clone the repo.
-# If CI-Test is true, the extension will be downloaded and compile-checked for new Swarm commits.
+# If CI-Test is true, the extension will be downloaded and compile-checked for new Swarm commits. A pull request should never add CI-Test, that is a maintainer decision only.
 
 # License is the shortname of the license, (eg MIT, LGPL, ...).
 # If deciding on a license, MIT is strongly recommended.
@@ -182,6 +182,8 @@ TIPO:
     tags:
     - parameters
     - nodes
+    # Removed from github?
+    - hidden
 
 NegPip:
     author: khanghy1000, orig. Hugs288
@@ -244,7 +246,6 @@ SeedVR2Upscaler:
     description: Adds SeedVR2 AI upscaler with auto VRAM detection, quality presets, and 2-step upscaling for reduced artifacts.
     url: https://github.com/rlerdorf/SwarmUI-SeedVR2Upscaler
     license: MIT
-    ci-test: true
     tags:
     - parameters
     - nodes
@@ -367,3 +368,35 @@ KreaGoneWild:
     tags:
     - parameters
     - nodes
+    # No longer relevant for 99% of Krea usage
+    - hidden
+
+H3Attn:
+    author: Juan Treminio
+    description: Attention and speedup options for the MiniMax H3 video model - a built-in window-attention node, plus optional support for the Sol-Attn and Spectrum custom nodes.
+    url: https://github.com/jtreminio/SwarmUI-H3Attn
+    license: MIT
+    tags:
+    - parameters
+    - nodes
+    - beta
+
+RTXVideo:
+    author: BetaDoggo
+    description: Adds RTX Video (NVIDIA AI video super resolution + SDR-to-HDR) parameters for image and video outputs.
+    url: https://github.com/BetaDoggo/SwarmUI-RTX-Video
+    license: Mixed
+    tags:
+    - parameters
+    - nodes
+
+PromptEnhancer:
+    author: Hippotes
+    description: use the GenerateText node of ComfyUI for prompt enhancement from the Generate tab without an external inference engine, reusing the LLMs we have as text encoder.
+    url: https://github.com/HPPTS-MGNBR/SwarmUI-PromptEnhancer
+    license: Apache-2.0
+    tags:
+    - parameters
+    - ui
+    # Vibecoded but decently tested
+    - lowquality

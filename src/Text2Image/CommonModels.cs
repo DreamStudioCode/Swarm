@@ -1,5 +1,6 @@
 using System.IO;
 using FreneticUtilities.FreneticExtensions;
+using SwarmUI.Accounts;
 using SwarmUI.Core;
 using SwarmUI.Utils;
 
@@ -19,7 +20,7 @@ public static class CommonModels
     public record class ModelInfo(string ID, string DisplayName, string Description, string URL, string Hash, string FolderType, string FileName)
     {
         /// <summary>Trigger a download of this model.</summary>
-        public async Task DownloadNow(Action<long, long, long> updateProgress = null)
+        public async Task DownloadNow(Action<long, long, long> updateProgress = null, Session session = null)
         {
             string folder = Program.T2IModelSets[FolderType].DownloadFolderPath;
             string path = $"{folder}/{FileName}";
@@ -28,7 +29,7 @@ public static class CommonModels
                 Logs.Warning($"Attempted re-download of pre-existing model '{FileName}', skipping.");
                 return;
             }
-            await Utilities.DownloadFile(URL, path, updateProgress, verifyHash: Hash);
+            await Utilities.DownloadFile(URL, path, updateProgress, verifyHash: Hash, session: session);
         }
     }
 
@@ -91,15 +92,22 @@ public static class CommonModels
         Register(new("ltx2-audio-vae", "LTX-2 Audio VAE", "The audio VAE for Lightricks LTX-2.", "https://huggingface.co/Kijai/LTXV2_comfy/resolve/main/VAE/LTX2_audio_vae_bf16.safetensors", "f00fcace3ef1ebfa6dca9fcb4b925df47d57f826ae7df3bc8fb98f577f213204", "VAE", "LTX2/LTX2_audio_vae.safetensors"));
         Register(new("ltx2-3-video-vae", "LTX-2.3 Video VAE", "The video VAE for Lightricks LTX-2.3.", "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/vae/LTX23_video_vae_bf16.safetensors", "01ea62d09bc139f95c5dee7b5c062ad6a3e6cd8be910a1983ac02e7eb5b8ee3b", "VAE", "LTX-2/LTX23_video_vae_bf16.safetensors"));
         Register(new("ltx2-3-audio-vae", "LTX-2.3 Audio VAE", "The audio VAE for Lightricks LTX-2.3.", "https://huggingface.co/Kijai/LTX2.3_comfy/resolve/main/vae/LTX23_audio_vae_bf16.safetensors", "5bc10fa4adecf99dda132d916e23048cbd56797702c5fa50eb5d2079048a38c3", "VAE", "LTX-2/LTX23_audio_vae_bf16.safetensors"));
+        Register(new("ltx2-5-video-vae", "LTX-2.5 Video VAE", "The video VAE for Lightricks LTX-2.5.", "https://huggingface.co/mcmonkey/swarm-vaes/resolve/main/ltx-2.5-video-vae-conv-bf16.safetensors", "685b06ee3d9b2039647698fc4ea33175112462fc374e2777312c907897dfce8d", "VAE", "LTX-2/ltx-2.5-video-vae-conv-bf16.safetensors"));
+        Register(new("ltx2-5-audio-vae", "LTX-2.5 Audio VAE", "The audio VAE for Lightricks LTX-2.5.", "https://huggingface.co/mcmonkey/swarm-vaes/resolve/main/ltx-2.5-audio-vae-bf16.safetensors", "c52733d37f6a7fb7949c3dc0fb468c6cb2169e4d836983a73babb9f0d54837a5", "VAE", "LTX-2/ltx-2.5-audio-vae-bf16.safetensors"));
+        Register(new("ming-image-vae", "Ming Image VAE", "The VAE for Ming Image", "https://huggingface.co/Comfy-Org/Ming-Image/resolve/main/vae/ming_image_vae_bf16.safetensors", "7f5bed402dc8c77dc2e0ab1929a85d4df433b7cf7b599dfa8c353da98db0b90a", "VAE", "MingImage/ming_image_vae_bf16.safetensors"));
+        Register(new("qwen-image-2.1-vae", "Qwen Image 2.1 VAE", "The RGBA VAE for Qwen Image 2.1", "https://huggingface.co/Comfy-Org/Qwen-Image-2.1/resolve/main/vae/qwen_image_2.1_vae_bf16.safetensors", "bb21f7473051e1ac368515dd3f2e15cd44d7a11748ee8823e1ddca3e4876b7c9", "VAE", "QwenImage/qwen_image_2.1_vae_bf16.safetensors"));
         Register(new("qwen-image-vae", "Qwen Image VAE", "The VAE for Qwen Image", "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors", "a70580f0213e67967ee9c95f05bb400e8fb08307e017a924bf3441223e023d1f", "VAE", "QwenImage/qwen_image_vae.safetensors"));
         Register(new("mage-flow-vae", "Mage-VAE", "The VAE for Mage-Flow", "https://huggingface.co/microsoft/Mage-Flow/resolve/main/vae/diffusion_pytorch_model.safetensors", "34e076dc1e8a15321e1e07be5111d59cf16dd10b804b7c7e20b4de29013427e0", "VAE", "MageFlow/mage_flow_vae.safetensors"));
         Register(new("hunyuan-image-2_1-vae", "Hunyuan Image 2.1 VAE", "The VAE for Hunyuan Image 2.1 Base", "https://huggingface.co/Comfy-Org/HunyuanImage_2.1_ComfyUI/resolve/main/split_files/vae/hunyuan_image_2.1_vae_fp16.safetensors", "f2ae19863609206196b5e3a86bfd94f67bd3866f5042004e3994f07e3c93b2f9", "VAE", "HunyuanImage/hunyuan_image_2.1_vae_fp16.safetensors"));
         Register(new("hunyuan-image-2_1-refiner-vae", "Hunyuan Image 2.1 Refiner VAE", "The VAE for Hunyuan Image 2.1 Refiner", "https://huggingface.co/Comfy-Org/HunyuanImage_2.1_ComfyUI/resolve/main/split_files/vae/hunyuan_image_refiner_vae_fp16.safetensors", "e1b74e85d61b65e18cc05ca390e387d93cfadf161e737de229ebb800ea3db769", "VAE", "HunyuanImage/hunyuan_image_2.1_refiner_vae_fp16.safetensors"));
+        Register(new("seedvr2-vae", "SeedVR2 VAE", "The VAE for SeedVR2", "https://huggingface.co/Comfy-Org/SeedVR2/resolve/main/vae/seedvr2_ema_vae_fp16.safetensors", "20678548f420d98d26f11442d3528f8b8c94e57ee046ef93dbb7633da8612ca1", "VAE", "SeedVR2/seedvr2_ema_vae_fp16.safetensors"));
         Register(new("hunyuan-video-1_5-vae", "Hunyuan Video 1.5 VAE", "The VAE for Hunyuan Video 1.5", "https://huggingface.co/Comfy-Org/HunyuanVideo_1.5_repackaged/resolve/main/split_files/vae/hunyuanvideo15_vae_fp16.safetensors", "e7c3091949c27e2d55ae6d5df917b99dadfebbf308e5a50d0ade0d16c90297ae", "VAE", "HunyuanVideo/hunyuanvideo15_vae_fp16.safetensors"));
         Register(new("minimax-h3-video-vae", "MiniMax H3 Video VAE", "The video VAE for MiniMax H3.", "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_video_vae_fp16.safetensors", "7c1f131492e7eddacaac9069a61b81bdd39de5cc96561e677c5eab1cdce5e522", "VAE", "MiniMaxH3/minimax_h3_video_vae_fp16.safetensors"));
+        Register(new("minimax-h3-video-int8-vae", "MiniMax H3 Video VAE int8", "The video VAE for MiniMax H3, int8 quant.", "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_video_vae_int8_convrot.safetensors", "52a2c8c73583c86e4f41cdcce3a6ad0ea562987bc0bf3d60a0cef5f5c8e60c0e", "VAE", "MiniMaxH3/minimax_h3_video_vae_int8_convrot.safetensors"));
         Register(new("minimax-h3-audio-vae", "MiniMax H3 Audio VAE", "The audio VAE for MiniMax H3.", "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_audio_vae_fp32.safetensors", "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48", "VAE", "MiniMaxH3/minimax_h3_audio_vae_fp32.safetensors"));
 
         // Audio VAEs
         Register(new("ace-step-15-vae", "Ace Step 1.5 VAE", "The audio VAE for Ace Step 1.5", "https://huggingface.co/Comfy-Org/ace_step_1.5_ComfyUI_files/resolve/main/split_files/vae/ace_1.5_vae.safetensors", "6de92e3a862acd287e08b024ac90f0783a8635451b728721a33ff03565bcb2bb", "VAE", "AceStep/ace_1.5_vae.safetensors"));
+        Register(new("minimax-music-3-vae", "MiniMax Music 3 DAV", "The audio decoder VAE for MiniMax Music 3", "https://huggingface.co/Comfy-Org/MiniMax-Music-3/resolve/main/vae/minimax_music3_dav.safetensors", "2a32155b769be01445fcc2a8663b910fc9e1751e18dc1c3ec528064512d9ef0c", "VAE", "MiniMaxMusic3/minimax_music3_dav.safetensors"));
     }
 }

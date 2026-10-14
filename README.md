@@ -17,17 +17,14 @@ A Modular AI Image Generation Web-User-Interface, with an emphasis on making pow
 
 # Status
 
-This project is in **Beta** status. This means for most tasks, Swarm has excellent tooling available to you, but there is much more planned. Swarm is recommended as an ideal UI for most users, beginners and pros alike. There are still some things to be worked out.
+This project is in **Almost-Release** status. This means for most tasks, Swarm has excellent tooling available to you, but there are a few areas I still want to perfect. Swarm is recommended as an ideal UI for most users, beginners and pros alike.
 
 Beginner users will love Swarm's primary Generate tab interface, making it easy to generate anything with a variety of powerful features. Advanced users may favor the Comfy Workflow tab to get the unrestricted raw graph, but will still have reason to come back to the Generate tab for convenience features (image editor, auto-workflow-generation, etc) and powertools (eg Grid Generator).
 
-Those interested in helping push Swarm from Beta to a Full ready-for-anything perfected Release status are welcome to submit PRs (read the [Contributing](/CONTRIBUTING.md) document first), and you can contact us here on GitHub or on [Discord](https://discord.gg/q2y38cqjNw). I highly recommend reaching out to ask about plans for a feature before PRing it. There may already be specific plans or even a work in progress.
+Those interested in helping push Swarm to a Full ready-for-anything perfected Release status are welcome to submit PRs (read the [Contributing](/CONTRIBUTING.md) document first), and you can contact us here on GitHub or on [Discord](https://discord.gg/q2y38cqjNw). I highly recommend reaching out to ask about plans for a feature before PRing it. There may already be specific plans or even a work in progress.
 
 Key feature targets not yet implemented:
-- Better mobile browser support
-- full detail "Current Model" display in UI, separate from the model selector (probably as a tab within the batch sidebar?)
 - LLM-assisted prompting (there's an extension for it, but LLM control should be natively supported)
-- convenient direct-distribution of Swarm as a program ([Tauri](https://tauri.app/), [Blazor Desktop](https://learn.microsoft.com/en-us/training/modules/build-blazor-hybrid/), or an Electron app?)
 
 # Donate
 
@@ -61,9 +58,10 @@ Note: if you're on Windows 10, you may need to manually install [git](https://gi
     - It should open a command prompt and install itself.
     - If it closes without going further, try running it again, it sometimes needs to run twice. (TODO: Fix that)
     - It will place an icon on your desktop that you can use to re-launch the server at any time.
-    - When the installer completes, it will automatically launch the SwarmUI server, and open a browser window to the install page.
+    - When the installer completes, it will automatically launch the SwarmUI server, and then after a moment show you the install UI.
     - Follow the install instructions on the page.
     - After you submit, be patient, some of the install processing take a few minutes (downloading models and etc).
+    - See the [Basic Usage Guide](/docs/Basic%20Usage.md) to go from there.
 
 (TODO): Even easier self-contained pre-installer, a `.msi` or `.exe` that provides a general install screen and lets you pick folder and all.
 
@@ -94,6 +92,8 @@ Note: if you're on Windows 10, you may need to manually install [git](https://gi
         - `chmod +x install-linux.sh`
 - Run the `./install-linux.sh` script, it will install everything for you and eventually open the webpage in your browser.
 - Follow the install instructions on-page.
+- See the [Basic Usage Guide](/docs/Basic%20Usage.md) to go from there.
+- If you want to use Desktop app mode, it is not tested for Linux, but you probably need to install WPE Webkit: <https://wpewebkit.org/about/get-wpe.html#install-it-from-your-linux-distribution>
 
 ### Linux Manual Install
 
@@ -131,6 +131,7 @@ Note: if you're on Windows 10, you may need to manually install [git](https://gi
 - Clone the SwarmUI GitHub repository: `git clone https://github.com/mcmonkeyprojects/SwarmUI`.
 - `cd SwarmUI` and run the installation script: `./launch-macos.sh`.
 - Wait for the web browser to open, and follow the install instructions on-page.
+- See the [Basic Usage Guide](/docs/Basic%20Usage.md) to go from there.
 
 # Installing With Docker
 
@@ -159,8 +160,8 @@ This project:
 - can automatically install MIT/BSD/Apache2/PythonSoftwareFoundation pip packages: [spandrel](https://pypi.org/project/spandrel/), [dill](https://pypi.org/project/dill/), [imageio-ffmpeg](https://pypi.org/project/imageio-ffmpeg/), [opencv-python-headless](https://pypi.org/project/opencv-python-headless/), [matplotlib](https://pypi.org/project/matplotlib/), [rembg](https://pypi.org/project/rembg/), [kornia](https://pypi.org/project/kornia/), [Cython](https://pypi.org/project/Cython/)
 - can automatically install [ultralytics](https://github.com/ultralytics/ultralytics) (AGPL) for `YOLOv8` face detection (ie `SwarmYoloDetection` node or `<segment:yolo-...>` syntax usage may become subject to AGPL terms),
 - can automatically install [insightface](https://github.com/deepinsight/insightface) (MIT) for `IP Adapter - Face` support
-- uses [JSON.NET](https://github.com/JamesNK/Newtonsoft.Json) (MIT), [FreneticUtilities](https://github.com/FreneticLLC/FreneticUtilities) (MIT), [LiteDB](https://github.com/mbdavid/LiteDB) (MIT), [ImageSharp](https://github.com/SixLabors/ImageSharp/) (Apache2 under open-source Split License)
-- embeds copies of web assets from [BootStrap](https://getbootstrap.com/) (MIT), [Select2](https://select2.org/) (MIT), [JQuery](https://jquery.com/) (MIT), [exif-reader](https://github.com/mattiasw/ExifReader) (MPL-2.0).
+- uses [JSON.NET](https://github.com/JamesNK/Newtonsoft.Json) (MIT), [FreneticUtilities](https://github.com/FreneticLLC/FreneticUtilities) (MIT), [LiteDB](https://github.com/mbdavid/LiteDB) (MIT), [ImageSharp](https://github.com/SixLabors/ImageSharp/) (Apache2 under open-source Split License), [ATL.NET](https://github.com/Zeugma440/atldotnet) (MIT)
+- embeds copies of web assets from [BootStrap](https://getbootstrap.com/) (MIT), [Select2](https://select2.org/) (MIT), [JQuery](https://jquery.com/) (MIT), [exif-reader](https://github.com/mattiasw/ExifReader) (MPL-2.0), [music-metadata](https://github.com/Borewit/music-metadata) (MIT).
 - contains some icons from [Cristian Munoz](https://www.figma.com/community/file/1311159026125960259/7000-free-ui-icons) (CC-BY-4.0), the font [inter by rsms](https://github.com/rsms/inter) (OFL), [Unifont by GNU](https://unifoundry.com/unifont/) (OFL), [Material Symbols Outlined by Google](https://fonts.google.com/icons) (Apache2).
 - can be used to install some custom node packs, which have individual license notices for any non-pure-FOSS licenses before install.
 - supports user-built extensions which may have their own licenses or legal conditions.

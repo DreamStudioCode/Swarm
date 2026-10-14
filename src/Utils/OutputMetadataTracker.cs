@@ -120,10 +120,10 @@ public static class OutputMetadataTracker
     }
 
     /// <summary>File format extensions that even can have metadata on them.</summary>
-    public static HashSet<string> ExtensionsWithMetadata = ["png", "jpg", "webp"];
+    public static HashSet<string> ExtensionsWithMetadata = ["png", "jpg", "webp", "wav", "flac", "ogg", "mp3", "aac", "mp4", "webm", "mov"];
 
     /// <summary>File format extensions that require ffmpeg to process image data.</summary>
-    public static HashSet<string> ExtensionsForFfmpegables = ["webm", "mp4", "mov"];
+    public static HashSet<string> ExtensionsForFfmpegables = ["webm", "mp4", "mov", "wav", "flac", "ogg", "mp3", "aac"];
 
     /// <summary>File format extensions that are animations in an image file format.</summary>
     public static HashSet<string> ExtensionsForAnimatedImages = ["webp", "gif"];
@@ -151,11 +151,6 @@ public static class OutputMetadataTracker
         string ext = file.AfterLast('.');
         string folder = file.BeforeAndAfterLast('/', out string filename);
         if (file.EndsWith(".swarmpreview.jpg") || file.EndsWith(".swarmpreview.webp"))
-        {
-            return null;
-        }
-        MediaType expectedMediaType = MediaType.GetByExtension(ext);
-        if (expectedMediaType is not null && expectedMediaType.MetaType == MediaMetaType.Audio)
         {
             return null;
         }
@@ -277,7 +272,8 @@ public static class OutputMetadataTracker
             }
             if (fileData is null)
             {
-                byte[] data = File.ReadAllBytes(altExists ? altPreview : file);
+                string target = altExists ? altPreview : file;
+                byte[] data = File.ReadAllBytes(target);
                 if (data.Length == 0)
                 {
                     return null;
@@ -292,7 +288,7 @@ public static class OutputMetadataTracker
                 }
                 else
                 {
-                    ImageFile newFile = new Image(data, MediaType.GetByExtension(ext));
+                    ImageFile newFile = new Image(data, MediaType.GetByExtension(target.AfterLast('.')));
                     fileData = newFile.ToMetadataJpg()?.RawData;
                 }
             }
@@ -396,7 +392,8 @@ public static class OutputMetadataTracker
                 {
                     return null;
                 }
-                fileData = new Image(data, MediaType.GetByExtension(ext)).GetMetadata();
+                MediaType type = MediaType.GetByExtension(ext);
+                fileData = type.MetaType.FromRawData(data, type).GetMetadata();
             }
             string subPath = file.StartsWith(root) ? file[root.Length..] : Path.GetRelativePath(root, file);
             subPath = subPath.Replace('\\', '/').Trim('/');
